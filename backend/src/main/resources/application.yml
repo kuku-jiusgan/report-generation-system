@@ -1,0 +1,24 @@
+server:
+  port: 8080
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:h2:mem:cro;MODE=PostgreSQL;DB_CLOSE_DELAY=-1}
+    username: ${DB_USER:sa}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+  rabbitmq:
+    host: ${RABBIT_HOST:localhost}
+    username: ${RABBITMQ_DEFAULT_USER:guest}
+    password: ${RABBITMQ_DEFAULT_PASS:guest}
+app:
+  document-service-url: ${DOCUMENT_SERVICE_URL:http://localhost:8000}
+  onlyoffice-public-url: ${ONLYOFFICE_PUBLIC_URL:}
+  onlyoffice-jwt-secret: ${ONLYOFFICE_JWT_SECRET:onlyoffice-dev-secret}
+  public-api-url: ${PUBLIC_API_URL:http://localhost:8080}
+  demo-mode: ${DEMO_MODE:true}
+

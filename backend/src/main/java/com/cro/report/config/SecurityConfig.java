@@ -1,0 +1,7 @@
+package com.cro.report.config;
+import org.springframework.context.annotation.*; import org.springframework.security.config.Customizer; import org.springframework.security.config.annotation.web.builders.HttpSecurity; import org.springframework.security.core.userdetails.*; import org.springframework.security.provisioning.InMemoryUserDetailsManager; import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder; import org.springframework.security.crypto.password.PasswordEncoder; import org.springframework.security.web.SecurityFilterChain;
+@Configuration public class SecurityConfig {
+ @Bean SecurityFilterChain chain(HttpSecurity http)throws Exception{return http.csrf(csrf->csrf.ignoringRequestMatchers("/api/integrations/onlyoffice/callback")).authorizeHttpRequests(a->a.requestMatchers("/actuator/health","/api/integrations/onlyoffice/callback").permitAll().requestMatchers("/api/admin/**").hasRole("ADMIN").anyRequest().authenticated()).httpBasic(Customizer.withDefaults()).build();}
+ @Bean PasswordEncoder passwordEncoder(){return new BCryptPasswordEncoder();}
+ @Bean UserDetailsService users(PasswordEncoder enc){return new InMemoryUserDetailsManager(User.withUsername("admin").password(enc.encode("admin-change-me")).roles("ADMIN","OPERATOR").build(),User.withUsername("analyst").password(enc.encode("analyst-change-me")).roles("OPERATOR").build(),User.withUsername("viewer").password(enc.encode("viewer-change-me")).roles("VIEWER").build());}
+}

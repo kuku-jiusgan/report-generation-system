@@ -1,0 +1,12 @@
+.env
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+backend/target/
+document-service/.pytest_cache/
+document-service/**/__pycache__/
+# Local report sources, extracted charts, QA renders, and runtime data.
+# These files may contain customer or validation-report information.
+work/
+outputs/*.zip
+*.log

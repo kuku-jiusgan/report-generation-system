@@ -1,0 +1,28 @@
+.editable-text {
+  border-radius: 2px;
+  cursor: text;
+  transition: background-color .15s, box-shadow .15s;
+}
+
+.editable-text:hover {
+  background: #fff8d8;
+  box-shadow: 0 0 0 1px #e8cf6a;
+}
+
+.editable-text:focus {
+  background: #fffbe8;
+  box-shadow: 0 0 0 2px #0f6cbd;
+  outline: none;
+}
+
+.paper td.editable-text { display: table-cell; }
+.paper h1.editable-text,
+.paper h2.editable-text,
+.paper p.editable-text { display: block; }
+.version-strip .unsaved { color: #8a5d00; font-weight: 600; }
+.missing-line .editable-text {
+  min-width: 120px;
+  color: #242424;
+  background: white;
+  padding: 0 4px;
+}

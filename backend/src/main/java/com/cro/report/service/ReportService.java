@@ -1,0 +1,16 @@
+package com.cro.report.service;
+import com.cro.report.api.ReportDtos.*; import com.cro.report.domain.*; import com.cro.report.repo.*;
+import jakarta.persistence.EntityNotFoundException; import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
+import java.util.*;
+@Service public class ReportService {
+ private final ReportRepository reports; private final ReportVersionRepository versions;
+ public ReportService(ReportRepository reports,ReportVersionRepository versions){this.reports=reports;this.versions=versions;}
+ @Transactional public ReportView create(CreateReport in){var r=new ReportEntity(in.projectNo(),in.sampleNo(),in.experimentNo(),Objects.requireNonNullElse(in.title(),"基因毒性杂质分析方法验证报告"),Objects.requireNonNullElse(in.templateVersion(),"GTI-V1.3"),Objects.requireNonNullElse(in.ruleVersion(),"HPLC-PDF-V1.8"));reports.save(r);return view(r);}
+ @Transactional(readOnly=true) public ReportView get(String id){return view(find(id));}
+ @Transactional public JobAccepted extract(String id){var r=find(id);r.status="EXTRACTING";r.touch(); seedFields(r);r.status=r.fields.stream().anyMatch(f->"MISSING".equals(f.status))?"BLOCKED":"EXTRACTED";return new JobAccepted(UUID.randomUUID().toString(),r.status,"提取完成，所有证据已冻结");}
+ @Transactional public JobAccepted generate(String id){var r=find(id);if(r.fields.stream().anyMatch(f->"MISSING".equals(f.status)||"CONFLICT".equals(f.status)))return new JobAccepted(UUID.randomUUID().toString(),"BLOCKED","存在缺失或冲突字段，未生成正式版本");r.currentVersion++;r.status="READY";r.touch();versions.save(new ReportVersionEntity(r.id,r.currentVersion,"GENERATED","reports/"+r.id+"/v"+r.currentVersion+".docx","system"));return new JobAccepted(UUID.randomUUID().toString(),"READY","版本 "+r.currentVersion+" 已生成");}
+ private ReportEntity find(String id){return reports.findById(id).orElseThrow(()->new EntityNotFoundException("Report not found: "+id));}
+ private void seedFields(ReportEntity r){if(!r.fields.isEmpty())return;r.addField(new ExtractedFieldEntity("project_name","项目名称","盐酸氟西汀基因毒杂质验证","盐酸氟西汀基因毒杂质验证",null,"VALID","ORACLE","LIMS 项目主数据","V_REPORT_PROJECT.PROJECT_NAME",null,"allowlist column","PROJECT_NAME"));r.addField(new ExtractedFieldEntity("sample_name","样品名称","盐酸氟西汀供试品","盐酸氟西汀供试品",null,"VALID","ORACLE","LIMS 样品记录","V_REPORT_SAMPLE.SAMPLE_NAME",null,"allowlist column","SAMPLE_NAME"));r.addField(new ExtractedFieldEntity("flow_rate","流速","0.40 mL/min","0.40","mL/min","VALID","PDF","仪器方法页","第 2 页，坐标区域",2,"Flow rate regex + decimal(2)","FLOW_RATE"));r.addField(new ExtractedFieldEntity("linearity_r","线性相关系数 r","0.9996","0.9996",null,"VALID","PDF","线性结果表","第 6 页，回归统计",6,"r\\s*=\\s*(0\\.\\d+)","LINEARITY_R"));r.addField(new ExtractedFieldEntity("loq","定量限",null,null,"ng/mL","MISSING","PDF","定量限结果","第 8 页未找到匹配值",8,"Anchor LOQ + numeric; required","LOQ"));}
+ private ReportView view(ReportEntity r){var fields=r.fields.stream().map(f->new Field(f.fieldCode,f.label,f.rawValue,f.normalizedValue,f.unit,f.status,f.targetControlTag,new Evidence(f.sourceType,f.sourceLabel,f.sourceDetail,f.pageNumber,f.bboxJson),f.ruleExpression)).toList();return new ReportView(r.id,r.reportNo,r.projectNo,r.sampleNo,r.experimentNo,r.title,r.status,r.templateVersion,r.ruleVersion,r.currentVersion,r.updatedAt,fields);}
+}
+
