@@ -1,4 +1,2 @@
 allowBuilds:
-  esbuild: true
-onlyBuiltDependencies:
-  - esbuild
+  esbuild: set this to true or false

@@ -1,12 +1,20 @@
-.env
+.venv/
+.tools/
+.tmp/
+__pycache__/
+*.py[cod]
 frontend/node_modules/
 frontend/dist/
+frontend/src/*.js
 frontend/*.tsbuildinfo
-backend/target/
-document-service/.pytest_cache/
-document-service/**/__pycache__/
-# Local report sources, extracted charts, QA renders, and runtime data.
-# These files may contain customer or validation-report information.
-work/
-outputs/*.zip
+data/*.db
+data/lims/
+data/qa/
+data/uploads/*
+data/reports/*
+!data/uploads/.gitkeep
+!data/reports/.gitkeep
+templates/compiled/
+templates/drafts/
+.env
 *.log

@@ -1,0 +1,18 @@
+{
+  "name": "Report Template Link",
+  "guid": "asc.{9C4D6F33-55AE-4AAE-8D86-4B81D7229F10}",
+  "version": "1.0.0",
+  "variations": [
+    {
+      "description": "Links Word content controls with report template mapping rules.",
+      "url": "index.html",
+      "isViewer": true,
+      "EditorsSupport": ["word"],
+      "isVisual": false,
+      "isModal": false,
+      "isInsideMode": false,
+      "initDataType": "none",
+      "initOnSelectionChanged": true
+    }
+  ]
+}

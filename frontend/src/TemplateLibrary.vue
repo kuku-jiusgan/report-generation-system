@@ -1,0 +1,677 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from "vue";
+import {
+  ArrowLeft,
+  Clock,
+  CopyDocument,
+  Delete,
+  Document,
+  EditPen,
+  Plus,
+  Refresh,
+  Setting,
+} from "@element-plus/icons-vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import {
+  adminApi,
+  type AdminTemplate,
+  type AdminTemplateVersion,
+} from "./admin-api";
+
+const emit = defineEmits<{
+  open: [template: AdminTemplate, version: AdminTemplateVersion];
+  fields: [];
+  exit: [];
+}>();
+const templates = ref<AdminTemplate[]>([]);
+const versions = ref<AdminTemplateVersion[]>([]);
+const selected = ref<AdminTemplate>();
+const loading = ref(false);
+const versionLoading = ref(false);
+const deletingTemplate = ref(false);
+const templateDialog = ref(false);
+const versionDialog = ref(false);
+const editingTemplate = ref<AdminTemplate>();
+const templateDraft = reactive({ code: "", name: "", description: "" });
+const versionDraft = reactive<{ baseVersionId?: string; note: string }>({
+  note: "",
+});
+
+const selectedTitle = computed(() =>
+  selected.value
+    ? `${selected.value.name} · ${selected.value.code}`
+    : "选择一个模板",
+);
+const statusText: Record<string, string> = {
+  DRAFT: "草稿",
+  PUBLISHED: "已发布",
+  ARCHIVED: "历史版本",
+};
+
+function errorText(error: unknown) {
+  const value = error as {
+    response?: { data?: { detail?: string } };
+    message?: string;
+  };
+  return value.response?.data?.detail || value.message || "操作失败";
+}
+
+async function loadTemplates(preferredId?: string) {
+  loading.value = true;
+  try {
+    templates.value = await adminApi.templates();
+    const target =
+      templates.value.find(
+        (item) => item.id === (preferredId || selected.value?.id),
+      ) || templates.value[0];
+    if (target) await selectTemplate(target);
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function selectTemplate(item: AdminTemplate) {
+  selected.value = item;
+  versionLoading.value = true;
+  try {
+    versions.value = await adminApi.templateVersions(item.id);
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  } finally {
+    versionLoading.value = false;
+  }
+}
+
+function openCreateTemplate() {
+  editingTemplate.value = undefined;
+  Object.assign(templateDraft, { code: "", name: "", description: "" });
+  templateDialog.value = true;
+}
+
+function openEditTemplate() {
+  if (!selected.value) return;
+  editingTemplate.value = selected.value;
+  Object.assign(templateDraft, {
+    code: selected.value.code,
+    name: selected.value.name,
+    description: selected.value.description,
+  });
+  templateDialog.value = true;
+}
+
+async function saveTemplate() {
+  if (!templateDraft.code.trim() || !templateDraft.name.trim())
+    return ElMessage.warning("模板编码和名称不能为空");
+  try {
+    const result = editingTemplate.value
+      ? await adminApi.updateTemplate(editingTemplate.value.id, templateDraft)
+      : await adminApi.createTemplate({
+          ...templateDraft,
+          note: "初始草稿版本",
+        });
+    templateDialog.value = false;
+    await loadTemplates(result.id);
+    ElMessage.success(
+      editingTemplate.value ? "模板信息已保存" : "模板及 V1 已创建",
+    );
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  }
+}
+
+async function removeTemplate() {
+  if (!selected.value) return;
+  const target = selected.value;
+  try {
+    await ElMessageBox.confirm(
+      `删除模板“${target.name}（${target.code}）”？该模板的 ${target.versionCount} 个版本和独立 Word 文件也会一并删除，此操作不可恢复。`,
+      "删除报告模板",
+      { type: "warning", confirmButtonText: "确认删除", cancelButtonText: "取消" },
+    );
+    deletingTemplate.value = true;
+    await adminApi.deleteTemplate(target.id);
+    selected.value = undefined;
+    versions.value = [];
+    await loadTemplates();
+    ElMessage.success("模板已删除");
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(errorText(error));
+  } finally {
+    deletingTemplate.value = false;
+  }
+}
+
+function openCreateVersion(base?: AdminTemplateVersion) {
+  versionDraft.baseVersionId = base?.id || versions.value[0]?.id;
+  versionDraft.note = base ? `基于 V${base.versionNo} 创建` : "新建草稿版本";
+  versionDialog.value = true;
+}
+
+async function saveVersion() {
+  if (!selected.value) return;
+  try {
+    await adminApi.createTemplateVersion(selected.value.id, versionDraft);
+    versionDialog.value = false;
+    await loadTemplates(selected.value.id);
+    ElMessage.success("新版本已创建");
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  }
+}
+
+async function enterDesigner(version: AdminTemplateVersion) {
+  if (!selected.value) return;
+  try {
+    await adminApi.activateTemplateVersion(selected.value.id, version.id);
+    emit("open", selected.value, version);
+  } catch (error) {
+    ElMessage.error(errorText(error));
+  }
+}
+
+onMounted(() => loadTemplates());
+</script>
+
+<template>
+  <div class="template-library">
+    <header class="library-header">
+      <div class="library-brand">
+        <Setting />
+        <div><strong>报告模板管理</strong><small>模板库与版本控制</small></div>
+      </div>
+      <div class="library-actions">
+        <el-button :icon="ArrowLeft" @click="emit('exit')">返回报告</el-button
+        ><el-button :icon="Setting" @click="emit('fields')">LIMS 标准字段</el-button
+        ><el-button :icon="Refresh" @click="loadTemplates()">刷新</el-button
+        ><el-button type="primary" :icon="Plus" @click="openCreateTemplate"
+          >新建模板</el-button
+        >
+      </div>
+    </header>
+
+    <main class="library-workspace">
+      <aside class="template-index">
+        <div class="index-heading">
+          <div>
+            <h1>模板库</h1>
+            <p>{{ templates.length }} 个报告模板</p>
+          </div>
+          <el-button
+            text
+            :icon="Plus"
+            aria-label="新建模板"
+            @click="openCreateTemplate"
+          />
+        </div>
+        <el-skeleton v-if="loading" :rows="5" animated />
+        <div v-else class="template-list">
+          <button
+            v-for="item in templates"
+            :key="item.id"
+            :class="{ selected: selected?.id === item.id }"
+            @click="selectTemplate(item)"
+          >
+            <span class="template-icon"><Document /></span>
+            <span
+              ><b>{{ item.name }}</b
+              ><small
+                >{{ item.code }} · {{ item.versionCount }} 个版本</small
+              ></span
+            >
+            <el-tag v-if="item.publishedVersion" size="small" type="success"
+              >V{{ item.publishedVersion }}</el-tag
+            >
+            <el-tag v-else size="small" type="info">未发布</el-tag>
+          </button>
+          <div v-if="!templates.length" class="library-empty">
+            <Document /><strong>还没有报告模板</strong>
+            <p>新建模板后会自动创建第一个草稿版本。</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="version-workspace">
+        <div v-if="selected" class="version-heading">
+          <div>
+            <div class="path">模板库 / {{ selected.code }}</div>
+            <h1>{{ selectedTitle }}</h1>
+            <p>{{ selected.description || "尚未填写模板用途说明" }}</p>
+          </div>
+          <div>
+            <el-button :icon="EditPen" @click="openEditTemplate"
+              >编辑模板信息</el-button
+            ><el-button
+              type="danger"
+              plain
+              :icon="Delete"
+              :loading="deletingTemplate"
+              @click="removeTemplate"
+              >删除模板</el-button
+            ><el-button type="primary" :icon="Plus" @click="openCreateVersion()"
+              >新建版本</el-button
+            >
+          </div>
+        </div>
+        <div v-if="selected" class="version-summary">
+          <span
+            ><b>{{ selected.versionCount }}</b
+            >全部版本</span
+          ><span
+            ><b>{{ selected.latestVersion || "-" }}</b
+            >最新版本</span
+          ><span
+            ><b>{{ selected.publishedVersion || "-" }}</b
+            >当前发布</span
+          ><span
+            ><b>{{
+              new Date(selected.updatedAt).toLocaleDateString("zh-CN")
+            }}</b
+            >最近更新</span
+          >
+        </div>
+        <div v-if="selected" class="version-table-wrap">
+          <div class="table-title">
+            <div>
+              <h2>版本记录</h2>
+              <p>点击具体版本进入报告模板设计器</p>
+            </div>
+          </div>
+          <el-table v-loading="versionLoading" :data="versions" row-key="id">
+            <el-table-column label="版本" width="110"
+              ><template #default="scope"
+                ><strong class="version-no"
+                  >V{{ scope.row.versionNo }}</strong
+                ></template
+              ></el-table-column
+            >
+            <el-table-column label="状态" width="120"
+              ><template #default="scope"
+                ><el-tag
+                  :type="
+                    scope.row.status === 'PUBLISHED'
+                      ? 'success'
+                      : scope.row.status === 'DRAFT'
+                        ? 'primary'
+                        : 'info'
+                  "
+                  effect="plain"
+                  >{{ statusText[scope.row.status] }}</el-tag
+                ></template
+              ></el-table-column
+            >
+            <el-table-column prop="note" label="版本说明" min-width="260" />
+            <el-table-column label="更新时间" width="190"
+              ><template #default="scope"
+                ><span class="time-cell"
+                  ><Clock />{{
+                    new Date(scope.row.updatedAt).toLocaleString("zh-CN")
+                  }}</span
+                ></template
+              ></el-table-column
+            >
+            <el-table-column
+              label="操作"
+              width="300"
+              fixed="right"
+              align="right"
+            >
+              <template #default="scope">
+                <div class="version-row-actions">
+                  <el-button
+                    type="primary"
+                    plain
+                    @click="enterDesigner(scope.row)"
+                    >进入设计器</el-button
+                  >
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="openCreateVersion(scope.row)"
+                    >基于此版本新建</el-button
+                  >
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <div v-else class="workspace-empty">
+          <Document />
+          <h2>请选择模板</h2>
+          <p>模板版本、发布状态和设计入口会显示在这里。</p>
+        </div>
+      </section>
+    </main>
+
+    <el-dialog
+      v-model="templateDialog"
+      :title="editingTemplate ? '编辑模板信息' : '新建报告模板'"
+      width="560px"
+    >
+      <el-form label-position="top"
+        ><div class="dialog-grid">
+          <el-form-item label="模板编码"
+            ><el-input
+              v-model="templateDraft.code"
+              placeholder="例如 METHOD-VALIDATION" /></el-form-item
+          ><el-form-item label="模板名称"
+            ><el-input
+              v-model="templateDraft.name"
+              placeholder="例如 分析方法验证报告"
+          /></el-form-item>
+        </div>
+        <el-form-item label="用途说明"
+          ><el-input
+            v-model="templateDraft.description"
+            type="textarea"
+            :rows="4"
+            placeholder="说明该模板适用的报告类型和范围" /></el-form-item
+        ><el-alert
+          v-if="!editingTemplate"
+          title="新模板会使用初始 Word 文件创建独立的 V1；章节和字段规则可在设计器中单独配置。"
+          type="info"
+          :closable="false"
+      /></el-form>
+      <template #footer
+        ><el-button @click="templateDialog = false">取消</el-button
+        ><el-button type="primary" @click="saveTemplate">{{
+          editingTemplate ? "保存修改" : "创建模板"
+        }}</el-button></template
+      >
+    </el-dialog>
+
+    <el-dialog v-model="versionDialog" title="新建模板版本" width="520px">
+      <el-form label-position="top"
+        ><el-form-item label="基础版本"
+          ><el-select
+            v-model="versionDraft.baseVersionId"
+            placeholder="选择要复制的版本"
+            ><el-option
+              v-for="item in versions"
+              :key="item.id"
+              :label="`V${item.versionNo} · ${statusText[item.status]}`"
+              :value="item.id" /></el-select></el-form-item
+        ><el-form-item label="版本说明"
+          ><el-input
+            v-model="versionDraft.note"
+            type="textarea"
+            :rows="3" /></el-form-item
+      ></el-form>
+      <template #footer
+        ><el-button @click="versionDialog = false">取消</el-button
+        ><el-button type="primary" @click="saveVersion"
+          >创建草稿版本</el-button
+        ></template
+      >
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.template-library {
+  height: 100vh;
+  min-width: 1080px;
+  color: #263731;
+  background: #edf0ee;
+  overflow: hidden;
+}
+.library-header {
+  height: 64px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  color: #fff;
+  background: #123f36;
+  border-bottom: 2px solid #b88b49;
+}
+.library-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.library-brand > svg {
+  width: 25px;
+}
+.library-brand strong,
+.library-brand small {
+  display: block;
+}
+.library-brand strong {
+  font-size: 14px;
+}
+.library-brand small {
+  margin-top: 3px;
+  color: #aec3bd;
+  font-size: 10px;
+}
+.library-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 7px;
+}
+.library-actions .el-button {
+  margin: 0;
+}
+.library-actions .el-button:not(.el-button--primary) {
+  color: #eef5f3;
+  border-color: #52756d;
+  background: transparent;
+}
+.library-workspace {
+  height: calc(100vh - 64px);
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+}
+.template-index {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-right: 1px solid #d5ddda;
+}
+.index-heading {
+  height: 78px;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e2e7e4;
+}
+.index-heading h1,
+.version-heading h1,
+.table-title h2 {
+  margin: 0;
+  color: #173f36;
+}
+.index-heading h1 {
+  font-size: 18px;
+}
+.index-heading p,
+.version-heading p,
+.table-title p {
+  margin: 5px 0 0;
+  color: #697a74;
+  font-size: 11px;
+}
+.template-index > .el-skeleton {
+  padding: 18px;
+}
+.template-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 10px;
+}
+.template-list > button {
+  width: 100%;
+  min-height: 64px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid #e7ebe9;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 180ms ease-out;
+}
+.template-list > button:hover {
+  background: #f1f6f4;
+}
+.template-list > button.selected {
+  background: #e5f0ed;
+  box-shadow: inset 3px 0 #216b5a;
+}
+.template-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: #337965;
+}
+.template-icon svg {
+  width: 17px;
+}
+.template-list b,
+.template-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-list b {
+  font-size: 12px;
+}
+.template-list small {
+  margin-top: 5px;
+  color: #71817b;
+  font-size: 10px;
+}
+.version-workspace {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 30px 34px;
+}
+.version-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+.version-heading > div:last-child {
+  display: flex;
+  gap: 8px;
+}
+.version-heading h1 {
+  margin-top: 8px;
+  font-size: 24px;
+}
+.path {
+  color: #73847e;
+  font-size: 10px;
+}
+.version-summary {
+  margin-top: 24px;
+  display: flex;
+  border-top: 1px solid #cfd8d4;
+  border-bottom: 1px solid #cfd8d4;
+  background: #f7f9f8;
+}
+.version-summary span {
+  min-width: 150px;
+  padding: 14px 20px;
+  color: #687972;
+  font-size: 10px;
+  border-right: 1px solid #d7dfdb;
+}
+.version-summary b {
+  display: block;
+  margin-bottom: 5px;
+  color: #1d4b40;
+  font-size: 17px;
+}
+.version-table-wrap {
+  margin-top: 22px;
+  background: #fff;
+  border: 1px solid #d7dfdb;
+}
+.table-title {
+  padding: 18px 20px;
+  border-bottom: 1px solid #e2e7e4;
+}
+.table-title h2 {
+  font-size: 15px;
+}
+.version-no {
+  color: #1f5f50;
+  font-size: 14px;
+}
+.time-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #63736d;
+}
+.time-cell svg {
+  width: 14px;
+}
+.version-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+.version-row-actions .el-button {
+  flex: 0 0 auto;
+  margin: 0;
+}
+.library-empty,
+.workspace-empty {
+  padding: 70px 24px;
+  color: #6b7c75;
+  text-align: center;
+}
+.library-empty svg,
+.workspace-empty svg {
+  width: 32px;
+}
+.library-empty strong {
+  display: block;
+  margin-top: 10px;
+}
+.library-empty p,
+.workspace-empty p {
+  font-size: 11px;
+}
+.workspace-empty h2 {
+  font-size: 18px;
+}
+.dialog-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 10px;
+}
+@media (max-width: 1250px) {
+  .library-workspace {
+    grid-template-columns: 290px minmax(0, 1fr);
+  }
+  .version-workspace {
+    padding: 24px;
+  }
+  .version-summary span {
+    min-width: 125px;
+    padding-inline: 14px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .template-list > button {
+    transition: none;
+  }
+}
+</style>
