@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ArrowLeft, Coin, Delete, EditPen, Plus, Refresh, Search, Setting } from "@element-plus/icons-vue";
+import { Coin, Delete, EditPen, Plus, Refresh, Search } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { adminApi, type LimsExtractionRule, type StandardField } from "./admin-api";
-
-defineEmits<{ templates: []; exit: [] }>();
+import { adminApi, type LimsExtractionRule, type StandardField, type StandardFieldPreview } from "./admin-api";
 
 const loading = ref(false);
 const saving = ref(false);
@@ -15,6 +13,9 @@ const rules = ref<LimsExtractionRule[]>([]);
 const search = ref("");
 const ruleDialog = ref(false);
 const ruleDraft = ref<Partial<LimsExtractionRule>>();
+const preview = ref<StandardFieldPreview>();
+const previewLoading = ref(false);
+let previewRequest = 0;
 
 const dataTypes = [
   { value: "string", label: "文本" }, { value: "decimal", label: "数值" },
@@ -64,12 +65,39 @@ async function loadFields(preferred?: string) {
 async function selectField(field: StandardField) {
   selected.value = field;
   draft.value = JSON.parse(JSON.stringify(field));
-  try { rules.value = await adminApi.extractionRules(field.fieldCode); }
+  await Promise.all([loadRules(field.fieldCode), loadPreview(field.fieldCode)]);
+}
+async function loadRules(fieldCode: string) {
+  try { rules.value = await adminApi.extractionRules(fieldCode); }
   catch (error) { ElMessage.error(errorText(error)); }
+}
+async function loadPreview(fieldCode?: string) {
+  if (!fieldCode) { preview.value = undefined; return; }
+  const requestId = ++previewRequest;
+  previewLoading.value = true;
+  try {
+    const result = await adminApi.standardFieldPreview(fieldCode);
+    if (requestId === previewRequest) preview.value = result;
+  } catch (error) {
+    if (requestId === previewRequest) preview.value = undefined;
+    ElMessage.error(errorText(error));
+  } finally {
+    if (requestId === previewRequest) previewLoading.value = false;
+  }
+}
+function previewValue(value: unknown) {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+function evidenceLabel(evidence: Record<string, unknown>, fallback: string) {
+  const section = evidence.sectionPath || evidence.section || evidence.chapterPath;
+  if (Array.isArray(section)) return section.join(" / ");
+  return String(section || fallback || "标准记录");
 }
 function newField() {
   selected.value = undefined;
   rules.value = [];
+  preview.value = undefined;
   draft.value = {
     fieldCode: "", label: "", groupCode: "project", collectionCode: "project",
     dataType: "string", cardinality: "ONE", dbTable: "lims_standard_records",
@@ -96,6 +124,7 @@ async function removeField() {
     await ElMessageBox.confirm(`删除标准字段“${selected.value.label}”？该字段的提取规则也会删除。`, "删除标准字段", { type: "warning" });
     await adminApi.deleteStandardField(selected.value.fieldCode);
     selected.value = undefined; draft.value = undefined; rules.value = [];
+    preview.value = undefined;
     await loadFields();
     ElMessage.success("标准字段已删除");
   } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(errorText(error)); }
@@ -132,11 +161,9 @@ onMounted(() => loadFields());
 
 <template>
   <div class="lims-catalog">
-    <header class="catalog-header">
-      <div class="catalog-brand"><Coin /><div><strong>LIMS 标准字段</strong><small>字段字典与提取规则</small></div></div>
+    <header class="module-header">
+      <div class="module-title"><Coin /><div><strong>LIMS 标准字段</strong><small>字段字典与提取规则</small></div></div>
       <div class="header-actions">
-        <el-button :icon="ArrowLeft" @click="$emit('exit')">返回报告</el-button>
-        <el-button :icon="Setting" @click="$emit('templates')">模板管理</el-button>
         <el-button :icon="Refresh" @click="loadFields()">刷新</el-button>
         <el-button type="primary" :icon="Plus" @click="newField">新增标准字段</el-button>
       </div>
@@ -150,7 +177,7 @@ onMounted(() => loadFields());
             <h2>{{ group.code }}<span>{{ group.items.length }}</span></h2>
             <button v-for="item in group.items" :key="item.fieldCode" :class="{ selected: selected?.fieldCode === item.fieldCode }" @click="selectField(item)">
               <span><b>{{ item.label }}</b><small>{{ item.fieldCode }}</small></span>
-              <el-tag size="small" :type="item.enabled ? 'success' : 'info'">{{ item.enabled ? '启用' : '停用' }}</el-tag>
+              <span class="field-state" :class="{ disabled: !item.enabled }" :title="item.enabled ? '已启用' : '已停用'" />
             </button>
           </section>
         </div>
@@ -161,6 +188,29 @@ onMounted(() => loadFields());
             <div><span>全局字段库 / {{ draft.groupCode || "未分组" }}</span><h1>{{ draft.label || "新标准字段" }}</h1></div>
             <div><el-button v-if="selected" type="danger" plain :icon="Delete" @click="removeField">删除字段</el-button><el-button type="primary" :loading="saving" @click="saveField">保存字段</el-button></div>
           </div>
+          <section v-loading="previewLoading" class="result-preview-band">
+            <div class="preview-head">
+              <div>
+                <h2>字段结果预览</h2>
+                <span v-if="preview?.storageSupported && preview.total">共 {{ preview.total }} 条，显示最近 {{ preview.items.length }} 条</span>
+                <span v-else>最近解析的 LIMS 标准数据</span>
+              </div>
+              <el-button :icon="Refresh" :disabled="!selected" @click="loadPreview(selected?.fieldCode)">刷新预览</el-button>
+            </div>
+            <el-table v-if="preview?.items.length" :data="preview.items" size="small" max-height="260">
+              <el-table-column label="识别结果" min-width="220">
+                <template #default="scope"><span class="preview-value" :title="previewValue(scope.row.value)">{{ previewValue(scope.row.value) }}</span></template>
+              </el-table-column>
+              <el-table-column label="实验记录" min-width="190">
+                <template #default="scope"><span class="preview-context"><b>{{ scope.row.experimentTitle || scope.row.projectName || '未命名实验' }}</b><small>{{ scope.row.instanceId }}</small></span></template>
+              </el-table-column>
+              <el-table-column label="数据来源" min-width="190">
+                <template #default="scope"><span class="preview-context"><b>{{ evidenceLabel(scope.row.evidence, scope.row.collectionCode) }}</b><small>{{ scope.row.fileName }}</small></span></template>
+              </el-table-column>
+            </el-table>
+            <div v-else-if="preview && !preview.storageSupported" class="preview-empty">当前数据库位置暂不支持自动预览</div>
+            <div v-else-if="!previewLoading" class="preview-empty">暂无已解析结果，导入并识别 LIMS 数据后会显示在这里</div>
+          </section>
           <div class="definition-band">
             <h2>字段定义</h2>
             <el-form label-position="top">
@@ -229,5 +279,5 @@ onMounted(() => loadFields());
 </template>
 
 <style scoped>
-.lims-catalog{height:100vh;min-width:1120px;color:#263731;background:#edf0ee;overflow:hidden}.catalog-header{height:64px;padding:0 20px;display:flex;align-items:center;color:#fff;background:#123f36;border-bottom:2px solid #b88b49}.catalog-brand{display:flex;align-items:center;gap:11px}.catalog-brand>svg{width:25px}.catalog-brand strong,.catalog-brand small{display:block}.catalog-brand strong{font-size:14px}.catalog-brand small{margin-top:3px;color:#aec3bd;font-size:10px}.header-actions{margin-left:auto;display:flex;gap:7px}.header-actions .el-button{margin:0}.header-actions .el-button:not(.el-button--primary){color:#eef5f3;border-color:#52756d;background:transparent}.catalog-main{height:calc(100vh - 64px);display:grid;grid-template-columns:330px minmax(0,1fr)}.field-index{min-height:0;padding:18px 14px 0;display:flex;flex-direction:column;background:#fff;border-right:1px solid #d5ddda}.index-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px}.index-head h1{margin:0;color:#173f36;font-size:18px}.index-head span{color:#6d7e78;font-size:11px}.field-list{min-height:0;flex:1;overflow:auto;margin-top:12px;padding-bottom:16px}.field-list section h2{margin:14px 8px 5px;display:flex;justify-content:space-between;color:#53675f;font-size:12px}.field-list section h2 span{font-weight:400}.field-list button{width:100%;min-height:55px;padding:8px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;border:0;border-bottom:1px solid #e8ecea;background:#fff;text-align:left;cursor:pointer}.field-list button:hover,.field-list button.selected{background:#e8f1ee}.field-list b,.field-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.field-list b{font-size:13px}.field-list small{margin-top:4px;color:#687a73;font-size:11px}.field-workspace{min-width:0;overflow:auto;padding:26px 30px}.workspace-head,.rules-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px}.workspace-head>div:last-child{display:flex;gap:8px}.workspace-head span,.rules-head span{color:#6b7c75;font-size:11px}.workspace-head h1{margin:6px 0 0;color:#173f36;font-size:24px}.definition-band,.rules-band{margin-top:20px;padding:20px;background:#fff;border:1px solid #d7dfdb}.definition-band h2,.rules-head h2{margin:0 0 16px;color:#234c41;font-size:16px}.rules-head h2{margin-bottom:4px}.form-grid{display:grid;gap:12px}.form-grid.two{grid-template-columns:1fr 1fr}.form-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.form-grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}.database-row{margin-top:4px;padding-top:14px;border-top:1px solid #e4e9e6}.rules-band{padding:0}.rules-head{padding:18px 20px;border-bottom:1px solid #e2e7e4}.rules-band code{color:#31594e}.empty-state{height:100%;display:grid;place-content:center;text-align:center;color:#708079}.empty-state svg{width:36px;margin:auto}.empty-state h2{font-size:18px}.el-select,.el-input-number{width:100%}@media(max-width:1300px){.catalog-main{grid-template-columns:290px minmax(0,1fr)}.field-workspace{padding:22px}.form-grid.four{grid-template-columns:1fr 1fr}}@media(prefers-reduced-motion:reduce){.field-list button{transition:none}}
+.lims-catalog{--space-xs:4px;--space-sm:8px;--space-md:12px;--space-lg:16px;--space-xl:24px;height:100%;min-width:0;color:#263731;background:#edf0ee;overflow:hidden}.module-header{height:64px;padding:0 var(--space-xl);display:flex;align-items:center;background:#fff;border-bottom:1px solid #d5ddda}.module-title{display:flex;align-items:center;gap:var(--space-md)}.module-title>svg{width:22px;color:#286958}.module-title strong,.module-title small{display:block}.module-title strong{color:#173f36;font-size:14px}.module-title small{margin-top:3px;color:#6b7c75;font-size:10px}.header-actions{margin-left:auto;display:flex;gap:var(--space-sm)}.header-actions .el-button{margin:0}.catalog-main{height:calc(100% - 64px);display:grid;grid-template-columns:380px minmax(0,1fr)}.field-index{min-height:0;padding:18px 14px 0;display:flex;flex-direction:column;background:#fff;border-right:1px solid #d5ddda}.index-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px}.index-head h1{margin:0;color:#173f36;font-size:18px}.index-head span{color:#6d7e78;font-size:11px}.field-list{min-height:0;flex:1;overflow:auto;margin-top:var(--space-md);padding-bottom:var(--space-lg)}.field-list section{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 7px}.field-list section h2{grid-column:1/-1;margin:14px 8px 1px;display:flex;justify-content:space-between;color:#53675f;font-size:12px}.field-list section h2 span{font-weight:400}.field-list button{width:100%;min-width:0;min-height:44px;padding:6px var(--space-sm);display:grid;grid-template-columns:minmax(0,1fr) 8px;align-items:center;gap:6px;border:1px solid #e4e9e6;border-radius:4px;background:#fff;text-align:left;cursor:pointer;transition:background-color 180ms ease-out,border-color 180ms ease-out}.field-list button:hover{background:#f1f6f4;border-color:#b8cbc4}.field-list button.selected{background:#e5f0ed;border-color:#4f8b7b}.field-list b,.field-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.field-list b{font-size:12px}.field-list small{margin-top:3px;color:#687a73;font-size:10px}.field-state{width:7px;height:7px;border-radius:50%;background:#49a36e}.field-state.disabled{background:#9aa6a1}.field-workspace{min-width:0;overflow:auto;padding:var(--space-xl) 28px}.workspace-head,.rules-head,.preview-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px}.workspace-head>div:last-child{display:flex;gap:var(--space-sm)}.workspace-head span,.rules-head span,.preview-head span{color:#6b7c75;font-size:11px}.workspace-head h1{margin:6px 0 0;color:#173f36;font-size:24px}.result-preview-band,.definition-band,.rules-band{margin-top:20px;background:#fff;border:1px solid #d7dfdb}.result-preview-band{min-height:118px}.preview-head{padding:var(--space-lg) 20px;border-bottom:1px solid #e2e7e4}.preview-head h2,.definition-band h2,.rules-head h2{margin:0 0 var(--space-lg);color:#234c41;font-size:16px}.preview-head h2,.rules-head h2{margin-bottom:var(--space-xs)}.preview-empty{min-height:68px;padding:var(--space-xl);display:grid;place-items:center;color:#6b7c75;font-size:12px}.preview-value{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#173f36;font-weight:600}.preview-context b,.preview-context small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.preview-context b{font-size:12px;font-weight:500}.preview-context small{margin-top:2px;color:#708079;font-size:10px}.definition-band{padding:20px}.form-grid{display:grid;gap:var(--space-md)}.form-grid.two{grid-template-columns:1fr 1fr}.form-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.form-grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}.database-row{margin-top:var(--space-xs);padding-top:14px;border-top:1px solid #e4e9e6}.rules-band{padding:0;overflow-x:auto}.rules-head{padding:18px 20px;border-bottom:1px solid #e2e7e4}.rules-band code{color:#31594e}.empty-state{height:100%;display:grid;place-content:center;text-align:center;color:#708079}.empty-state svg{width:36px;margin:auto}.empty-state h2{font-size:18px}.el-select,.el-input-number{width:100%}@media(max-width:1400px){.catalog-main{grid-template-columns:360px minmax(0,1fr)}.field-workspace{padding:var(--space-xl)}.form-grid.four{grid-template-columns:1fr 1fr}}@media(prefers-reduced-motion:reduce){.field-list button{transition:none}}
 </style>

@@ -108,6 +108,26 @@ export interface LimsExtractionRule {
   updatedAt: string;
 }
 
+export interface StandardFieldPreviewItem {
+  importId: string;
+  instanceId: string;
+  projectName: string;
+  experimentTitle: string;
+  fileName: string;
+  collectionCode: string;
+  recordKey: string;
+  value: unknown;
+  evidence: Record<string, unknown>;
+  normalizedAt: string;
+}
+
+export interface StandardFieldPreview {
+  fieldCode: string;
+  total: number;
+  items: StandardFieldPreviewItem[];
+  storageSupported: boolean;
+}
+
 export interface AiRule {
   id?: number;
   fieldCode: string;
@@ -369,6 +389,13 @@ export const adminApi = {
     (await http.put<StandardField>(`/standard-fields/${encodeURIComponent(fieldCode)}`, data)).data,
   deleteStandardField: async (fieldCode: string) =>
     (await http.delete(`/standard-fields/${encodeURIComponent(fieldCode)}`)).data,
+  standardFieldPreview: async (fieldCode: string, limit = 12) =>
+    (
+      await http.get<StandardFieldPreview>(
+        `/standard-fields/${encodeURIComponent(fieldCode)}/preview`,
+        { params: { limit } },
+      )
+    ).data,
   extractionRules: async (fieldCode: string) =>
     (await http.get<LimsExtractionRule[]>(`/standard-fields/${encodeURIComponent(fieldCode)}/extraction-rules`)).data,
   createExtractionRule: async (fieldCode: string, data: Partial<LimsExtractionRule>) =>

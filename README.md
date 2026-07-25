@@ -73,4 +73,4 @@ mapping/               模板字段映射
 
 ## Linux 部署
 
-源码不使用 Windows 专属 API。Linux 上安装 Python 3.12 和 Node.js LTS 后，创建虚拟环境、安装 `backend/requirements.txt`、构建 `frontend`，再用 Uvicorn 或 Gunicorn 启动即可。生产环境建议通过 Nginx 提供 HTTPS，并将 `data` 目录挂载到独立数据盘。
+源码不使用 Windows 专属 API。Linux 上安装 Python 3.12 和 Node.js LTS 后，创建虚拟环境、安装 `backend/requirements.txt`、构建 `frontend`，再用 Uvicorn 启动即可。当前使用 SQLite，生产环境建议先以 `uvicorn app.main:app --host 127.0.0.1 --port 8010 --app-dir backend` 单进程运行，并通过 Nginx 提供 HTTPS；`data` 目录应挂载到独立数据盘。后续迁移到 PostgreSQL 后，再根据并发量增加 Uvicorn 工作进程。

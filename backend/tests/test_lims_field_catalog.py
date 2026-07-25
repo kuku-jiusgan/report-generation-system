@@ -67,6 +67,30 @@ class LimsFieldCatalogTest(unittest.TestCase):
         apply_configured_extraction(instance, payload, fields, rules)
         self.assertEqual(payload["project"]["dailyDose"], "12.50")
 
+    def test_preview_field_returns_recent_standard_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "preview.db")
+            database.initialize()
+            imported = database.create_lims_import({
+                "id": "import-1", "file_name": "lims.xlsx", "stored_name": "lims.xlsx",
+                "size": 100, "summary": {}, "created_at": "2026-07-25T08:00:00+00:00",
+            })
+            database.replace_lims_instance(
+                imported["id"],
+                {"instanceId": "EXP-1", "title": "亚硝胺验证"},
+                {"project": {"name": "项目甲"}, "document": {}, "samples": [
+                    {"sampleName": "供试品A", "batchNo": "B-001", "evidence": {"sectionPath": ["实验材料"]}},
+                ]},
+                ["samples"],
+            )
+            preview = database.preview_lims_field({
+                "fieldCode": "samples.batchNo", "collectionCode": "samples",
+                "dbTable": "lims_standard_records", "dbColumn": "data_json", "jsonKey": "batchNo",
+            })
+            self.assertEqual(preview["total"], 1)
+            self.assertEqual(preview["items"][0]["value"], "B-001")
+            self.assertEqual(preview["items"][0]["fileName"], "lims.xlsx")
+
 
 if __name__ == "__main__":
     unittest.main()

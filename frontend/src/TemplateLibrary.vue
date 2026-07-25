@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import {
-  ArrowLeft,
   Clock,
   CopyDocument,
   Delete,
@@ -9,7 +8,6 @@ import {
   EditPen,
   Plus,
   Refresh,
-  Setting,
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -20,8 +18,6 @@ import {
 
 const emit = defineEmits<{
   open: [template: AdminTemplate, version: AdminTemplateVersion];
-  fields: [];
-  exit: [];
 }>();
 const templates = ref<AdminTemplate[]>([]);
 const versions = ref<AdminTemplateVersion[]>([]);
@@ -177,15 +173,13 @@ onMounted(() => loadTemplates());
 
 <template>
   <div class="template-library">
-    <header class="library-header">
-      <div class="library-brand">
-        <Setting />
-        <div><strong>报告模板管理</strong><small>模板库与版本控制</small></div>
+    <header class="module-header">
+      <div class="module-title">
+        <Document />
+        <div><strong>报告模板规则</strong><small>模板、版本与 Word 映射规则</small></div>
       </div>
       <div class="library-actions">
-        <el-button :icon="ArrowLeft" @click="emit('exit')">返回报告</el-button
-        ><el-button :icon="Setting" @click="emit('fields')">LIMS 标准字段</el-button
-        ><el-button :icon="Refresh" @click="loadTemplates()">刷新</el-button
+        <el-button :icon="Refresh" @click="loadTemplates()">刷新</el-button
         ><el-button type="primary" :icon="Plus" @click="openCreateTemplate"
           >新建模板</el-button
         >
@@ -410,39 +404,40 @@ onMounted(() => loadTemplates());
 
 <style scoped>
 .template-library {
-  height: 100vh;
-  min-width: 1080px;
+  height: 100%;
+  min-width: 0;
   color: #263731;
   background: #edf0ee;
   overflow: hidden;
 }
-.library-header {
+.module-header {
   height: 64px;
-  padding: 0 20px;
+  padding: 0 24px;
   display: flex;
   align-items: center;
-  color: #fff;
-  background: #123f36;
-  border-bottom: 2px solid #b88b49;
+  background: #fff;
+  border-bottom: 1px solid #d5ddda;
 }
-.library-brand {
+.module-title {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 12px;
 }
-.library-brand > svg {
-  width: 25px;
+.module-title > svg {
+  width: 22px;
+  color: #286958;
 }
-.library-brand strong,
-.library-brand small {
+.module-title strong,
+.module-title small {
   display: block;
 }
-.library-brand strong {
+.module-title strong {
+  color: #173f36;
   font-size: 14px;
 }
-.library-brand small {
+.module-title small {
   margin-top: 3px;
-  color: #aec3bd;
+  color: #6b7c75;
   font-size: 10px;
 }
 .library-actions {
@@ -453,15 +448,10 @@ onMounted(() => loadTemplates());
 .library-actions .el-button {
   margin: 0;
 }
-.library-actions .el-button:not(.el-button--primary) {
-  color: #eef5f3;
-  border-color: #52756d;
-  background: transparent;
-}
 .library-workspace {
-  height: calc(100vh - 64px);
+  height: calc(100% - 64px);
   display: grid;
-  grid-template-columns: 330px minmax(0, 1fr);
+  grid-template-columns: 290px minmax(0, 1fr);
 }
 .template-index {
   min-height: 0;
@@ -555,7 +545,7 @@ onMounted(() => loadTemplates());
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 30px 34px;
+  padding: 24px 28px;
 }
 .version-heading {
   display: flex;
@@ -659,7 +649,7 @@ onMounted(() => loadTemplates());
 }
 @media (max-width: 1250px) {
   .library-workspace {
-    grid-template-columns: 290px minmax(0, 1fr);
+    grid-template-columns: 270px minmax(0, 1fr);
   }
   .version-workspace {
     padding: 24px;

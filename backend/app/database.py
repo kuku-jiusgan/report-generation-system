@@ -533,6 +533,83 @@ class Database:
                  "orderNo": row["order_no"], "data": json.loads(row["data_json"]),
                  "evidence": json.loads(row["evidence_json"])} for row in rows]
 
+    def preview_lims_field(self, field: dict[str, Any], limit: int = 12) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 50))
+        items: list[dict[str, Any]] = []
+        db_table = str(field.get("dbTable") or "")
+        db_column = str(field.get("dbColumn") or "")
+
+        if db_table == "lims_experiments":
+            allowed_columns = {
+                "project_id", "project_name", "document_code", "document_version", "title",
+                "experiment_version", "created_by", "created_at_source", "approved_by", "approved_at_source",
+            }
+            if db_column not in allowed_columns:
+                return {"fieldCode": field["fieldCode"], "total": 0, "items": [], "storageSupported": False}
+            with self.connect() as connection:
+                rows = connection.execute(
+                    f"""SELECT e.import_id,e.instance_id,e.project_name,e.title,e.normalized_at,
+                               i.file_name,e.{db_column} AS preview_value
+                        FROM lims_experiments e JOIN lims_imports i ON i.id=e.import_id
+                        WHERE e.{db_column} IS NOT NULL AND trim(CAST(e.{db_column} AS TEXT))<>''
+                        ORDER BY i.created_at DESC,e.normalized_at DESC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+                total = connection.execute(
+                    f"""SELECT COUNT(*) FROM lims_experiments
+                        WHERE {db_column} IS NOT NULL AND trim(CAST({db_column} AS TEXT))<>''"""
+                ).fetchone()[0]
+            items = [{
+                "importId": row["import_id"], "instanceId": row["instance_id"],
+                "projectName": row["project_name"], "experimentTitle": row["title"],
+                "fileName": row["file_name"], "collectionCode": field.get("collectionCode") or "",
+                "recordKey": "", "value": row["preview_value"], "evidence": {},
+                "normalizedAt": row["normalized_at"],
+            } for row in rows]
+            return {"fieldCode": field["fieldCode"], "total": total, "items": items, "storageSupported": True}
+
+        if db_table != "lims_standard_records" or db_column != "data_json":
+            return {"fieldCode": field["fieldCode"], "total": 0, "items": [], "storageSupported": False}
+
+        json_key = str(field.get("jsonKey") or "")
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT r.import_id,r.instance_id,r.collection_code,r.record_key,r.data_json,
+                          r.evidence_json,e.project_name,e.title,e.normalized_at,i.file_name
+                   FROM lims_standard_records r
+                   JOIN lims_experiments e ON e.import_id=r.import_id AND e.instance_id=r.instance_id
+                   JOIN lims_imports i ON i.id=r.import_id
+                   WHERE r.collection_code=?
+                   ORDER BY i.created_at DESC,e.normalized_at DESC,r.order_no""",
+                (field.get("collectionCode") or "",),
+            ).fetchall()
+
+        total = 0
+        for row in rows:
+            value = self._json_path_value(json.loads(row["data_json"]), json_key)
+            if value is None or value == "" or value == []:
+                continue
+            total += 1
+            if len(items) < limit:
+                items.append({
+                    "importId": row["import_id"], "instanceId": row["instance_id"],
+                    "projectName": row["project_name"], "experimentTitle": row["title"],
+                    "fileName": row["file_name"], "collectionCode": row["collection_code"],
+                    "recordKey": row["record_key"], "value": value,
+                    "evidence": json.loads(row["evidence_json"] or "{}"),
+                    "normalizedAt": row["normalized_at"],
+                })
+        return {"fieldCode": field["fieldCode"], "total": total, "items": items, "storageSupported": True}
+
+    @staticmethod
+    def _json_path_value(data: Any, json_key: str) -> Any:
+        value = data
+        for part in json_key.split(".") if json_key else []:
+            value = value.get(part) if isinstance(value, dict) else None
+            if value is None:
+                break
+        return value
+
     def upsert_lims_field(self, item: dict[str, Any]) -> dict[str, Any]:
         with self.connect() as connection:
             connection.execute(

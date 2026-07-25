@@ -495,6 +495,13 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings) -> 
             raise HTTPException(404, "标准字段不存在")
         return {"deleted": True}
 
+    @router.get("/standard-fields/{field_code:path}/preview")
+    def preview_standard_field(field_code: str, limit: int = 12) -> dict[str, Any]:
+        field = repository.database.get_lims_field(field_code)
+        if not field:
+            raise HTTPException(404, "标准字段不存在")
+        return repository.database.preview_lims_field(field, limit)
+
     def validate_extraction_rule(item: dict[str, Any]) -> dict[str, Any]:
         if not repository.database.get_lims_field(str(item.get("fieldCode") or "")):
             raise HTTPException(422, "提取规则关联的标准字段不存在")
