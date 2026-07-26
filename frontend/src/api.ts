@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-export type SourceType = 'LIMS' | 'PDF' | 'MANUAL' | 'CALCULATED'
+export type SourceType = 'LIMS' | 'PDF' | 'MANUAL' | 'MANUAL_WORD' | 'CALCULATED'
 
 export interface SourceRef {
   type: SourceType
@@ -69,8 +69,30 @@ export interface ReportTask {
   resolved_data: ReportData
   output_name?: string
   download_url?: string
+  word_edit_locked: boolean
+  word_edited_at?: string
   created_at: string
   updated_at: string
+}
+
+export interface ReportGeneration {
+  id: string
+  report_id: string
+  version_id?: number
+  version_no?: number
+  status: 'PROCESSING' | 'SUCCESS' | 'FAILED' | string
+  output_name?: string
+  error_message?: string
+  generated_at: string
+  title: string
+  resolved_data: ReportData
+}
+
+export interface ReportGenerationPage {
+  total: number
+  page: number
+  pageSize: number
+  items: ReportGeneration[]
 }
 
 export interface FieldBinding {
@@ -108,6 +130,10 @@ export interface OnlyOfficeBootstrap {
 }
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
+http.interceptors.response.use(undefined, (error) => {
+  if (error.response?.status === 401) window.dispatchEvent(new Event('auth-expired'))
+  return Promise.reject(error)
+})
 
 export async function uploadPdf(file: File, onProgress?: (percent: number) => void) {
   const body = new FormData()
@@ -161,6 +187,18 @@ export async function listReports() {
   return (await http.get<ReportTask[]>('/reports')).data
 }
 
+export async function getReport(id: string) {
+  return (await http.get<ReportTask>(`/reports/${id}`)).data
+}
+
+export async function listReportGenerations() {
+  return (await http.get<ReportGenerationPage>('/report-generations', { params: { page: 1, page_size: 100 } })).data
+}
+
+export function reportGenerationFileUrl(id: string) {
+  return `/api/v1/report-generations/${id}/file`
+}
+
 export async function getBindings(id: string) {
   return (await http.get<FieldBinding[]>(`/reports/${id}/bindings`)).data
 }
@@ -175,10 +213,6 @@ export async function getVersions(id: string) {
 
 export async function createVersion(id: string, note = '手工保存') {
   return (await http.post<ReportVersion>(`/reports/${id}/versions`, undefined, { params: { note } })).data
-}
-
-export async function submitReview(id: string) {
-  return (await http.post<ReportTask>(`/reports/${id}/submit-review`)).data
 }
 
 export async function getOnlyOfficeConfig(id: string) {

@@ -2,6 +2,6 @@ import { createApp } from 'vue'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import './style.css'
-import ReportRoot from './ReportRoot.vue'
+import AdminRoot from './AdminRoot.vue'
 
-createApp(ReportRoot).use(ElementPlus).mount('#app')
+createApp(AdminRoot).use(ElementPlus).mount('#app')

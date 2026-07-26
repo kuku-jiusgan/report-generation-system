@@ -1,6 +1,10 @@
 import axios from "axios";
 
 const http = axios.create({ baseURL: "/api/v1/admin", timeout: 120000 });
+http.interceptors.response.use(undefined, (error) => {
+  if (error.response?.status === 401) window.dispatchEvent(new Event("auth-expired"));
+  return Promise.reject(error);
+});
 
 export interface AdminOverview {
   mappingCount: number;
@@ -91,6 +95,25 @@ export interface StandardField {
   updatedAt: string;
 }
 
+export interface StandardFieldCatalogChapter {
+  id: number;
+  parentId?: number;
+  code: string;
+  title: string;
+  pageHint?: number;
+  orderNo: number;
+  enabled: boolean;
+  fields: StandardField[];
+  children: StandardFieldCatalogChapter[];
+}
+
+export interface StandardFieldCatalog {
+  chapters: StandardFieldCatalogChapter[];
+  fields: StandardField[];
+  unmappedFields: StandardField[];
+  total: number;
+}
+
 export interface LimsExtractionRule {
   id: number;
   fieldCode: string;
@@ -116,15 +139,35 @@ export interface StandardFieldPreviewItem {
   fileName: string;
   collectionCode: string;
   recordKey: string;
+  recordKeys?: string[];
   value: unknown;
   evidence: Record<string, unknown>;
   normalizedAt: string;
 }
 
+export interface LimsFieldSourcePreview {
+  fieldCode: string;
+  importId: string;
+  instanceId: string;
+  recordKey: string;
+  matchedBy: "unitId" | "collection" | "instanceId+unitId" | "none";
+  matchedValue: string;
+  source: unknown;
+}
+
 export interface StandardFieldPreview {
   fieldCode: string;
   total: number;
+  availableTotal?: number;
+  recognizedTotal?: number;
   items: StandardFieldPreviewItem[];
+  options?: Array<{
+    instanceId: string;
+    experimentTitle: string;
+    projectName: string;
+    normalizedAt: string;
+    recognizedCount: number;
+  }>;
   storageSupported: boolean;
 }
 
@@ -307,9 +350,53 @@ export interface LimsRecognitionTest {
   coverage: { recognizedTables: number; unmatchedTables: number };
 }
 
+export interface ManagedUser {
+  id: string; username: string; displayName: string; roleCode: string; enabled: boolean;
+  mustChangePassword: boolean; permissions: string[]; createdAt?: string; lastLoginAt?: string;
+}
+
+export interface ManagedRole {
+  code: string; name: string; description: string; immutable: boolean; permissions: string[];
+}
+
+export interface RoleMatrix {
+  permissions: Array<{ code: string; name: string }>;
+  roles: ManagedRole[];
+}
+
+export interface GenerationHistoryItem {
+  id: string; report_id: string; version_id?: number; generated_by?: string;
+  status: 'PROCESSING' | 'SUCCESS' | 'FAILED'; output_name?: string; error_message: string;
+  generated_at: string; legacy: boolean; title: string; report_status: string;
+  resolved_data: Record<string, unknown>; username?: string; display_name?: string; version_no?: number;
+}
+
+export interface GenerationHistoryPage {
+  total: number; page: number; pageSize: number; items: GenerationHistoryItem[];
+}
+
 const limsHttp = axios.create({ baseURL: "/api/v1/lims", timeout: 120000 });
+limsHttp.interceptors.response.use(undefined, (error) => {
+  if (error.response?.status === 401) window.dispatchEvent(new Event("auth-expired"));
+  return Promise.reject(error);
+});
 
 export const adminApi = {
+  users: async (query = '') => (await http.get<ManagedUser[]>('/users', { params: { query } })).data,
+  createUser: async (data: { username: string; display_name: string; password: string; role_code: string }) =>
+    (await http.post<ManagedUser>('/users', data)).data,
+  updateUser: async (id: string, data: { display_name?: string; role_code?: string; enabled?: boolean }) =>
+    (await http.put<ManagedUser>(`/users/${id}`, data)).data,
+  resetUserPassword: async (id: string, password: string) =>
+    (await http.post(`/users/${id}/reset-password`, { password })).data,
+  roles: async () => (await http.get<RoleMatrix>('/roles')).data,
+  updateRolePermissions: async (code: string, permissions: string[]) =>
+    (await http.put<ManagedRole>(`/roles/${code}/permissions`, { permissions })).data,
+  reportHistory: async (params: Record<string, string | number> = {}) =>
+    (await http.get<GenerationHistoryPage>('/report-history', { params })).data,
+  reportHistoryDetail: async (id: string) =>
+    (await http.get<GenerationHistoryItem>(`/report-history/${id}`)).data,
+  reportHistoryDownloadUrl: (id: string) => `/api/v1/admin/report-history/${id}/file`,
   templates: async () => (await http.get<AdminTemplate[]>("/templates")).data,
   createTemplate: async (data: {
     code: string;
@@ -383,17 +470,27 @@ export const adminApi = {
     (await http.get<StandardField[]>("/standard-fields")).data,
   allStandardFields: async () =>
     (await http.get<StandardField[]>("/standard-fields", { params: { include_disabled: true } })).data,
+  standardFieldCatalog: async () =>
+    (await http.get<StandardFieldCatalog>("/standard-field-catalog", { params: { include_disabled: true } })).data,
   createStandardField: async (data: Partial<StandardField>) =>
     (await http.post<StandardField>("/standard-fields", data)).data,
   updateStandardField: async (fieldCode: string, data: Partial<StandardField>) =>
     (await http.put<StandardField>(`/standard-fields/${encodeURIComponent(fieldCode)}`, data)).data,
   deleteStandardField: async (fieldCode: string) =>
     (await http.delete(`/standard-fields/${encodeURIComponent(fieldCode)}`)).data,
-  standardFieldPreview: async (fieldCode: string, limit = 12) =>
+  standardFieldPreview: async (fieldCode: string, limit = 12, instanceIds: string[] = []) =>
     (
       await http.get<StandardFieldPreview>(
         `/standard-fields/${encodeURIComponent(fieldCode)}/preview`,
-        { params: { limit } },
+        { params: { limit, instance_ids: instanceIds.join(",") } },
+      )
+    ).data,
+  rawLimsFieldSource: async (fieldCode: string, item: StandardFieldPreviewItem) =>
+    (
+      await http.get<LimsFieldSourcePreview>(
+        "/standard-field-source",
+        { params: { field_code: fieldCode, import_id: item.importId,
+                    instance_id: item.instanceId, record_key: item.recordKey } },
       )
     ).data,
   extractionRules: async (fieldCode: string) =>

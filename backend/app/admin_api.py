@@ -1,24 +1,29 @@
 import hashlib
 import re
 import shutil
+import time
 import uuid
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 import jwt
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from .config import Settings
+from .auth import AuthManager
 from .services.rule_admin import RuleAdminRepository
 from .services.lims_excel import parse_lims_workbook
 from .services.lims_normalizer import merge_instances
 from .services.template_compiler import compile_template
 
 
-def create_admin_router(repository: RuleAdminRepository, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix=f"{settings.api_prefix}/admin", tags=["规则管理后台"])
+def create_admin_router(repository: RuleAdminRepository, settings: Settings, auth: AuthManager) -> APIRouter:
+    router = APIRouter(
+        prefix=f"{settings.api_prefix}/admin", tags=["后台管理系统"],
+        dependencies=[Depends(auth.admin_route_guard)],
+    )
     compiled_dir = settings.template_path.parent / "compiled"
     compiled_dir.mkdir(parents=True, exist_ok=True)
     draft_dir = settings.template_path.parent / "drafts"
@@ -332,7 +337,15 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings) -> 
         return {"deleted": True}
 
     @router.get("/template/file/{version_id}")
-    def version_template_file(version_id: str) -> FileResponse:
+    def version_template_file(version_id: str, document_token: str = "") -> FileResponse:
+        if not settings.onlyoffice_jwt_secret or not document_token:
+            raise HTTPException(401, "ONLYOFFICE 模板访问缺少签名")
+        try:
+            claims = jwt.decode(document_token, settings.onlyoffice_jwt_secret, algorithms=["HS256"])
+        except jwt.PyJWTError as error:
+            raise HTTPException(401, "ONLYOFFICE 模板访问签名无效") from error
+        if claims.get("purpose") != "template-file" or claims.get("versionId") != version_id:
+            raise HTTPException(403, "ONLYOFFICE 模板访问签名不匹配")
         try:
             path = ensure_version_draft_template(version_id)
         except ValueError as error:
@@ -355,11 +368,16 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings) -> 
             raise HTTPException(409, "没有活动模板版本")
         version_id = str(workspace["versionId"])
         path = ensure_draft_template()
+        file_token = jwt.encode(
+            {"purpose": "template-file", "versionId": version_id, "exp": int(time.time()) + 600},
+            settings.onlyoffice_jwt_secret, algorithm="HS256",
+        )
         signature = f"admin-template:{version_id}:{path.stat().st_mtime_ns}:{path.stat().st_size}"
         key = hashlib.sha256(signature.encode()).hexdigest()[:20]
         config: dict[str, Any] = {
             "document": {"fileType": "docx", "key": key, "title": settings.template_path.name,
-                         "url": f"{settings.public_base_url}{settings.api_prefix}/admin/template/file/{version_id}",
+                         "url": (f"{settings.public_base_url}{settings.api_prefix}/admin/template/file/{version_id}"
+                                 f"?document_token={file_token}"),
                          "permissions": {"edit": True, "download": True, "print": True, "review": True}},
             "documentType": "word",
             "editorConfig": {
@@ -453,6 +471,10 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings) -> 
     def list_standard_fields(include_disabled: bool = False) -> list[dict[str, Any]]:
         return repository.database.list_lims_fields(include_disabled)
 
+    @router.get("/standard-field-catalog")
+    def standard_field_catalog(include_disabled: bool = True) -> dict[str, Any]:
+        return repository.standard_field_catalog(include_disabled)
+
     def validate_standard_field(item: dict[str, Any], original_code: str = "") -> dict[str, Any]:
         field_code = str(item.get("fieldCode") or "").strip()
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", field_code):
@@ -496,22 +518,45 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings) -> 
         return {"deleted": True}
 
     @router.get("/standard-fields/{field_code:path}/preview")
-    def preview_standard_field(field_code: str, limit: int = 12) -> dict[str, Any]:
+    def preview_standard_field(field_code: str, limit: int = 12, instance_ids: str = "") -> dict[str, Any]:
         field = repository.database.get_lims_field(field_code)
         if not field:
             raise HTTPException(404, "标准字段不存在")
-        return repository.database.preview_lims_field(field, limit)
+        selected = [value.strip() for value in instance_ids.split(",") if value.strip()]
+        return repository.database.preview_lims_field(field, limit, selected)
+
+    @router.get("/standard-field-source")
+    def standard_field_source(field_code: str, import_id: str, instance_id: str,
+                              record_key: str = "") -> dict[str, Any]:
+        field = repository.database.get_lims_field(field_code)
+        if not field:
+            raise HTTPException(404, "标准字段不存在")
+        result = repository.database.get_lims_field_instance_source(
+            field, import_id, instance_id,
+        )
+        if not result:
+            raise HTTPException(404, "LIMS 实验实例不存在")
+        return result
 
     def validate_extraction_rule(item: dict[str, Any]) -> dict[str, Any]:
         if not repository.database.get_lims_field(str(item.get("fieldCode") or "")):
             raise HTTPException(422, "提取规则关联的标准字段不存在")
         if not str(item.get("name") or "").strip():
             raise HTTPException(422, "提取规则名称不能为空")
-        if item.get("valuePattern"):
-            try:
-                re.compile(str(item["valuePattern"]))
-            except re.error as error:
-                raise HTTPException(422, f"提取正则无效：{error}") from error
+        for key, label in (("sectionPattern", "章节"), ("headerPattern", "表头"),
+                           ("valuePattern", "取值")):
+            if item.get(key):
+                try:
+                    re.compile(str(item[key]))
+                except re.error as error:
+                    raise HTTPException(422, f"{label}正则无效：{error}") from error
+        config = item.get("config") or {}
+        parser = str(config.get("parser") or "") if isinstance(config, dict) else ""
+        allowed_parsers = {"", "NORMALIZED_JSON", "INSTANCE_FIELD", "STRUCTURED_UNIT", "HTML_TABLE_GRID"}
+        if parser not in allowed_parsers:
+            raise HTTPException(422, f"不支持的解析器：{parser}")
+        if parser == "HTML_TABLE_GRID" and not str(config.get("parserProfile") or "").strip():
+            raise HTTPException(422, "HTML 表格解析规则必须指定解析配置")
         return item
 
     @router.get("/standard-fields/{field_code:path}/extraction-rules")

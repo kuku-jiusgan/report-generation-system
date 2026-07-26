@@ -37,6 +37,50 @@ MAPPING_COLUMNS = {
 }
 REVERSE_MAPPING_COLUMNS = {value: key for key, value in MAPPING_COLUMNS.items()}
 
+STANDARD_FIELD_GROUP_NAMES = {
+    "accuracySolutions": "准确度溶液",
+    "approval": "审批信息",
+    "columns": "色谱柱",
+    "document": "文档信息",
+    "impurity": "杂质信息",
+    "instruments": "仪器设备",
+    "intermediatePrecisionSolutions": "中间精密度溶液",
+    "lodSolutions": "检出限溶液",
+    "methodParameters": "方法参数",
+    "project": "项目信息",
+    "reagents": "试剂",
+    "referenceStandards": "对照品",
+    "repeatabilitySolutions": "重复性溶液",
+    "robustnessSequence": "耐用性序列",
+    "robustnessSolutions": "耐用性溶液",
+    "robustnessSpecificity": "耐用性专属性",
+    "samples": "样品信息",
+    "specificity": "专属性结果",
+    "specificitySolutions": "专属性溶液",
+    "stabilitySolutions": "稳定性溶液",
+    "systemSuitability": "系统适用性",
+    "systemSuitabilitySolutions": "系统适用性溶液",
+}
+
+HTML_TABLE_PARSER_PROFILES = {
+    "impurity": ("IMPURITY_LIMIT_TABLE", r"实验设计|参考文件|限度", r"杂质名称.*CAS.*限度"),
+    "methodParameters": ("METHOD_PARAMETER_TABLE", r"仪器方法|分析方法", r"项目.*参数|分析方法"),
+    "systemSuitability": ("SYSTEM_SUITABILITY_MATRIX", r"实验结果.*原始数据与处理结果", r"No\.?.*保留时间.*峰面积"),
+    "specificity": ("SPECIFICITY_RESULT_TABLE", r"实验结果.*原始数据与处理结果", r"杂质名称.*溶液名称.*保留时间.*峰面积"),
+    "robustnessSpecificity": ("ROBUSTNESS_SPECIFICITY_TABLE", r"实验结果.*原始数据与处理结果", r"溶液名称.*色谱柱1.*色谱柱2"),
+    "robustnessSequence": ("ROBUSTNESS_SEQUENCE_TABLE", r"实验设计|实验结果", r"溶液.*进样针数.*接受标准"),
+}
+
+SOLUTION_VIEW_COLLECTIONS = {
+    "accuracySolutions", "intermediatePrecisionSolutions", "lodSolutions",
+    "repeatabilitySolutions", "robustnessSolutions", "specificitySolutions",
+    "stabilitySolutions", "systemSuitabilitySolutions",
+}
+
+STRUCTURED_UNIT_COLLECTIONS = {
+    "approval", "columns", "instruments", "reagents", "referenceStandards", "samples",
+}
+
 DEFAULT_TEMPLATE_CHAPTERS = [
     ("", "cover", "封面", None, 0),
     ("", "headerFooter", "页眉与页脚", None, 1),
@@ -122,6 +166,8 @@ class RuleAdminRepository:
         self._seed_content_blocks()
         self._migrate_content_block_rules()
         self._seed_lims_field_catalog()
+        self._localize_standard_field_groups()
+        self._annotate_lims_extraction_rules()
         self._seed_template_catalog()
         self.save_active_workspace()
 
@@ -148,7 +194,8 @@ class RuleAdminRepository:
             if self.database.get_lims_field(code):
                 continue
             self.database.upsert_lims_field({
-                "fieldCode": code, "label": row["word_label"] or code, "groupCode": collection,
+                "fieldCode": code, "label": row["word_label"] or code,
+                "groupCode": STANDARD_FIELD_GROUP_NAMES.get(collection, collection),
                 "collectionCode": collection, "dataType": row["data_type"],
                 "cardinality": "MANY" if "[*]" in row["source_path"] else "ONE",
                 "dbTable": "lims_experiments" if scalar_column else "lims_standard_records",
@@ -167,6 +214,83 @@ class RuleAdminRepository:
                     "sourceType": "NORMALIZED_PATH", "sourcePath": field["legacyJsonPath"],
                     "transform": "TRIM", "priority": 100, "config": {}, "enabled": True,
                 })
+
+    def _localize_standard_field_groups(self) -> None:
+        """Translate known display groups without changing data collection codes."""
+        with self.database.connect() as connection:
+            for group_code, group_name in STANDARD_FIELD_GROUP_NAMES.items():
+                connection.execute(
+                    "UPDATE lims_field_catalog SET group_code=?,updated_at=? WHERE group_code=?",
+                    (group_name, now_iso(), group_code),
+                )
+
+    def _annotate_lims_extraction_rules(self) -> None:
+        """Persist deterministic upstream parser details in generated field rules."""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT r.id,r.name,r.section_pattern,r.header_pattern,r.config,
+                          f.collection_code,f.json_key,f.db_table,f.db_column
+                   FROM lims_extraction_rules r
+                   JOIN lims_field_catalog f ON f.field_code=r.field_code
+                   WHERE r.source_type='NORMALIZED_PATH'"""
+            ).fetchall()
+            for row in rows:
+                collection = str(row["collection_code"] or "")
+                config = json.loads(row["config"] or "{}")
+                section_pattern = str(row["section_pattern"] or "")
+                header_pattern = str(row["header_pattern"] or "")
+                name = str(row["name"] or "")
+                if collection in HTML_TABLE_PARSER_PROFILES:
+                    profile, default_section, default_header = HTML_TABLE_PARSER_PROFILES[collection]
+                    generated = {
+                        "parser": "HTML_TABLE_GRID", "parserProfile": profile,
+                        "inputField": "UNITBODY", "unitType": "RichText", "tableSelector": "table",
+                        "outputCollection": collection, "outputField": row["json_key"] or "",
+                        "preserveEvidence": True,
+                    }
+                    section_pattern = section_pattern or default_section
+                    header_pattern = header_pattern or default_header
+                    if name in {"已有标准数据路径", "Existing normalized path"}:
+                        name = "HTML 表格解析 → 标准字段"
+                elif collection in SOLUTION_VIEW_COLLECTIONS:
+                    generated = {
+                        "parser": "HTML_TABLE_GRID", "parserProfile": "SOLUTION_PREPARATION_TABLE",
+                        "inputField": "UNITBODY", "unitType": "RichText", "tableSelector": "table",
+                        "outputCollection": collection, "outputField": row["json_key"] or "",
+                        "derivedFromCollection": "solutions", "preserveEvidence": True,
+                    }
+                    section_pattern = section_pattern or r"实验设计|溶液配制"
+                    header_pattern = header_pattern or r"溶液名称|名称.*配制方法|溶液配制"
+                    if name in {"已有标准数据路径", "Existing normalized path"}:
+                        name = "溶液表格解析 → 标准字段"
+                elif collection in STRUCTURED_UNIT_COLLECTIONS:
+                    generated = {
+                        "parser": "STRUCTURED_UNIT", "parserProfile": collection.upper(),
+                        "inputField": "UNITBODY", "unitType": "Structured",
+                        "outputCollection": collection, "outputField": row["json_key"] or "",
+                        "preserveEvidence": True,
+                    }
+                    if name in {"已有标准数据路径", "Existing normalized path"}:
+                        name = "结构化 UNITBODY → 标准字段"
+                elif row["db_table"] == "lims_experiments":
+                    generated = {
+                        "parser": "INSTANCE_FIELD", "inputField": row["db_column"],
+                        "outputCollection": collection, "outputField": row["json_key"] or "",
+                    }
+                else:
+                    generated = {
+                        "parser": "NORMALIZED_JSON", "inputField": "UNITBODY",
+                        "outputCollection": collection, "outputField": row["json_key"] or "",
+                        "preserveEvidence": True,
+                    }
+                for key, value in generated.items():
+                    config.setdefault(key, value)
+                connection.execute(
+                    """UPDATE lims_extraction_rules
+                       SET name=?,section_pattern=?,header_pattern=?,config=?,updated_at=? WHERE id=?""",
+                    (name, section_pattern, header_pattern, json.dumps(config, ensure_ascii=False),
+                     now_iso(), row["id"]),
+                )
 
     def _seed_template_catalog(self) -> None:
         with self.database.connect() as connection:
@@ -882,6 +1006,57 @@ class RuleAdminRepository:
         with self.database.connect() as connection:
             rows = [dict(row) for row in connection.execute("SELECT * FROM admin_template_chapters ORDER BY order_no,id").fetchall()]
         return [self._chapter_to_api(row) for row in rows]
+
+    def standard_field_catalog(self, include_disabled: bool = True) -> dict[str, Any]:
+        """Build the LIMS field directory from the active report chapter hierarchy."""
+        fields = self.database.list_lims_fields(include_disabled)
+        fields_by_code = {item["fieldCode"]: item for item in fields}
+        chapter_rows = self.list_template_chapters()
+        with self.database.connect() as connection:
+            links = connection.execute(
+                """SELECT DISTINCT mc.chapter_id,m.standard_field_code
+                   FROM admin_mapping_chapters mc
+                   JOIN admin_mapping_rules m ON m.id=mc.mapping_id
+                   WHERE COALESCE(m.standard_field_code,'')<>''
+                   ORDER BY mc.chapter_id,m.id"""
+            ).fetchall()
+
+        field_codes_by_chapter: dict[int, set[str]] = defaultdict(set)
+        mapped_codes: set[str] = set()
+        for link in links:
+            code = str(link["standard_field_code"])
+            if code not in fields_by_code:
+                continue
+            field_codes_by_chapter[int(link["chapter_id"])].add(code)
+            mapped_codes.add(code)
+
+        nodes = {
+            row["id"]: {
+                **row,
+                "fields": sorted(
+                    (fields_by_code[code] for code in field_codes_by_chapter.get(row["id"], set())),
+                    key=lambda item: (item.get("orderNo", 0), item.get("id", 0)),
+                ),
+                "children": [],
+            }
+            for row in chapter_rows
+        }
+        roots: list[dict[str, Any]] = []
+        for node in nodes.values():
+            parent_id = node.get("parentId")
+            if parent_id and parent_id in nodes:
+                nodes[parent_id]["children"].append(node)
+            else:
+                roots.append(node)
+        for node in nodes.values():
+            node["children"].sort(key=lambda item: (item.get("orderNo", 0), item["id"]))
+        roots.sort(key=lambda item: (item.get("orderNo", 0), item["id"]))
+        return {
+            "chapters": roots,
+            "fields": fields,
+            "unmappedFields": [item for item in fields if item["fieldCode"] not in mapped_codes],
+            "total": len(fields),
+        }
 
     def create_template_chapter(self, item: dict[str, Any]) -> dict[str, Any]:
         with self.database.connect() as connection:

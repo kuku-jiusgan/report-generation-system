@@ -13,6 +13,7 @@ import {
   Refresh,
   Search,
   Setting,
+  SwitchButton,
   Tickets,
   Link,
   Unlock,
@@ -37,12 +38,14 @@ import {
   type ValidationReport,
 } from "./admin-api";
 import StandardFieldPicker from "./StandardFieldPicker.vue";
+import type { AuthUser } from "./auth-api";
 
 defineProps<{
   catalogTemplate?: AdminTemplate;
   catalogVersion?: AdminTemplateVersion;
+  sessionUser: AuthUser;
 }>();
-defineEmits<{ exit: []; back: [] }>();
+defineEmits<{ back: []; logout: [] }>();
 type WorkspaceMode = "designer" | "sources" | "versions";
 type Connector = {
   executeMethod?: (
@@ -1259,12 +1262,13 @@ onUnmounted(() => {
         </button>
       </nav>
       <div class="header-actions">
-        <el-button :icon="ArrowLeft" @click="$emit('exit')">返回报告</el-button
-        ><el-button :icon="Check" :loading="validating" @click="validateRules"
+        <el-button :icon="Check" :loading="validating" @click="validateRules"
           >校验</el-button
         ><el-button type="primary" :loading="publishing" @click="publishRules"
           >发布版本</el-button
         >
+        <span class="designer-session-user">{{ sessionUser.displayName }}</span>
+        <el-button :icon="SwitchButton" @click="$emit('logout')">退出</el-button>
       </div>
     </header>
 
@@ -2228,6 +2232,17 @@ onUnmounted(() => {
   margin-left: auto;
   display: flex;
   gap: 6px;
+}
+.designer-session-user {
+  margin-left: 6px;
+  padding-left: 12px;
+  display: flex;
+  align-items: center;
+  color: #d6e3df;
+  border-left: 1px solid #52756d;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .header-actions .el-button {
   margin: 0;

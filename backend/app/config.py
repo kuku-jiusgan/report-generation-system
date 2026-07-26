@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     lims_sql_enabled: bool = False
     lims_excel_import_enabled: bool = True
     lims_sql_dsn: str = ""
+    bootstrap_admin_username: str = ""
+    bootstrap_admin_password: str = ""
+    session_hours: int = 8
+    secure_cookies: bool = False
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

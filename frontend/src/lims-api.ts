@@ -1,6 +1,10 @@
 import axios from 'axios'
 
 const http = axios.create({ baseURL: '/api/v1/lims', timeout: 120000 })
+http.interceptors.response.use(undefined, (error) => {
+  if (error.response?.status === 401) window.dispatchEvent(new Event('auth-expired'))
+  return Promise.reject(error)
+})
 
 export interface LimsCapabilities {
   sqlEnabled: boolean
