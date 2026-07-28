@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.admin_api import create_admin_router
+from app.auth import AuthManager
 from app.config import Settings
 from app.database import Database
 from app.services.rule_admin import RuleAdminRepository
@@ -67,7 +68,7 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
     database.initialize()
     repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
     repository.seed()
-    router = create_admin_router(repository, settings)
+    router = create_admin_router(repository, settings, AuthManager(database, settings))
     create_endpoint = next(
         route.endpoint
         for route in router.routes
