@@ -2,21 +2,24 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import {
   Clock, Coin, DataAnalysis, Delete, Document, Download, EditPen, Files, MoreFilled,
-  Plus, Refresh, Search, Setting, Upload, View,
+  Plus, Refresh, Search, SwitchButton, Upload, View,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
-import AdminHub from './AdminHub.vue'
 import {
   applyLimsToReport, createReport, createVersion, extractPdf, generateReport, getBindings, getHistory, getOnlyOfficeConfig, getVersions,
-  listReports, submitReview, updateReport, uploadPdf,
+  getReport, listReportGenerations, listReports, reportGenerationFileUrl, updateReport, uploadPdf,
   rebuildReport,
-  type ChangeEvent, type ExtractedField, type FieldBinding, type ReportTask, type ReportVersion,
+  type ChangeEvent, type ExtractedField, type FieldBinding, type ReportGeneration, type ReportTask, type ReportVersion,
   type SourceDocument, type SourceRef, type SourceType, type TestItem,
 } from './api'
 import {
   getLimsCapabilities, recognizeLimsInstances, uploadLimsExcel,
   type LimsCapabilities, type LimsEvidence, type LimsImport, type LimsInstanceSummary, type LimsRecognition,
 } from './lims-api'
+import type { AuthUser } from './auth-api'
+
+defineProps<{ sessionUser: AuthUser }>()
+defineEmits<{ logout: [] }>()
 
 declare global {
   interface Window {
@@ -25,6 +28,11 @@ declare global {
 }
 
 const report = ref<ReportTask>()
+const reportTasks = ref<ReportTask[]>([])
+const generationHistory = ref<ReportGeneration[]>([])
+const generationSearch = ref('')
+const generationLoading = ref(false)
+const sidebarTab = ref<'reports' | 'exports'>('reports')
 const bindings = ref<FieldBinding[]>([])
 const history = ref<ChangeEvent[]>([])
 const versions = ref<ReportVersion[]>([])
@@ -42,8 +50,7 @@ const onlyOfficeLoading = ref(false)
 const onlyOfficeError = ref('')
 let onlyOfficeEditor: { destroyEditor?: () => void } | undefined
 const savedAt = ref('')
-const busy = reactive({ init: true, save: false, export: false, submit: false, upload: false })
-const adminMode = ref(window.location.hash === '#/admin')
+const busy = reactive({ init: true, save: false, export: false, upload: false })
 const limsCapabilities = ref<LimsCapabilities>({ sqlEnabled: false, sqlConfigured: false, excelImportEnabled: true })
 const limsImport = ref<LimsImport>()
 const limsDialogVisible = ref(false)
@@ -74,11 +81,11 @@ const limsCollectionLabels: Record<string, string> = {
 }
 
 const sourceLabels: Record<SourceType, string> = {
-  LIMS: 'LIMS', PDF: 'PDF', MANUAL: '人工', CALCULATED: '计算',
+  LIMS: 'LIMS', PDF: 'PDF', MANUAL: '人工', MANUAL_WORD: 'Word 人工编辑', CALCULATED: '计算',
 }
 
 const statusLabel = computed(() => ({
-  DATA_REVIEW: '编辑中', READY_TO_GENERATE: '已保存', GENERATED: '已导出', IN_REVIEW: '审核中',
+  DATA_REVIEW: '编辑中', READY_TO_GENERATE: '已保存', GENERATED: '已导出',
 }[report.value?.status || ''] || report.value?.status || ''))
 
 function readField(code: string): string {
@@ -148,6 +155,34 @@ const sourceCounts = computed(() => ({
   PDF: displayBindings.value.filter((item) => item.source.type === 'PDF').length,
 }))
 
+const filteredGenerationHistory = computed(() => {
+  const query = generationSearch.value.trim().toLowerCase()
+  if (!query) return generationHistory.value
+  return generationHistory.value.filter((item) => {
+    const reportNo = item.resolved_data?.report_no || ''
+    return `${item.title} ${reportNo}`.toLowerCase().includes(query)
+  })
+})
+
+const filteredReportTasks = computed(() => {
+  const query = generationSearch.value.trim().toLowerCase()
+  if (!query) return reportTasks.value
+  return reportTasks.value.filter((item) =>
+    `${item.title} ${item.resolved_data.report_no || ''}`.toLowerCase().includes(query),
+  )
+})
+
+function formatGenerationTime(value: string) {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+}
+
+function generationStatusLabel(status: string) {
+  return ({ SUCCESS: '已生成', FAILED: '生成失败', PROCESSING: '生成中' } as Record<string, string>)[status] || status
+}
+
 function displayLimsValue(item: Record<string, unknown>) {
   const preferred = ['sampleName', 'name', 'instrumentName', 'impurityName', 'field1', 'solutionName', 'sequence', 'text']
   const title = preferred.map((key) => item[key]).find((value) => value !== undefined && value !== '')
@@ -187,7 +222,7 @@ function structuredTotal(counts: Record<string, number>) {
 
 function readLimsSql() {
   if (!limsCapabilities.value.sqlEnabled || !limsCapabilities.value.sqlConfigured) {
-    ElMessage.warning('尚未配置 LIMS SQL 连接，请先在规则后台完成连接配置')
+    ElMessage.warning('尚未配置 LIMS SQL 连接，请联系系统管理员')
     return
   }
   ElMessage.info('SQL 读取适配器尚未接入正式数据库')
@@ -236,6 +271,10 @@ async function recognizeSelectedLims() {
 
 async function applySelectedLims() {
   if (!report.value || !limsImport.value || !limsRecognition.value) return
+  if (report.value.word_edit_locked) {
+    ElMessage.warning('Word 已人工编辑并保存，不能再用 LIMS 自动填充；请新建报告。')
+    return
+  }
   const unresolved = limsRecognition.value.conflicts.filter((item) => !conflictResolutions[item.id])
   if (unresolved.length) {
     ElMessage.warning(`还有 ${unresolved.length} 个冲突需要选择`)
@@ -347,6 +386,7 @@ async function saveReport(makeVersion = true) {
   busy.save = true
   try {
     report.value = await updateReport(report.value)
+    reportTasks.value = reportTasks.value.map((item) => item.id === report.value?.id ? report.value : item)
     if (makeVersion) await createVersion(report.value.id, '保存草稿')
     await refreshBindings()
     history.value = await getHistory(report.value.id, selectedCode.value)
@@ -363,9 +403,12 @@ async function exportWord() {
   if (!report.value) return
   busy.export = true
   try {
-    await saveReport(false)
+    if (editorMode.value === 'fields') await saveReport(false)
+    else report.value = await getReport(report.value.id)
     report.value = await generateReport(report.value.id)
-    window.open(report.value.download_url, '_blank')
+    await refreshGenerationHistory()
+    const exported = generationHistory.value.find((item) => item.report_id === report.value?.id && item.status === 'SUCCESS')
+    if (exported) window.open(reportGenerationFileUrl(exported.id), '_blank')
   } catch (error) {
     ElMessage.error(errorText(error))
   } finally {
@@ -379,22 +422,11 @@ async function openVersions() {
   versionsVisible.value = true
 }
 
-async function handleSubmit() {
-  if (!report.value) return
-  try {
-    await ElMessageBox.confirm('提交后报告将进入审核状态，确认继续？', '提交审核', { type: 'warning' })
-    busy.submit = true
-    await saveReport(false)
-    report.value = await submitReview(report.value.id)
-    ElMessage.success('已提交审核')
-  } catch (error) {
-    if (error !== 'cancel' && error !== 'close') ElMessage.error(errorText(error))
-  } finally {
-    busy.submit = false
-  }
-}
-
 async function handleUpload(options: UploadRequestOptions) {
+  if (report.value?.word_edit_locked) {
+    ElMessage.warning('Word 已人工编辑并保存，不能再用 PDF 自动填充；请新建报告。')
+    return
+  }
   busy.upload = true
   uploadPercent.value = 0
   try {
@@ -431,6 +463,7 @@ async function applyExtracted(field: ExtractedField) {
 
 async function rebuildWordFromSources() {
   if (!report.value) return
+  if (report.value.word_edit_locked) throw new Error('Word 已人工编辑并保存，不能再次自动生成；请新建报告。')
   onlyOfficeEditor?.destroyEditor?.()
   onlyOfficeEditor = undefined
   report.value = await rebuildReport(report.value.id)
@@ -473,10 +506,25 @@ async function openOnlyOffice() {
   try {
     onlyOfficeEditor?.destroyEditor?.()
     const bootstrap = await getOnlyOfficeConfig(report.value.id)
+    const reportId = report.value.id
+    const config = bootstrap.config as Record<string, unknown> & { events?: Record<string, unknown> }
+    config.events = {
+      ...(config.events || {}),
+      onDocumentStateChange: (event: { data?: boolean }) => {
+        if (event.data !== false) return
+        window.setTimeout(async () => {
+          if (report.value?.id !== reportId) return
+          try {
+            report.value = await getReport(reportId)
+            reportTasks.value = reportTasks.value.map((item) => item.id === reportId ? report.value! : item)
+          } catch { /* callback may still be committing; backend remains authoritative */ }
+        }, 1500)
+      },
+    }
     await loadOnlyOfficeApi(bootstrap.documentServerUrl)
     await nextTick()
     if (!window.DocsAPI) throw new Error('ONLYOFFICE 编辑器 API 不可用')
-    onlyOfficeEditor = new window.DocsAPI.DocEditor('onlyoffice-editor', bootstrap.config)
+    onlyOfficeEditor = new window.DocsAPI.DocEditor('onlyoffice-editor', config)
   } catch (error) {
     onlyOfficeError.value = errorText(error)
   } finally {
@@ -495,12 +543,61 @@ async function changeEditorMode(value: string | number | boolean) {
   }
 }
 
+async function refreshGenerationHistory() {
+  generationLoading.value = true
+  try {
+    generationHistory.value = (await listReportGenerations()).items
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    generationLoading.value = false
+  }
+}
+
+async function refreshReportTasks() {
+  reportTasks.value = await listReports()
+}
+
+async function openReportTask(item: ReportTask) {
+  if (generationLoading.value && report.value?.id === item.id) return
+  generationLoading.value = true
+  try {
+    onlyOfficeEditor?.destroyEditor?.()
+    onlyOfficeEditor = undefined
+    report.value = await getReport(item.id)
+    selectedLimsInstances.value = []
+    limsRecognition.value = undefined
+    selectedLimsDetail.value = undefined
+    uploadedSource.value = undefined
+    const loadedInstances = report.value.resolved_data.source_payloads.LIMS?.instances
+    if (Array.isArray(loadedInstances)) selectedLimsInstances.value = loadedInstances as unknown as LimsInstanceSummary[]
+    await refreshBindings()
+    await selectField('report_no')
+    savedAt.value = new Date(report.value.updated_at).toLocaleTimeString('zh-CN', { hour12: false })
+    await nextTick()
+    await openOnlyOffice()
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    generationLoading.value = false
+  }
+}
+
+function downloadGeneration(item: ReportGeneration) {
+  if (item.status === 'SUCCESS') window.open(reportGenerationFileUrl(item.id), '_blank')
+}
+
 async function initialize() {
   busy.init = true
   try {
-    limsCapabilities.value = await getLimsCapabilities()
-    const existing = await listReports()
-    report.value = existing[0] || await createReport()
+    const [capabilities, existing, generationPage] = await Promise.all([
+      getLimsCapabilities(), listReports(), listReportGenerations(),
+    ])
+    limsCapabilities.value = capabilities
+    generationHistory.value = generationPage.items
+    reportTasks.value = existing
+    report.value = existing[0]
+    if (!report.value) return
     const loadedInstances = report.value.resolved_data.source_payloads.LIMS?.instances
     if (Array.isArray(loadedInstances)) selectedLimsInstances.value = loadedInstances as unknown as LimsInstanceSummary[]
     await refreshBindings()
@@ -520,6 +617,7 @@ async function newBlankReport() {
     onlyOfficeEditor?.destroyEditor?.()
     onlyOfficeEditor = undefined
     report.value = await createReport()
+    await refreshReportTasks()
     selectedLimsInstances.value = []
     limsRecognition.value = undefined
     selectedLimsDetail.value = undefined
@@ -534,43 +632,42 @@ async function newBlankReport() {
   }
 }
 
-async function syncRoute() {
-  adminMode.value = window.location.hash === '#/admin'
-  if (adminMode.value) {
-    onlyOfficeEditor?.destroyEditor?.()
-    onlyOfficeEditor = undefined
-    busy.init = false
-  } else if (!report.value) {
-    await initialize()
-  } else if (editorMode.value === 'word') {
-    await nextTick()
-    await openOnlyOffice()
+async function renameReport(item: ReportTask) {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '修改后的名称用于“我的报告”和导出历史，不会改写 Word 正文。',
+      '修改报告名称',
+      {
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValue: item.title === '未命名报告' ? '' : item.title,
+        inputPlaceholder: '请输入报告名称',
+        inputPattern: /\S+/,
+        inputErrorMessage: '报告名称不能为空',
+      },
+    )
+    const target = item.id === report.value?.id ? report.value : await getReport(item.id)
+    target.title = value.trim()
+    const updated = await updateReport(target)
+    reportTasks.value = reportTasks.value.map((row) => row.id === updated.id ? updated : row)
+    if (report.value?.id === updated.id) report.value = updated
+    ElMessage.success('报告名称已修改')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(errorText(error))
   }
 }
 
-function goAdmin() {
-  window.location.hash = '#/admin'
-}
-
-function goWorkbench() {
-  if (window.location.hash) window.location.hash = ''
-  else void syncRoute()
-}
-
 onMounted(() => {
-  window.addEventListener('hashchange', syncRoute)
-  void syncRoute()
+  void initialize()
 })
 
 onUnmounted(() => {
-  window.removeEventListener('hashchange', syncRoute)
   onlyOfficeEditor?.destroyEditor?.()
 })
 </script>
 
 <template>
-  <AdminHub v-if="adminMode" @exit="goWorkbench" />
-  <div v-else v-loading.fullscreen.lock="busy.init" class="studio-shell">
+  <div v-loading.fullscreen.lock="busy.init" class="studio-shell">
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark"><Document /></span>
@@ -579,22 +676,73 @@ onUnmounted(() => {
       <div v-if="report" class="report-meta">
         <span class="status-dot" />
         <strong>{{ report.resolved_data.report_no }}</strong>
-        <el-tag size="small" :type="report.status === 'IN_REVIEW' ? 'primary' : 'warning'" effect="plain">{{ statusLabel }}</el-tag>
+        <el-tag size="small" type="warning" effect="plain">{{ statusLabel }}</el-tag>
         <span>模板 {{ report.resolved_data.template_version }}</span>
       </div>
       <div class="top-actions">
         <el-button :icon="Plus" @click="newBlankReport">新建报告</el-button>
-        <el-button :icon="Setting" aria-label="规则后台" title="规则后台" @click="goAdmin">规则后台</el-button>
-        <el-switch v-model="showSources" inline-prompt active-text="来源" inactive-text="隐藏" />
-        <el-button :icon="View" aria-label="预览 PDF" title="预览 PDF" @click="previewVisible = true">预览 PDF</el-button>
-        <el-button :icon="Clock" aria-label="版本记录" title="版本记录" @click="openVersions">版本记录</el-button>
-        <el-button :icon="Download" aria-label="导出 Word" title="导出 Word" :loading="busy.export" @click="exportWord">导出 Word</el-button>
-        <el-button :loading="busy.save" @click="saveReport()">保存</el-button>
-        <el-button type="primary" :loading="busy.submit" @click="handleSubmit">提交审核</el-button>
+        <template v-if="report">
+          <el-switch v-model="showSources" inline-prompt active-text="来源" inactive-text="隐藏" />
+          <el-button :icon="View" aria-label="预览 PDF" title="预览 PDF" @click="previewVisible = true">预览 PDF</el-button>
+          <el-button :icon="Clock" aria-label="版本记录" title="版本记录" @click="openVersions">版本记录</el-button>
+          <el-button :icon="Download" aria-label="导出 Word" title="导出 Word" :loading="busy.export" @click="exportWord">导出 Word</el-button>
+          <el-button class="top-critical-action" :loading="busy.save" @click="saveReport()">保存</el-button>
+        </template>
+        <div class="top-session">
+          <span>{{ sessionUser.displayName }}</span>
+          <el-button :icon="SwitchButton" @click="$emit('logout')">退出</el-button>
+        </div>
       </div>
     </header>
 
     <main v-if="report" class="workspace">
+      <aside class="history-panel panel">
+        <div class="panel-header">
+          <div><h2>报告中心</h2><p>任务与正式导出分开管理</p></div>
+          <el-button circle :icon="Refresh" aria-label="刷新列表" title="刷新列表"
+            :loading="generationLoading" @click="sidebarTab === 'reports' ? refreshReportTasks() : refreshGenerationHistory()" />
+        </div>
+        <div class="source-tabs report-tabs">
+          <button :class="{ active: sidebarTab === 'reports' }" @click="sidebarTab = 'reports'">我的报告</button>
+          <button :class="{ active: sidebarTab === 'exports' }" @click="sidebarTab = 'exports'">导出历史</button>
+        </div>
+        <el-input v-model="generationSearch" placeholder="搜索报告名称或编号" :prefix-icon="Search" clearable />
+        <div v-if="sidebarTab === 'reports'" v-loading="generationLoading" class="generation-list">
+          <div v-for="item in filteredReportTasks" :key="item.id" class="generation-item"
+            :class="{ active: report.id === item.id }" role="button" tabindex="0"
+            @click="openReportTask(item)" @keydown.enter="openReportTask(item)">
+            <span class="generation-item-head">
+              <strong>{{ item.title || '未命名报告' }}</strong>
+              <el-tag v-if="item.word_edit_locked" size="small" effect="plain" type="warning">人工锁定</el-tag>
+              <el-button text circle :icon="EditPen" aria-label="修改报告名称" title="修改报告名称" @click.stop="renameReport(item)" />
+            </span>
+            <span class="generation-report-no">{{ item.resolved_data.report_no || '暂无报告编号' }}</span>
+            <span class="generation-meta"><time>{{ formatGenerationTime(item.updated_at) }}</time><small>{{ item.status }}</small></span>
+          </div>
+          <el-empty v-if="!filteredReportTasks.length" :image-size="52" description="还没有报告任务">
+            <el-button type="primary" :icon="Plus" @click="newBlankReport">新建报告</el-button>
+          </el-empty>
+        </div>
+        <div v-else v-loading="generationLoading" class="generation-list">
+          <button v-for="item in filteredGenerationHistory" :key="item.id" class="generation-item" @click="downloadGeneration(item)">
+            <span class="generation-item-head">
+              <strong>{{ item.title || '未命名报告' }}</strong>
+              <el-tag size="small" effect="plain" :type="item.status === 'SUCCESS' ? 'success' : item.status === 'FAILED' ? 'danger' : 'warning'">
+                {{ generationStatusLabel(item.status) }}
+              </el-tag>
+            </span>
+            <span class="generation-report-no">{{ item.resolved_data?.report_no || '暂无报告编号' }}</span>
+            <span class="generation-meta">
+              <time>{{ formatGenerationTime(item.generated_at) }}</time>
+              <small>V{{ item.version_no || '-' }}</small>
+            </span>
+          </button>
+          <el-empty v-if="!filteredGenerationHistory.length" :image-size="52" :description="generationSearch ? '未找到匹配的导出' : '还没有导出记录'">
+            <p v-if="!generationSearch" class="history-empty-hint">完成报告并导出 Word 后，会在这里形成可追溯记录。</p>
+          </el-empty>
+        </div>
+      </aside>
+
       <aside class="source-panel panel">
         <div class="panel-header">
           <div><h2>数据源</h2><p>LIMS 与 PDF</p></div>
@@ -615,7 +763,7 @@ onUnmounted(() => {
               <el-tag v-if="selectedLimsInstances.length" size="small" type="success">已载入</el-tag>
             </div>
             <div class="lims-actions">
-              <el-tooltip :content="limsCapabilities.sqlConfigured ? '从 LIMS 数据库读取' : '需要先在规则后台配置 SQL 连接'">
+              <el-tooltip :content="limsCapabilities.sqlConfigured ? '从 LIMS 数据库读取' : '请联系系统管理员配置 SQL 连接'">
                 <el-button :icon="Coin" :disabled="!limsCapabilities.sqlEnabled || !limsCapabilities.sqlConfigured" @click="readLimsSql">读取 SQL</el-button>
               </el-tooltip>
               <el-upload v-if="limsCapabilities.excelImportEnabled" accept=".xlsx" :show-file-list="false" :http-request="handleLimsExcel">
@@ -644,7 +792,7 @@ onUnmounted(() => {
               <span>{{ field.label }}</span><b>{{ field.value }}</b><i>{{ Math.round(field.confidence * 100) }}%</i>
             </button>
             <el-upload accept=".pdf" :show-file-list="false" :http-request="handleUpload" class="source-upload">
-              <el-button text :icon="Upload" :loading="busy.upload">添加 PDF 数据源</el-button>
+              <el-button text :icon="Upload" :loading="busy.upload" :disabled="report.word_edit_locked">添加 PDF 数据源</el-button>
             </el-upload>
             <el-progress v-if="busy.upload" :percentage="uploadPercent" :show-text="false" :stroke-width="3" />
           </section>
@@ -779,6 +927,13 @@ onUnmounted(() => {
       </aside>
     </main>
 
+    <main v-else class="workspace-empty">
+      <el-empty :image-size="96" description="当前账号还没有报告">
+        <p class="history-empty-hint">点击“新建报告”后才会创建报告任务，打开页面不会自动新增。</p>
+        <el-button type="primary" :icon="Plus" @click="newBlankReport">新建报告</el-button>
+      </el-empty>
+    </main>
+
     <el-dialog v-model="previewVisible" title="PDF 预览与证据定位" width="78%" class="preview-dialog">
       <iframe v-if="uploadedSource" :src="uploadedSource.preview_url" class="pdf-frame" />
       <div v-else class="preview-placeholder"><Files /><h3>供应商检测报告.pdf</h3><p>当前展示的是原型证据数据。上传真实 PDF 后，这里会显示原文件并定位到选中字段。</p><div class="large-evidence">{{ selectedBinding.source.quote || '请选择一个 PDF 来源字段' }}</div></div>
@@ -828,7 +983,7 @@ onUnmounted(() => {
         <el-button @click="limsDialogVisible = false">取消</el-button>
         <el-button v-if="limsRecognition" @click="limsRecognition = undefined">返回重选</el-button>
         <el-button v-if="!limsRecognition" type="primary" :loading="limsLoading" :disabled="!selectedLimsInstances.length" @click="recognizeSelectedLims">识别所选记录</el-button>
-        <el-button v-else type="primary" :loading="limsLoading" @click="applySelectedLims">确认并填充 Word</el-button>
+        <el-button v-else type="primary" :loading="limsLoading" :disabled="report?.word_edit_locked" @click="applySelectedLims">确认并填充 Word</el-button>
       </template>
     </el-dialog>
 

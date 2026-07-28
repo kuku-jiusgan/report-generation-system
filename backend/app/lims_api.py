@@ -1,17 +1,21 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from .config import Settings
+from .auth import AuthManager
 from .database import Database, now_iso
 from .schemas import RecognizeLimsRequest
 from .services.lims_excel import parse_lims_workbook
 from .services.lims_normalizer import COLLECTION_ORDER, merge_instances, normalize_instance
 
 
-def create_lims_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix=f"{settings.api_prefix}/lims", tags=["lims"])
+def create_lims_router(database: Database, settings: Settings, auth: AuthManager) -> APIRouter:
+    router = APIRouter(
+        prefix=f"{settings.api_prefix}/lims", tags=["lims"],
+        dependencies=[Depends(auth.require_any("REPORT_EDIT", "LIMS_FIELDS_MANAGE"))],
+    )
 
     def import_response(item: dict) -> dict:
         return {"id": item["id"], "fileName": item["file_name"], "size": item["size"],

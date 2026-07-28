@@ -146,15 +146,33 @@ def _rows_as_fields(rows: list[list[str]], evidence: dict[str, Any], start: int 
 
 
 def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_index: int,
-                    rows: list[list[str]], result: dict[str, list[dict[str, Any]]]) -> bool:
+                    rows: list[list[str]], result: dict[str, list[dict[str, Any]]],
+                    parser_profiles: dict[str, list[dict[str, Any]]] | None = None) -> bool:
     if not rows:
         return False
     header = "|".join(rows[0])
     first_three = "|".join("|".join(row) for row in rows[:3])
     path = ">".join(rich_text.get("sectionPath", []))
     evidence = _evidence(instance, rich_text, table_index, rows[0])
+    def profile_enabled(profile: str) -> bool:
+        configured = (parser_profiles or {}).get(profile)
+        if configured is None:
+            return True
+        for rule in configured:
+            if not rule.get("enabled", True):
+                continue
+            section_pattern = str(rule.get("sectionPattern") or "")
+            header_pattern = str(rule.get("headerPattern") or "")
+            try:
+                section_matches = not section_pattern or re.search(section_pattern, path, re.IGNORECASE)
+                header_matches = not header_pattern or re.search(header_pattern, first_three, re.IGNORECASE)
+            except re.error:
+                continue
+            if section_matches and header_matches:
+                return True
+        return False
 
-    if "杂质名称" in header and "CAS" in header and "限度" in header:
+    if profile_enabled("IMPURITY_LIMIT_TABLE") and "杂质名称" in header and "CAS" in header and "限度" in header:
         for row in rows[1:]:
             if not row or not _clean(row[0]) or _clean(row[0]) in {"序号", "No."}:
                 continue
@@ -181,7 +199,7 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
                                                               "conclusion": ""}, evidence))
         return True
 
-    if ("配制方法" in header and ("溶液名称" in header or "名称" in header)) or header.startswith("名称|溶液配制"):
+    if profile_enabled("SOLUTION_PREPARATION_TABLE") and (("配制方法" in header and ("溶液名称" in header or "名称" in header)) or header.startswith("名称|溶液配制")):
         project = ""
         for row in rows[1:]:
             if len(row) < 2:
@@ -201,7 +219,7 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
             }, evidence))
         return True
 
-    if "仪器方法" in path or "分析方法" in header or ("项目" in header and "参数" in header):
+    if profile_enabled("METHOD_PARAMETER_TABLE") and ("仪器方法" in path or "分析方法" in header or ("项目" in header and "参数" in header)):
         for row in rows[1:]:
             values = [_clean(value) for value in row]
             values = [value for index, value in enumerate(values) if value and (index == 0 or value != values[index - 1])]
@@ -250,7 +268,7 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
             result["linearityPreparation"].append(_record({**values, "solutionName": name}, evidence))
         return True
 
-    if (header.startswith("No.|" ) or header.startswith("No|")) and "保留时间" in first_three and "峰面积" in first_three and "浓度" not in first_three:
+    if profile_enabled("SYSTEM_SUITABILITY_MATRIX") and (header.startswith("No.|") or header.startswith("No|")) and "保留时间" in first_three and "峰面积" in first_three and "浓度" not in first_three:
         subheader = rows[1] if len(rows) > 1 else []
         impurities = rows[0]
         for row in rows[2:]:
@@ -268,7 +286,7 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
                 column += 2
         return True
 
-    if "杂质名称" in header and "溶液名称" in header and "保留时间" in header and "峰面积" in header:
+    if profile_enabled("SPECIFICITY_RESULT_TABLE") and "杂质名称" in header and "溶液名称" in header and "保留时间" in header and "峰面积" in header:
         current_impurity = ""
         for row in rows[1:]:
             current_impurity = _clean(row[0]) or current_impurity
@@ -322,13 +340,13 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
                 "field5": _clean(row[4])}, evidence))
         return True
 
-    if "溶液名称" in header and "色谱柱1" in header and "色谱柱2" in header:
+    if profile_enabled("ROBUSTNESS_SPECIFICITY_TABLE") and "溶液名称" in header and "色谱柱1" in header and "色谱柱2" in header:
         for row in rows[1:]:
             result["robustnessSpecificity"].append(_record({"solutionName": _clean(row[0]),
                 "field2": _clean(row[1]), "field3": _clean(row[2])}, evidence))
         return True
 
-    if "溶液" in header and "进样针数" in header and "接受标准" in header:
+    if profile_enabled("ROBUSTNESS_SEQUENCE_TABLE") and "溶液" in header and "进样针数" in header and "接受标准" in header:
         for row in rows[1:]:
             result["robustnessSequence"].append(_record({"field1": _clean(row[0]),
                 "field2": _clean(row[1]), "acceptanceCriteria": _clean(row[2])}, evidence))
@@ -378,6 +396,16 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
             item["evidence"] = evidence
             collections[name].append(item)
 
+    parser_profiles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for rule in extraction_rules or []:
+        config = rule.get("config") or {}
+        if not isinstance(config, dict) or config.get("parser") != "HTML_TABLE_GRID":
+            continue
+        profile = str(config.get("parserProfile") or "")
+        if not profile:
+            continue
+        parser_profiles[profile].append(rule)
+
     unmatched = []
     for rich_text in instance.get("richTexts", []):
         raw_html = rich_text.get("html", "")
@@ -388,7 +416,7 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
         tables = root.xpath(".//table") if root is not None else []
         for index, table in enumerate(tables, start=1):
             rows = _table_grid(table)
-            if not _classify_table(instance, rich_text, index, rows, collections):
+            if not _classify_table(instance, rich_text, index, rows, collections, parser_profiles):
                 unmatched.append({
                     "instanceId": instance["instanceId"], "instanceTitle": instance.get("title", ""),
                     "sectionPath": rich_text.get("sectionPath", []), "richTextId": rich_text.get("id"),
