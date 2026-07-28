@@ -500,7 +500,12 @@ def build_mapped_docx(compiled_template: Path, output: Path, mappings: list[dict
                       payload: dict[str, Any] | None = None, report_data: dict[str, Any] | None = None) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(compiled_template, "r") as archive:
-        parts = {item.filename: (copy.copy(item), archive.read(item.filename)) for item in archive.infolist()}
+        parts = {}
+        for item in archive.infolist():
+            normalized_name = item.filename.replace("\\", "/")
+            normalized_info = copy.copy(item)
+            normalized_info.filename = normalized_name
+            parts[normalized_name] = (normalized_info, archive.read(item.filename))
 
     xml_parts = [name for name in parts if name == "word/document.xml" or re.fullmatch(r"word/header\d+\.xml", name)]
     roots = {name: etree.fromstring(parts[name][1]) for name in xml_parts}

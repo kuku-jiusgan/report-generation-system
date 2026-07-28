@@ -501,7 +501,7 @@ def ensure_report_file(item: dict) -> tuple[dict, Path]:
 @app.get(f"{settings.api_prefix}/onlyoffice/reports/{{report_id}}/config")
 def onlyoffice_config(report_id: str) -> dict:
     if not settings.onlyoffice_jwt_secret:
-        raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请通过 start.ps1 启动服务")
+        raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请设置 REPORT_ONLYOFFICE_JWT_SECRET")
     item, path = ensure_report_file(required_report(report_id))
     config = {
         "document": {

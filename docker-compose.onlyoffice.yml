@@ -1,0 +1,24 @@
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: report-system-onlyoffice
+    restart: unless-stopped
+    ports:
+      - "8090:80"
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: "${REPORT_ONLYOFFICE_JWT_SECRET}"
+      JWT_HEADER: AuthorizationJwt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_logs:/var/log/onlyoffice
+      - onlyoffice_lib:/var/lib/onlyoffice
+      - onlyoffice_db:/var/lib/postgresql
+
+volumes:
+  onlyoffice_data:
+  onlyoffice_logs:
+  onlyoffice_lib:
+  onlyoffice_db:

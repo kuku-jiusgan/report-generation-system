@@ -87,7 +87,12 @@ def compile_template(source: Path, output: Path, mappings: list[dict[str, Any]],
     report: dict[str, Any] = {"success": [], "warnings": [], "errors": [], "statistics": {}}
     table_rule_map = {item["tableNo"]: item for item in table_rules}
     with zipfile.ZipFile(source, "r") as archive:
-        parts = {item.filename: (copy.copy(item), archive.read(item.filename)) for item in archive.infolist()}
+        parts = {}
+        for item in archive.infolist():
+            normalized_name = item.filename.replace("\\", "/")
+            normalized_info = copy.copy(item)
+            normalized_info.filename = normalized_name
+            parts[normalized_name] = (normalized_info, archive.read(item.filename))
 
     document_root = etree.fromstring(parts["word/document.xml"][1])
     all_tables = document_root.xpath("./w:body/w:tbl", namespaces=NS)

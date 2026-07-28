@@ -56,8 +56,12 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     settings = Settings()
     if not settings.onlyoffice_jwt_secret:
-        local_config = Path(r"C:\Program Files\ONLYOFFICE\DocumentServer\config\local.json")
-        if local_config.exists():
+        config_candidates = (
+            Path("/etc/onlyoffice/documentserver/local.json"),
+            Path(r"C:\Program Files\ONLYOFFICE\DocumentServer\config\local.json"),
+        )
+        local_config = next((path for path in config_candidates if path.exists()), None)
+        if local_config:
             try:
                 payload = json.loads(local_config.read_text(encoding="utf-8"))
                 settings.onlyoffice_jwt_secret = str(payload["services"]["CoAuthoring"]["secret"]["browser"]["string"])

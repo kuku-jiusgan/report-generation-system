@@ -14,6 +14,50 @@
 - 从文字型 PDF 提取报告编号、客户名称和样品名称
 - 使用现有 Word 模板内容控件生成 DOCX
 
+## Linux 首次运行
+
+需要 Python 3.11+、Node.js 20+ 和 npm。本机执行：
+
+```bash
+cd /home/zoutengda/report-generation-system
+./scripts/setup.sh
+./start.sh
+```
+
+安装脚本会创建项目内的 `.venv`、安装前后端依赖并构建 Vue，不会修改系统级 Python 或 Node.js。访问地址：`http://127.0.0.1:8010`，API 文档：`http://127.0.0.1:8010/docs`。
+
+日常启动只需运行（默认监听 `0.0.0.0`，可从局域网访问）：
+
+```bash
+./start.sh
+```
+
+只允许本机访问时运行 `./start.sh --host 127.0.0.1 --port 8010`。开发模式运行 `./start-dev.sh`，Vite 和后端同样监听所有网卡。按 `Ctrl+C` 会同时停止前后端服务。
+
+使用 Docker 启动 ONLYOFFICE（默认映射到未被占用的 `8090` 端口）：
+
+```bash
+sudo docker compose --env-file .env -f docker-compose.onlyoffice.yml up -d
+```
+
+首次启动需要下载较大的 Document Server 镜像，容器就绪可能需要几分钟。查看状态可运行 `sudo docker compose -f docker-compose.onlyoffice.yml ps`。
+
+依赖下载需要代理时，可以在安装命令前设置标准代理环境变量，例如：
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897 ./scripts/setup.sh
+```
+
+Linux 原生安装 ONLYOFFICE Document Server 后，系统会自动读取 `/etc/onlyoffice/documentserver/local.json` 中的 JWT 密钥。使用容器或其他安装方式时，在 `.env` 中配置：
+
+```dotenv
+REPORT_ONLYOFFICE_URL=http://127.0.0.1:8088
+REPORT_ONLYOFFICE_JWT_SECRET=your-secret
+REPORT_PUBLIC_BASE_URL=http://127.0.0.1:8010
+```
+
+ONLYOFFICE 是真实 DOCX 在线编辑功能所需的独立服务；不配置它时，报告数据管理、PDF/LIMS 导入和 Word 生成仍可使用。
+
 ## Windows 首次运行
 
 在 PowerShell 中执行：
@@ -71,6 +115,6 @@ mapping/               模板字段映射
 
 备份时停止服务，然后复制整个 `data`、`templates` 和 `mapping` 目录。建议每天定时备份到另一块磁盘或 NAS，并设置备份保留周期。
 
-## Linux 部署
+## 生产部署
 
-源码不使用 Windows 专属 API。Linux 上安装 Python 3.12 和 Node.js LTS 后，创建虚拟环境、安装 `backend/requirements.txt`、构建 `frontend`，再用 Uvicorn 或 Gunicorn 启动即可。生产环境建议通过 Nginx 提供 HTTPS，并将 `data` 目录挂载到独立数据盘。
+生产环境建议用 systemd 管理 `./start.sh`，通过 Nginx 提供 HTTPS，并将 `data` 目录放在定期备份的数据盘。若绑定 `0.0.0.0`，请同时限制防火墙访问范围。

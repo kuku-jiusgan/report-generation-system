@@ -63,11 +63,14 @@ def generate_docx(template_path: Path, output: Path, data: dict) -> None:
     with zipfile.ZipFile(template_path, "r") as source, zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target:
         for item in source.infolist():
             content = source.read(item.filename)
-            if item.filename == "word/document.xml" or (
-                item.filename.startswith("word/header") and item.filename.endswith(".xml")
+            normalized_name = item.filename.replace("\\", "/")
+            if normalized_name == "word/document.xml" or (
+                normalized_name.startswith("word/header") and normalized_name.endswith(".xml")
             ):
                 content = _replace_content_controls(content, values)
-            target.writestr(copy.copy(item), content)
+            normalized_info = copy.copy(item)
+            normalized_info.filename = normalized_name
+            target.writestr(normalized_info, content)
     _append_test_items(output, data.get("test_items", []))
 
 
