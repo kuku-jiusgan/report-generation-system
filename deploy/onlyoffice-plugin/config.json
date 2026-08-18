@@ -1,0 +1,19 @@
+{
+  "name": "Report Template Link",
+  "guid": "asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}",
+  "version": "1.0.15",
+  "serviceUrl": "__REPORT_PUBLIC_BASE_URL__/api/v1/onlyoffice/plugin-bridge",
+  "variations": [
+    {
+      "description": "Links and locates report fields in the Word editor.",
+      "url": "index.html",
+      "isViewer": true,
+      "EditorsSupport": ["word"],
+      "isVisual": false,
+      "isModal": false,
+      "isInsideMode": false,
+      "initDataType": "none",
+      "initOnSelectionChanged": true
+    }
+  ]
+}

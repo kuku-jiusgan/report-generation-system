@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'node:path'
 
+const devApiUrl = process.env.REPORT_DEV_API_URL || 'http://127.0.0.1:8010'
+
 export default defineConfig({
   plugins: [vue()],
   build: {
@@ -16,8 +18,8 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:8010',
-      '/health': 'http://127.0.0.1:8010',
+      '/api': devApiUrl,
+      '/health': devApiUrl,
     },
   },
 })

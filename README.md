@@ -18,33 +18,84 @@
 
 ## Linux 首次运行
 
-需要 Python 3.11+、Node.js 20+ 和 npm。本机执行：
+需要 Python 3.11+、Node.js 20+、npm、Docker 和 Docker Compose。先安装项目依赖：
 
 ```bash
 cd /home/zoutengda/report-generation-system
 ./scripts/setup.sh
-./start.sh
 ```
 
-安装脚本会创建项目内的 `.venv`、安装前后端依赖并构建 Vue，不会修改系统级 Python 或 Node.js。访问地址：`http://127.0.0.1:8010`，API 文档：`http://127.0.0.1:8010/docs`。
+安装脚本会创建项目内的 `.venv`、安装前后端依赖并构建 Vue，不会修改系统级 Python 或 Node.js。
 
-首次启动前需在 `.env` 设置 `REPORT_BOOTSTRAP_ADMIN_USERNAME` 和至少 8 位的 `REPORT_BOOTSTRAP_ADMIN_PASSWORD`。首个管理员登录后必须立即修改密码。报告端地址为 `/`，后台管理端地址为 `/admin/`。
+首次启动前编辑 `.env`。`SERVER_IP` 表示运行本项目的 Linux 服务器地址，请在文件中写实际 IP，不要原样填写变量名：
 
-日常启动只需运行（默认监听 `0.0.0.0`，可从局域网访问）：
+```dotenv
+REPORT_BOOTSTRAP_ADMIN_USERNAME=admin
+REPORT_BOOTSTRAP_ADMIN_PASSWORD=请设置至少8位的初始密码
+REPORT_ONLYOFFICE_URL=http://SERVER_IP:8090
+REPORT_ONLYOFFICE_JWT_SECRET=请设置一个足够长的随机密钥
+REPORT_PUBLIC_BASE_URL=http://SERVER_IP:8010
+```
+
+LIMS 使用 Oracle 时，在 `.env` 中另外配置以下变量。DSN 建议使用 Oracle Easy Connect 格式 `主机:端口/服务名`：
+
+```dotenv
+REPORT_LIMS_SQL_ENABLED=true
+REPORT_LIMS_SQL_DSN=192.168.2.16:1521/请填写Oracle服务名
+REPORT_LIMS_SQL_USER=read
+REPORT_LIMS_SQL_PASSWORD=请填写密码
+```
+
+报告端只接收项目编号，后端使用绑定变量执行固定 SQL，不接收前端传入的 SQL 文本。
+
+`REPORT_ONLYOFFICE_JWT_SECRET` 必须与 Docker 容器使用同一个值；Compose 会直接读取此 `.env` 文件。请将两处 `SERVER_IP` 都替换为服务器实际 IP，这样浏览器可以加载编辑器，容器也可以回调报告服务。不要把 `REPORT_PUBLIC_BASE_URL` 写成 `127.0.0.1`，因为容器中的该地址指向容器自身，而不是宿主机。
+
+项目已经提供 [docker-compose.onlyoffice.yml](docker-compose.onlyoffice.yml)，用于运行独立的 ONLYOFFICE Document Server。`start.sh` 是统一启动入口，会先启动或检查 ONLYOFFICE 容器，再启动报告系统：
 
 ```bash
 ./start.sh
 ```
 
-只允许本机访问时运行 `./start.sh --host 127.0.0.1 --port 8010`。开发模式运行 `./start-dev.sh`，Vite 和后端同样监听所有网卡。按 `Ctrl+C` 会同时停止前后端服务。
+首次运行会下载较大的 ONLYOFFICE 镜像并可能要求输入 `sudo` 密码，初始化可能需要几分钟。脚本会等待 Compose 启动命令成功后再启动报告系统；宿主机端口分别为 `8090` 和 `8010`。
 
-使用 Docker 启动 ONLYOFFICE（默认映射到未被占用的 `8090` 端口）：
+容器名为 `report-system-onlyoffice`。启动后访问：
 
-```bash
-sudo docker compose --env-file .env -f docker-compose.onlyoffice.yml up -d
+```text
+http://SERVER_IP:8010/        报告生成端
+http://SERVER_IP:8010/admin/  后台管理端
+http://SERVER_IP:8010/docs    API 文档
+http://SERVER_IP:8090/        ONLYOFFICE Document Server
 ```
 
-首次启动需要下载较大的 Document Server 镜像，容器就绪可能需要几分钟。查看状态可运行 `sudo docker compose -f docker-compose.onlyoffice.yml ps`。
+首次管理员登录后必须立即修改密码。
+
+## Linux 日常启动与停止
+
+正式部署推荐安装 systemd 服务。它会自动启动 ONLYOFFICE、在后台守护报告系统、进程退出后自动重启，并随服务器开机启动。健康检查每分钟访问一次 `/health`，服务未运行、端口不通或接口异常时会自动重启：
+
+```bash
+sudo ./scripts/install-service.sh
+```
+
+安装后不需要保持终端打开。常用管理命令：
+
+```bash
+sudo systemctl status report-generation.service
+sudo systemctl status report-generation-healthcheck.timer
+sudo systemctl restart report-generation.service
+sudo systemctl stop report-generation.service
+sudo journalctl -u report-generation.service -f
+```
+
+服务名为 `report-generation.service`，监听器为 `report-generation-healthcheck.timer`。启动时会先通过 [docker-compose.onlyoffice.yml](docker-compose.onlyoffice.yml) 启动 `report-system-onlyoffice`，再启动 `0.0.0.0:8010` 上的报告系统。监听器启用期间，即使手动停止主服务也会在下一次检查时重新启动；维护时应先停止监听器。配置了 `restart: unless-stopped` 的 ONLYOFFICE 容器会继续运行。
+
+不安装 systemd、仅临时运行时仍可使用统一启动命令：
+
+```bash
+./start.sh
+```
+
+临时运行依赖当前终端，按 `Ctrl+C` 会停止报告系统。只允许本机访问时运行 `./start.sh --host 127.0.0.1 --port 8010`。开发模式运行 `./start-dev.sh`。
 
 依赖下载需要代理时，可以在安装命令前设置标准代理环境变量，例如：
 
@@ -52,15 +103,9 @@ sudo docker compose --env-file .env -f docker-compose.onlyoffice.yml up -d
 HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897 ./scripts/setup.sh
 ```
 
-Linux 原生安装 ONLYOFFICE Document Server 后，系统会自动读取 `/etc/onlyoffice/documentserver/local.json` 中的 JWT 密钥。使用容器或其他安装方式时，在 `.env` 中配置：
+如果不使用项目提供的 Docker 服务，而是在 Linux 原生安装 ONLYOFFICE Document Server，系统会自动读取 `/etc/onlyoffice/documentserver/local.json` 中的 JWT 密钥。此时应按原生服务的实际地址修改 `REPORT_ONLYOFFICE_URL`。
 
-```dotenv
-REPORT_ONLYOFFICE_URL=http://127.0.0.1:8088
-REPORT_ONLYOFFICE_JWT_SECRET=your-secret
-REPORT_PUBLIC_BASE_URL=http://127.0.0.1:8010
-```
-
-ONLYOFFICE 是真实 DOCX 在线编辑功能所需的独立服务；不配置它时，报告数据管理、PDF/LIMS 导入和 Word 生成仍可使用。
+ONLYOFFICE 是真实 DOCX 在线编辑功能所需的独立服务；不启动它时，报告数据管理、PDF/LIMS 导入和 Word 生成仍可使用，但在线 Word 编辑器不可用。
 
 ## Windows 首次运行
 
@@ -125,4 +170,4 @@ mapping/               模板字段映射
 
 ## 生产部署
 
-当前使用 SQLite，生产环境建议用 systemd 管理 `./start.sh`，保持单进程运行并通过 Nginx 提供 HTTPS；`data` 目录应放在定期备份的独立数据盘。若直接绑定 `0.0.0.0`，请同时限制防火墙访问范围。后续迁移到 PostgreSQL 后，再根据并发量增加 Uvicorn 工作进程。
+当前使用 SQLite，systemd 服务保持单个 Uvicorn 进程运行。对外部署建议再通过 Nginx 提供 HTTPS；`data` 目录应放在定期备份的独立数据盘。若直接绑定 `0.0.0.0`，请同时限制防火墙访问范围。后续迁移到 PostgreSQL 后，再根据并发量增加 Uvicorn 工作进程。

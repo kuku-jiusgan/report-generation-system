@@ -8,6 +8,10 @@ from typing import Any
 from lxml import etree
 
 from .calculation_engine import CalculationError, evaluate_formula
+from .docx_language import normalize_part_languages
+from .docx_images import embed_image_controls
+from .docx_matrix import fill_matrix_tables as _fill_matrix_table
+from .report_fields import REPORT_FIELD_BINDINGS
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -18,26 +22,14 @@ NS = {"w": W_NS, "r": R_NS}
 W = f"{{{W_NS}}}"
 
 
-REPORT_TAGS = {
-    "project.name": "project_name",
-    "project.name.body": "project_name",
-    "document.code": "report_no",
-    "reportHeader.reportNo": "report_no",
-    "reportHeader.customer": "customer",
-    "reportHeader.sample": "sample",
-    "reportHeader.conclusion": "conclusion",
-}
+REPORT_TAGS = REPORT_FIELD_BINDINGS
 STRUCTURED_REPEAT_SOURCES = {
     "approval", "samples", "referenceStandards", "instruments", "columns", "reagents", "weighings",
 }
 TABLE_SOURCE_OVERRIDES = {
-    "T12": "systemSuitabilitySolutions",
-    "T14": "specificitySolutions",
-    "T16": "lodSolutions",
-    "T21": "repeatabilitySolutions",
-    "T23": "intermediatePrecisionSolutions",
-    "T24": "intermediateLinearityPreparation",
-    "T25": "intermediateLinearity",
+    "T12": "systemSuitabilitySolutions", "T14": "specificitySolutions", "T16": "lodSolutions",
+    "T21": "repeatabilitySolutions", "T23": "intermediatePrecisionSolutions",
+    "T24": "intermediateLinearityPreparation", "T25": "intermediateLinearity",
     "T27": "accuracySolutions",
     "T30": "stabilitySolutions",
     "T32": "robustnessSolutions",
@@ -99,24 +91,49 @@ def _record_value(record: Any, field_path: str) -> Any:
     return current
 
 
-def _source_mapping_value(mapping: dict[str, Any], payload: dict[str, Any]) -> Any:
-    path = str(mapping.get("sourcePath") or "")
+def _payload_for_mapping(mapping: dict[str, Any], payload: dict[str, Any],
+                         report_data: dict[str, Any]) -> dict[str, Any]:
+    field_sources = report_data.get("field_sources", {}) if isinstance(report_data, dict) else {}
+    source_meta = field_sources.get(str(mapping.get("standardFieldCode") or ""), {})
+    source_type = str(source_meta.get("type") or mapping.get("sourceType") or "LIMS").upper()
+    payloads = report_data.get("source_payloads", {}) if isinstance(report_data, dict) else {}
+    if source_type == "EXCEL":
+        return payloads.get("EXCEL", {}) if isinstance(payloads.get("EXCEL"), dict) else {}
+    if source_type == "PDF":
+        return payloads.get("PDF", {}) if isinstance(payloads.get("PDF"), dict) else {}
+    if source_type == "LIMS":
+        source_payload = payloads.get("LIMS")
+        return source_payload if isinstance(source_payload, dict) else payload
+    return payload
+
+
+def _mapping_source_path(mapping: dict[str, Any], report_data: dict[str, Any]) -> str:
+    field_sources = report_data.get("field_sources", {}) if isinstance(report_data, dict) else {}
+    source_meta = field_sources.get(str(mapping.get("standardFieldCode") or ""), {})
+    return str(source_meta.get("sourcePath") or mapping.get("sourcePath") or "")
+
+
+def _source_mapping_value(mapping: dict[str, Any], payload: dict[str, Any],
+                          report_data: dict[str, Any]) -> Any:
+    path = _mapping_source_path(mapping, report_data)
+    source_payload = _payload_for_mapping(mapping, payload, report_data)
     repeat = _repeat_source(path)
     if repeat:
-        records = payload.get(repeat[0])
+        records = source_payload.get(repeat[0])
         if not isinstance(records, list):
             return []
         return [_record_value(record, repeat[1]) for record in records]
-    return _path_value(payload, path)
+    return _path_value(source_payload, path)
 
 
 def _is_formula_calculation(mapping: dict[str, Any]) -> bool:
     return mapping.get("sourceType") == "CALCULATED" and bool(mapping.get("calculationExpression"))
 
 
-def _calculated_values(mappings: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
+def _calculated_values(mappings: list[dict[str, Any]], payload: dict[str, Any],
+                       report_data: dict[str, Any]) -> dict[str, Any]:
     values = {
-        str(mapping.get("fieldCode")): _source_mapping_value(mapping, payload)
+        str(mapping.get("fieldCode")): _source_mapping_value(mapping, payload, report_data)
         for mapping in mappings
         if mapping.get("fieldCode") and not _is_formula_calculation(mapping)
     }
@@ -250,35 +267,12 @@ def _is_preserved_summary_row(row: etree._Element) -> bool:
     return any(label.startswith(prefix) for prefix in PRESERVED_ROW_LABELS)
 
 
-def _fill_matrix_table(document: etree._Element, table_no: str, records: list[dict[str, Any]]) -> None:
-    bookmarks = document.xpath(
-        f".//w:bookmarkStart[@w:name='repeat_{table_no.lower()}_row']", namespaces=NS
-    )
-    if not bookmarks:
-        return
-    table = bookmarks[0].getparent().getparent()
-    rows = table.xpath("./w:tr", namespaces=NS)
-    for row in rows:
-        cells = row.xpath("./w:tc", namespaces=NS)
-        for cell in cells[1:]:
+def _clear_unmapped_summary_cells(row: etree._Element, direct_tags: set[str]) -> None:
+    cells = row.xpath("./w:tc", namespaces=NS)
+    for cell in cells[1:]:
+        cell_tags = set(cell.xpath(".//w:sdtPr/w:tag/@w:val", namespaces=NS))
+        if not cell_tags.intersection(direct_tags):
             _set_cell_text(cell, "")
-    if len(rows) < 3:
-        return
-    header_cells = rows[0].xpath("./w:tc", namespaces=NS)
-    concentration_cells = rows[1].xpath("./w:tc", namespaces=NS)
-    peak_cells = rows[2].xpath("./w:tc", namespaces=NS)
-    _set_cell_text(header_cells[0], "溶液名称")
-    _set_cell_text(concentration_cells[0], "实际浓度（ng/ml）")
-    _set_cell_text(peak_cells[0], "峰面积")
-    if not records:
-        return
-    for index, record in enumerate(records[:max(0, len(header_cells) - 1)], start=1):
-        if index < len(header_cells):
-            _set_cell_text(header_cells[index], record.get("solutionName", ""))
-        if index < len(concentration_cells):
-            _set_cell_text(concentration_cells[index], record.get("field2", ""))
-        if index < len(peak_cells):
-            _set_cell_text(peak_cells[index], record.get("peakArea", ""))
 
 
 def _format_value(value: Any, mapping: dict[str, Any], use_empty_rule: bool = True) -> str:
@@ -287,6 +281,12 @@ def _format_value(value: Any, mapping: dict[str, Any], use_empty_rule: bool = Tr
     if mapping.get("fillRule") == "VERSION_2_DIGITS":
         try:
             return f"{int(value):02d}"
+        except (TypeError, ValueError):
+            pass
+    output_format = str(mapping.get("standardFieldOutputFormat") or "")
+    if output_format.isdigit() and mapping.get("standardFieldDataType") in {"decimal", "number"}:
+        try:
+            return f"{float(value):.{int(output_format)}f}"
         except (TypeError, ValueError):
             pass
     return str(value)
@@ -321,8 +321,10 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
         value = (
             calculated_values.get(str(mapping.get("fieldCode")))
             if _is_formula_calculation(mapping)
-            else _path_value(payload, mapping.get("sourcePath", ""))
+            else _source_mapping_value(mapping, payload, report_data)
         )
+        if isinstance(value, list) and len(value) == 1:
+            value = value[0]
         if value is not None and not isinstance(value, (dict, list)):
             values[tag] = _format_value(value, mapping)
     for tag, field in REPORT_TAGS.items():
@@ -336,7 +338,7 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
 
 
 def _fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], payload: dict[str, Any],
-                      calculated_values: dict[str, Any]) -> None:
+                      report_data: dict[str, Any], calculated_values: dict[str, Any]) -> None:
     groups: dict[str, list[dict[str, Any]]] = {}
     for mapping in mappings:
         if mapping.get("enabled", True) and mapping.get("repeatType") == "ROW" and mapping.get("tableNo"):
@@ -345,13 +347,15 @@ def _fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], 
     for table_no, group in groups.items():
         explicit_source = next((_repeat_source(item.get("blockSourcePath", "")) for item in group
                                 if _repeat_source(item.get("blockSourcePath", ""))), None)
-        source = explicit_source or next((_repeat_source(item.get("sourcePath", "")) for item in group
-                                          if _repeat_source(item.get("sourcePath", ""))), None)
+        source = explicit_source or next((_repeat_source(_mapping_source_path(item, report_data)) for item in group
+                                          if _repeat_source(_mapping_source_path(item, report_data))), None)
         if not source:
             continue
         if not explicit_source:
             source = (TABLE_SOURCE_OVERRIDES.get(table_no, source[0]), source[1])
-        records = payload.get(source[0])
+        source_mapping = next((item for item in group if _repeat_source(_mapping_source_path(item, report_data))), group[0])
+        source_payload = _payload_for_mapping(source_mapping, payload, report_data)
+        records = source_payload.get(source[0])
         if not isinstance(records, list):
             records = []
         records = _prepare_repeat_records(records, group)
@@ -367,13 +371,19 @@ def _fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], 
         parent = prototype.getparent()
         insert_at = parent.index(prototype)
         group_tags = {item.get("controlTag", "") for item in group}
-        for text in prototype.xpath(".//w:t", namespaces=NS):
-            owners = text.xpath("ancestor::w:sdt[1]", namespaces=NS)
-            if not owners or _tag(owners[0]) not in group_tags:
+        # Text outside a content control in an otherwise mapped cell is intentional
+        # template content (for example a fixed company suffix). Only clear cells
+        # that have no mapped control at all; clearing every unowned run erased such
+        # static prefixes and suffixes from generated repeat rows.
+        for cell in prototype.xpath("./w:tc", namespaces=NS):
+            cell_tags = set(cell.xpath(".//w:sdtPr/w:tag/@w:val", namespaces=NS))
+            if cell_tags & group_tags:
+                continue
+            for text in cell.xpath(".//w:t", namespaces=NS):
                 text.text = ""
         direct_tags = {
             item.get("controlTag", "") for item in mappings
-            if item.get("tableNo") == table_no and item.get("repeatType") != "ROW"
+            if item.get("controlTag") and item.get("repeatType") != "ROW"
         }
         for old_row in list(parent)[insert_at + 1:]:
             if old_row.tag != W + "tr":
@@ -382,9 +392,7 @@ def _fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], 
             if row_tags & direct_tags:
                 continue
             if _is_preserved_summary_row(old_row):
-                cells = old_row.xpath("./w:tc", namespaces=NS)
-                for cell in cells[1:]:
-                    _set_cell_text(cell, "")
+                _clear_unmapped_summary_cells(old_row, direct_tags)
                 continue
             parent.remove(old_row)
         empty_behavior = next((item.get("blockEmptyBehavior") for item in group
@@ -411,7 +419,7 @@ def _fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], 
                     if _is_formula_calculation(mapping):
                         value = row_values.get(str(mapping.get("fieldCode")))
                     else:
-                        repeat_path = _repeat_source(mapping.get("sourcePath", ""))
+                        repeat_path = _repeat_source(_mapping_source_path(mapping, report_data))
                         if not repeat_path or TABLE_SOURCE_OVERRIDES.get(table_no, repeat_path[0]) != source[0]:
                             continue
                         value = _record_value(record, repeat_path[1])
@@ -507,23 +515,31 @@ def build_mapped_docx(compiled_template: Path, output: Path, mappings: list[dict
             normalized_info.filename = normalized_name
             parts[normalized_name] = (normalized_info, archive.read(item.filename))
 
+    normalize_part_languages(parts)
+
     xml_parts = [name for name in parts if name == "word/document.xml" or re.fullmatch(r"word/header\d+\.xml", name)]
     roots = {name: etree.fromstring(parts[name][1]) for name in xml_parts}
     active_mappings = [item for item in mappings if item.get("enabled", True)]
-    _clear_mapped_controls(roots, active_mappings)
+    # Keep the designer's original content when a newly created report has no
+    # value for a mapped field. Direct fills replace controls that actually
+    # have data; clearing every control here made a blank report erase its
+    # template headings, names and example/default text before the editor
+    # opened.
     removed_relationship_ids = _clear_external_table_objects(roots["word/document.xml"])
     _remove_relationship_parts(parts, removed_relationship_ids)
 
     normalized_payload = payload or {}
     normalized_report = report_data or {}
     if normalized_payload or normalized_report:
-        calculated_values = _calculated_values(active_mappings, normalized_payload)
+        calculated_values = _calculated_values(active_mappings, normalized_payload, normalized_report)
         _fill_direct_controls(
             roots, active_mappings, normalized_payload, normalized_report, calculated_values
         )
         _fill_repeat_rows(
-            roots["word/document.xml"], active_mappings, normalized_payload, calculated_values
+            roots["word/document.xml"], active_mappings, normalized_payload, normalized_report, calculated_values
         )
+
+    embed_image_controls(parts, roots, active_mappings)
 
     for name, root in roots.items():
         parts[name] = (parts[name][0], etree.tostring(

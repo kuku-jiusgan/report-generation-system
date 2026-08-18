@@ -2,11 +2,11 @@ import json
 import re
 from collections import Counter, defaultdict
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from lxml import html
-from openpyxl import load_workbook
+
+from .lims_files import absolute_lims_file_urls
 
 
 EXPECTED_PREFIX = ["ID", "INSTANCEID", "TEMPLATEUNITID", "TYPE", "UNITTITLE", "PARENTID", "UNITBODY"]
@@ -76,7 +76,7 @@ def _evidence(row: dict[str, Any], path: list[str]) -> dict[str, Any]:
         "unitId": row["id"],
         "unitType": row["type"],
         "sectionPath": path,
-        "excelRow": row["excel_row"],
+        "sourceRow": row["source_row"],
     }
 
 
@@ -104,7 +104,8 @@ def _normalized_item(unit_type: str, item: dict[str, Any], evidence: dict[str, A
     if unit_type == "Reagent":
         return {**common, "name": ext.get("mtlname") or ext.get("stockmtlname"),
                 "grade": ext.get("mtllevel"), "batchNo": item.get("batchNo"),
-                "manufacturer": item.get("manufacturerVendorId"), "expiryDate": item.get("validDate")}
+                "manufacturer": item.get("manufacturerVendorId"), "expiryDate": item.get("validDate"),
+                "stockNo": item.get("stockNo") or item.get("id")}
     return {**common, "name": ext.get("mtlname") or ext.get("stockmtlname"),
             "batchNo": item.get("batchNo"), "weight": item.get("weight"),
             "weightUnit": item.get("weightUnit"), "weightDate": item.get("weightDate"),
@@ -112,40 +113,35 @@ def _normalized_item(unit_type: str, item: dict[str, Any], evidence: dict[str, A
             "responseValue": item.get("responseValue")}
 
 
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    try:
-        sheet = workbook.active
-        iterator = sheet.iter_rows(values_only=True)
-        headers = [str(value or "").strip().upper() for value in next(iterator)]
-        if headers[:len(EXPECTED_PREFIX)] != EXPECTED_PREFIX:
-            raise ValueError("Excel 列结构不符合 LIMS SQL 结果格式，前七列应为 " + ", ".join(EXPECTED_PREFIX))
-        rows = []
-        for excel_row, values in enumerate(iterator, start=2):
-            row = list(values) + [None] * max(0, 49 - len(values))
-            if not any(value not in (None, "") for value in row):
-                continue
-            rows.append({
-                "id": _identifier(row[0]), "instance_id": _identifier(row[1]), "template_unit_id": _identifier(row[2]),
-                "type": str(row[3] or ""), "title": str(row[4] or ""), "parent_id": _identifier(row[5]),
-                "body": row[6], "order_no": _identifier(row[7]), "excel_row": excel_row,
-                "unit_created_by": row[10], "unit_created_time": _iso_date(row[11]),
-                "unit_updated_by": row[15], "unit_updated_time": _iso_date(row[16]),
-                "record_id": _identifier(row[20]), "template_id": _identifier(row[21]), "record_version": row[22],
-                "record_created_by": row[24], "record_created_time": _iso_date(row[25]),
-                "record_updated_by": row[29], "record_updated_time": _iso_date(row[30]),
-                "process_instance_id": _identifier(row[31]), "last_audited_flag": row[32],
-                "last_audited_by": row[34], "last_audited_time": _iso_date(row[35]),
-                "submitted_by": row[37], "submitted_time": _iso_date(row[38]),
-                "approved_by": row[40], "approved_time": _iso_date(row[41]),
-                "project_id": _identifier(row[46]), "source_id": _identifier(row[47]), "source_type": row[48],
-            })
-        return rows
-    finally:
-        workbook.close()
+def parse_lims_query_rows(headers: list[Any], values_list: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
+    normalized_headers = [str(value or "").strip().upper() for value in headers]
+    if normalized_headers[:len(EXPECTED_PREFIX)] != EXPECTED_PREFIX:
+        raise ValueError("LIMS SQL 结果列结构不符合预期，前七列应为 " + ", ".join(EXPECTED_PREFIX))
+    rows = []
+    for source_row, values in enumerate(values_list, start=1):
+        row = list(values) + [None] * max(0, 49 - len(values))
+        if not any(value not in (None, "") for value in row):
+            continue
+        rows.append({
+            "id": _identifier(row[0]), "instance_id": _identifier(row[1]), "template_unit_id": _identifier(row[2]),
+            "type": str(row[3] or ""), "title": str(row[4] or ""), "parent_id": _identifier(row[5]),
+            "body": row[6], "order_no": _identifier(row[7]), "source_row": source_row,
+            "unit_created_by": row[10], "unit_created_time": _iso_date(row[11]),
+            "unit_updated_by": row[15], "unit_updated_time": _iso_date(row[16]),
+            "record_id": _identifier(row[20]), "template_id": _identifier(row[21]), "record_version": row[22],
+            "record_created_by": row[24], "record_created_time": _iso_date(row[25]),
+            "record_updated_by": row[29], "record_updated_time": _iso_date(row[30]),
+            "process_instance_id": _identifier(row[31]), "last_audited_flag": row[32],
+            "last_audited_by": row[34], "last_audited_time": _iso_date(row[35]),
+            "submitted_by": row[37], "submitted_time": _iso_date(row[38]),
+            "approved_by": row[40], "approved_time": _iso_date(row[41]),
+            "project_id": _identifier(row[46]), "source_id": _identifier(row[47]), "source_type": row[48],
+        })
+    return rows
 
 
-def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_details: bool) -> dict[str, Any]:
+def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_details: bool,
+                      file_base_url: str = "") -> dict[str, Any]:
     by_id = {row["id"]: row for row in rows if row["id"]}
 
     def path_for(row: dict[str, Any]) -> list[str]:
@@ -206,7 +202,7 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
     }
     if not include_details:
         return summary
-    return {
+    return absolute_lims_file_urls({
         **summary,
         "project": {"id": first["project_id"], "name": title},
         "document": {"code": instance_id, "version": str(first["record_version"] or 0)},
@@ -215,11 +211,11 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
         "instruments": groups["Equipment"], "columns": groups["Chromatogram"],
         "reagents": groups["Reagent"], "weighings": groups["Weighing"],
         "sections": sections, "richTexts": rich_texts, "rawStructured": raw_structured,
-    }
+    }, file_base_url)
 
 
-def parse_lims_workbook(path: Path, instance_id: str | None = None) -> dict[str, Any]:
-    rows = _read_rows(path)
+def parse_lims_rows(rows: list[dict[str, Any]], instance_id: str | None = None,
+                    file_base_url: str = "") -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         if row["instance_id"]:
@@ -227,7 +223,7 @@ def parse_lims_workbook(path: Path, instance_id: str | None = None) -> dict[str,
     if instance_id:
         if instance_id not in grouped:
             raise KeyError(instance_id)
-        return _instance_payload(instance_id, grouped[instance_id], True)
-    instances = [_instance_payload(key, value, False) for key, value in grouped.items()]
+        return _instance_payload(instance_id, grouped[instance_id], True, file_base_url)
+    instances = [_instance_payload(key, value, False, file_base_url) for key, value in grouped.items()]
     projects = sorted({item["projectId"] for item in instances if item["projectId"]})
     return {"rowCount": len(rows), "instanceCount": len(instances), "projects": projects, "instances": instances}

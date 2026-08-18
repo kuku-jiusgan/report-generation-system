@@ -7,21 +7,9 @@ from typing import Any
 from lxml import html
 
 from .lims_configured_extractor import apply_configured_extraction
+from .lims_table_utils import cell_value, column_value, impurity_columns, limit_calculation_records, validation_summary_columns
+from .lims_validation import sort_validation_summary, validation_code
 
-
-VALIDATION_CODES = {
-    "系统适用性": "systemSuitability",
-    "专属性": "specificity",
-    "检测限": "lod",
-    "定量限": "loq",
-    "线性": "linearity",
-    "重复性": "repeatability",
-    "中间精密度": "intermediatePrecision",
-    "准确度": "accuracy",
-    "溶液稳定性": "solutionStability",
-    "稳定性": "solutionStability",
-    "耐用性": "robustness",
-}
 
 COLLECTION_LABELS = {
     "samples": "供试品",
@@ -95,7 +83,7 @@ def _table_grid(table: html.HtmlElement) -> list[list[str]]:
         consume_spans()
         for cell in tr.xpath("./th|./td"):
             consume_spans()
-            text = _clean(cell.text_content())
+            text = cell_value(cell)
             colspan = max(1, int(cell.get("colspan") or 1))
             rowspan = max(1, int(cell.get("rowspan") or 1))
             for _ in range(colspan):
@@ -129,11 +117,9 @@ def _record(values: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
     return {**values, "evidence": evidence}
 
 
-def _validation_code(value: str) -> str | None:
-    for label, code in VALIDATION_CODES.items():
-        if label in value:
-            return code
-    return None
+def _is_system_suitability_detail(value: Any) -> bool:
+    sequence = _clean(value)
+    return bool(sequence) and not re.search(r"结论|RSD|平均|标准差|置信区间", sequence, re.IGNORECASE)
 
 
 def _rows_as_fields(rows: list[list[str]], evidence: dict[str, Any], start: int = 1) -> list[dict[str, Any]]:
@@ -172,49 +158,55 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
                 return True
         return False
 
-    if profile_enabled("IMPURITY_LIMIT_TABLE") and "杂质名称" in header and "CAS" in header and "限度" in header:
+    impurity_indexes = impurity_columns(rows[0])
+    if profile_enabled("IMPURITY_LIMIT_TABLE") and impurity_indexes:
         for row in rows[1:]:
             if not row or not _clean(row[0]) or _clean(row[0]) in {"序号", "No."}:
                 continue
-            offset = 1 if _clean(row[0]).isdigit() else 0
-            name = _clean(row[offset] if len(row) > offset else "")
+            name = column_value(row, impurity_indexes["name"])
             if not name:
                 continue
-            cas = _clean(row[offset + 1] if len(row) > offset + 1 else "")
-            limit = _clean(row[offset + 2] if len(row) > offset + 2 else "")
-            structure = _clean(row[offset + 3] if len(row) > offset + 3 else "")
+            cas = column_value(row, impurity_indexes["cas"])
+            structure = column_value(row, impurity_indexes["structure"])
+            limit = column_value(row, impurity_indexes["limit"])
             result["impurity"].append(_record({"impurityName": name, "field2": cas,
                                                 "field3": structure, "field4": limit}, evidence))
-            result["limit"].append(_record({"impurityName": name, "field2": "", "field3": "",
-                                             "field4": limit, "field5": "", "field6": ""}, evidence))
         return True
 
-    if "验证项目" in header and "接受标准" in header:
+    limit_records = limit_calculation_records(rows)
+    if profile_enabled("LIMIT_CALCULATION_TABLE") and limit_records:
+        result["limit"].extend(_record(values, evidence) for values in limit_records)
+        return True
+
+    validation_indexes = validation_summary_columns(rows[0])
+    if profile_enabled("VALIDATION_SUMMARY_TABLE") and validation_indexes:
         for row in rows[1:]:
-            name = _clean(row[0] if row else "")
-            criteria = _clean(row[1] if len(row) > 1 else "")
+            name = column_value(row, validation_indexes["project"])
+            criteria = column_value(row, validation_indexes["criteria"])
             if name and criteria:
                 result["validationSummary"].append(_record({"field1": name,
+                                                              "validationItemCode": validation_code(name, True),
                                                               "acceptanceCriteria": criteria,
                                                               "conclusion": ""}, evidence))
         return True
 
     if profile_enabled("SOLUTION_PREPARATION_TABLE") and (("配制方法" in header and ("溶液名称" in header or "名称" in header)) or header.startswith("名称|溶液配制")):
+        headers = [_clean(value) for value in rows[0]]
+        project_index = headers.index("验证项目") if "验证项目" in headers else None
+        name_index = headers.index("溶液名称") if "溶液名称" in headers else headers.index("名称")
+        preparation_index = headers.index("配制方法") if "配制方法" in headers else 1
         project = ""
         for row in rows[1:]:
             if len(row) < 2:
                 continue
-            if "验证项目" in header and len(row) >= 3:
-                if _clean(row[0]):
-                    project = _clean(row[0])
-                name, preparation = _clean(row[1]), _clean(row[2])
-            else:
-                name, preparation = _clean(row[0]), _clean(row[1])
+            if project_index is not None and _at(row, project_index):
+                project = _at(row, project_index)
+            name, preparation = _at(row, name_index), _at(row, preparation_index)
             if not name or not preparation or name in {"溶液名称", "名称"}:
                 continue
             result["solutions"].append(_record({
                 "name": name, "preparation": preparation,
-                "validationCode": _validation_code(project or instance.get("title", "")) or "shared",
+                "validationCode": validation_code(project or instance.get("title", "")) or "shared",
                 "validationProject": project,
             }, evidence))
         return True
@@ -273,6 +265,8 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
         impurities = rows[0]
         for row in rows[2:]:
             sequence = _at(row, 0)
+            if not _is_system_suitability_detail(sequence):
+                continue
             column = 1
             while column + 1 < len(row):
                 impurity = _at(impurities, column)
@@ -362,6 +356,7 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
         for row in rows[1:]:
             if _at(row, 0) and _at(row, 1):
                 result["validationSummary"].append(_record({"field1": _at(row, 0),
+                    "validationItemCode": validation_code(_at(row, 0), True),
                     "acceptanceCriteria": _at(row, 1), "conclusion": ""}, evidence))
         return True
 
@@ -430,7 +425,12 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
             if "计算公式" in path:
                 collections["formulas"].append(_record({"text": plain}, evidence))
             elif "实验结论" in path:
-                collections["conclusions"].append(_record({"text": plain}, evidence))
+                project = next((item for item in reversed(rich_text.get("sectionPath", []))
+                                if item and item not in {"实验结论", "实验结果"}), instance.get("title", ""))
+                collections["conclusions"].append(_record({
+                    "text": plain, "validationProject": project,
+                    "validationCode": validation_code(project),
+                }, evidence))
 
     result = {
         "project": instance.get("project", {}), "document": instance.get("document", {}),
@@ -474,14 +474,18 @@ def _add_solution_views(payload: dict[str, Any]) -> None:
 
 
 def _identity(collection: str, item: dict[str, Any]) -> str:
+    if collection == "validationSummary":
+        return _semantic(item.get("validationItemCode") or item.get("field1"))
     keys = {
         "samples": ("sampleName", "batchNo"),
         "referenceStandards": ("name", "batchNo"),
         "instruments": ("assetNo", "instrumentName", "model"),
         "columns": ("serialNo", "name"),
-        "reagents": ("name", "batchNo"),
+        # A batch may contain multiple separately numbered reagent containers.
+        # Treat the LIMS stock number as part of the business identity when present.
+        "reagents": ("name", "batchNo", "stockNo"),
         "impurity": ("impurityName",), "limit": ("impurityName",),
-        "validationSummary": ("field1",), "solutions": ("validationCode", "name"),
+        "solutions": ("validationCode", "name"),
         "methodParameters": ("field1", "field2"),
     }.get(collection)
     if not keys:
@@ -493,18 +497,41 @@ def _content(item: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in item.items() if key != "evidence"}
 
 
+_COMPARISON_IGNORED_KEYS = {"evidence", "sourceRecordId"}
+
+
+def _comparison_content(value: Any) -> Any:
+    """Remove provenance metadata that does not change the business record."""
+    if isinstance(value, dict):
+        return {
+            key: _comparison_content(item)
+            for key, item in value.items()
+            if key not in _COMPARISON_IGNORED_KEYS
+        }
+    if isinstance(value, list):
+        return [_comparison_content(item) for item in value]
+    return value
+
+
+def _content_hash(item: dict[str, Any]) -> str:
+    return _hash(_comparison_content(item))
+
+
 def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str] | None = None,
                     fields: list[dict[str, Any]] | None = None,
-                    extraction_rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                    extraction_rules: list[dict[str, Any]] | None = None,
+                    normalized: bool = False) -> dict[str, Any]:
     if not instances:
         raise ValueError("至少选择一个实验记录")
     project_ids = {str(item.get("projectId") or item.get("project", {}).get("id") or "") for item in instances}
     if len(project_ids) != 1:
         raise ValueError("只能合并同一项目下的实验记录")
 
-    normalized = [normalize_instance(item, fields, extraction_rules) for item in instances]
+    normalized_instances = instances if normalized else [
+        normalize_instance(item, fields, extraction_rules) for item in instances
+    ]
     payload: dict[str, Any] = {
-        "project": normalized[0]["project"], "document": normalized[0]["document"],
+        "project": normalized_instances[0]["project"], "document": normalized_instances[0]["document"],
         "approval": [], "instances": [], "unmatched": [],
     }
     conflicts = []
@@ -512,14 +539,14 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
     resolutions = resolutions or {}
     for collection in ["approval", *COLLECTION_ORDER]:
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for source in normalized:
+        for source in normalized_instances:
             for item in source.get(collection, []):
                 buckets[_identity(collection, item)].append(item)
         merged = []
         for identity, candidates in buckets.items():
             unique: dict[str, dict[str, Any]] = {}
             for candidate in candidates:
-                unique.setdefault(_hash(_content(candidate)), candidate)
+                unique.setdefault(_content_hash(candidate), candidate)
             duplicate_count += len(candidates) - len(unique)
             choices = list(unique.values())
             if len(choices) == 1 or collection not in {
@@ -529,17 +556,18 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
                 merged.extend(choices)
                 continue
             conflict_id = _hash({"collection": collection, "identity": identity})
-            options = [{"candidateId": _hash(_content(item)), "value": _content(item),
+            options = [{"candidateId": _content_hash(item), "value": _comparison_content(item),
                         "evidence": item.get("evidence", {})} for item in choices]
             selected_id = resolutions.get(conflict_id)
-            selected = next((item for item in choices if _hash(_content(item)) == selected_id), None)
+            selected = next((item for item in choices if _content_hash(item) == selected_id), None)
             conflicts.append({"id": conflict_id, "collection": collection,
                               "label": COLLECTION_LABELS.get(collection, collection),
                               "identity": identity, "options": options, "resolved": bool(selected)})
             if selected:
                 merged.append(selected)
         payload[collection] = merged
-    for source in normalized:
+    payload["validationSummary"] = sort_validation_summary(payload.get("validationSummary", []))
+    for source in normalized_instances:
         payload["instances"].extend(source["instances"])
         payload["unmatched"].extend(source["unmatched"])
     _add_solution_views(payload)

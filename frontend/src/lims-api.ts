@@ -9,7 +9,6 @@ http.interceptors.response.use(undefined, (error) => {
 export interface LimsCapabilities {
   sqlEnabled: boolean
   sqlConfigured: boolean
-  excelImportEnabled: boolean
 }
 
 export interface LimsInstanceSummary {
@@ -50,7 +49,7 @@ export interface LimsEvidence {
   instanceTitle?: string
   unitId?: string
   sectionPath?: string[]
-  excelRow?: number
+  sourceRow?: number
   richTextId?: string
   tableIndex?: number
   headers?: string[]
@@ -87,10 +86,8 @@ export async function getLimsCapabilities() {
   return (await http.get<LimsCapabilities>('/capabilities')).data
 }
 
-export async function uploadLimsExcel(file: File) {
-  const body = new FormData()
-  body.append('file', file)
-  return (await http.post<LimsImport>('/imports', body)).data
+export async function queryLimsProject(projectId: string) {
+  return (await http.post<LimsImport>('/query', { project_id: projectId })).data
 }
 
 export async function getLimsInstance(importId: string, instanceId: string) {

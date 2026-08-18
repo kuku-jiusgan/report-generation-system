@@ -1,0 +1,24 @@
+[Unit]
+Description=Report Generation System
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=zoutengda
+Group=zoutengda
+WorkingDirectory=/home/zoutengda/report-generation-system
+EnvironmentFile=/home/zoutengda/report-generation-system/.env
+Environment=PYTHONPATH=/home/zoutengda/report-generation-system/backend
+ExecStartPre=+/usr/bin/docker compose --env-file /home/zoutengda/report-generation-system/.env -f /home/zoutengda/report-generation-system/docker-compose.onlyoffice.yml up -d
+ExecStart=/home/zoutengda/report-generation-system/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8010 --app-dir /home/zoutengda/report-generation-system/backend
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

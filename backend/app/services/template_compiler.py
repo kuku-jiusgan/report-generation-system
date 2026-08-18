@@ -81,6 +81,25 @@ def _physical_table_number(table_no: str) -> int | None:
     return None
 
 
+def _ensure_repeat_bookmark(document: etree._Element, tag: str, table_no: str) -> bool:
+    bookmark_name = f"repeat_{table_no.lower()}_row"
+    if document.xpath(f".//w:bookmarkStart[@w:name='{bookmark_name}']", namespaces=NS):
+        return False
+    controls = document.xpath(
+        ".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces=NS, tag=tag,
+    )
+    rows = controls[0].xpath("ancestor::w:tr[1]", namespaces=NS) if controls else []
+    if not rows:
+        return False
+    bookmark_ids = [int(value) for value in document.xpath(".//w:bookmarkStart/@w:id", namespaces=NS)
+                    if str(value).isdigit()]
+    bookmark = etree.Element(W + "bookmarkStart")
+    bookmark.set(W + "id", str(max(bookmark_ids, default=1999) + 1))
+    bookmark.set(W + "name", bookmark_name)
+    rows[0].insert(0, bookmark)
+    return True
+
+
 def compile_template(source: Path, output: Path, mappings: list[dict[str, Any]],
                      table_rules: list[dict[str, Any]]) -> dict[str, Any]:
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -124,8 +143,24 @@ def compile_template(source: Path, output: Path, mappings: list[dict[str, Any]],
                                        "message": "Word域或空Tag保持原样"})
             continue
         if tag in existing_tags:
+            if mapping.get("repeatType") == "ROW" and mapping.get("tableNo"):
+                _ensure_repeat_bookmark(document_root, tag, str(mapping["tableNo"]))
             report["success"].append({"locationId": location, "fieldCode": mapping["fieldCode"],
                                       "controlTag": tag, "action": "existing-content-control"})
+            continue
+        if mapping.get("sourcePending"):
+            report["warnings"].append({
+                "locationId": location, "fieldCode": mapping.get("fieldCode"),
+                "controlTag": tag, "code": "POSITION_PENDING",
+                "message": "字段尚未绑定 Word 位置，发布后不会自动填充；请在模板设计器中绑定。",
+            })
+            continue
+        if str(location).startswith("word.content_control."):
+            report["warnings"].append({
+                "locationId": location, "fieldCode": mapping.get("fieldCode"),
+                "controlTag": tag, "code": "POSITION_PENDING",
+                "message": "内容控件尚未出现在 Word 模板中，发布后不会自动填充；请在模板设计器中绑定。",
+            })
             continue
         header_match = re.fullmatch(r"header\.table(\d+)\.row(\d+)\.cell(\d+)", location)
         body_match = re.fullmatch(r"body\.(T\d+)\.dataRow\.cell(\d+)", location)

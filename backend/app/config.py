@@ -22,8 +22,15 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8010"
     onlyoffice_jwt_secret: str = ""
     lims_sql_enabled: bool = False
-    lims_excel_import_enabled: bool = True
     lims_sql_dsn: str = ""
+    lims_sql_user: str = ""
+    lims_sql_password: str = ""
+    lims_sql_connect_timeout: float = 10.0
+    lims_file_base_url: str = "http://192.168.2.17"
+    ai_base_url: str = ""
+    ai_api_key: str = ""
+    ai_model: str = ""
+    ai_timeout: float = 60.0
     bootstrap_admin_username: str = ""
     bootstrap_admin_password: str = ""
     session_hours: int = 8
@@ -47,12 +54,8 @@ class Settings(BaseSettings):
     def reports_dir(self) -> Path:
         return self.data_dir / "reports"
 
-    @property
-    def lims_dir(self) -> Path:
-        return self.data_dir / "lims"
-
     def ensure_directories(self) -> None:
-        for path in (self.data_dir, self.uploads_dir, self.reports_dir, self.lims_dir, self.template_path.parent):
+        for path in (self.data_dir, self.uploads_dir, self.reports_dir, self.template_path.parent):
             path.mkdir(parents=True, exist_ok=True)
 
 

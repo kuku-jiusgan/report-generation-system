@@ -5,7 +5,8 @@ __pycache__/
 *.py[cod]
 frontend/node_modules/
 frontend/dist/
-frontend/src/*.js
+frontend/src/**/*.js
+frontend/src/**/*.js.map
 frontend/*.tsbuildinfo
 data/*.db
 data/lims/

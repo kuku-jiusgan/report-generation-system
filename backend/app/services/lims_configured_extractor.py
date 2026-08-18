@@ -98,13 +98,21 @@ def _table_values(instance: dict[str, Any], rule: dict[str, Any]) -> list[Any]:
             header = "|".join(rows[0])
             if not _matches(str(rule.get("headerPattern") or ""), header):
                 continue
+            config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
+            row_pattern = str(rule.get("rowPattern") or config.get("rowPattern") or "")
             source_header = str(rule.get("sourcePath") or "")
             try:
                 column = next(index for index, name in enumerate(rows[0])
                               if _matches(source_header, name))
             except StopIteration:
                 continue
-            values.extend(row[column] for row in rows[1:] if len(row) > column and row[column])
+            values.extend(
+                row[column] for row in rows[1:]
+                if len(row) > column and row[column]
+                and (not row_pattern or _matches(
+                    row_pattern, "|".join(f"{name}={value}" for name, value in zip(rows[0], row))
+                ))
+            )
     return values
 
 

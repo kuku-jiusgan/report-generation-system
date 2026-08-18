@@ -100,6 +100,11 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
     config = config_endpoint()["config"]
     assert f"/template/file/{first_version['id']}" in config["document"]["url"]
     assert f"/onlyoffice/callback/{first_version['id']}" in config["editorConfig"]["callbackUrl"]
+    plugin_url = config["editorConfig"]["plugins"]["pluginsData"][0]
+    assert plugin_url.startswith(settings.onlyoffice_url)
+    assert plugin_url.endswith("config.json?v=18")
+    assert not any("/onlyoffice/plugin/" in route.path for route in router.routes)
+    assert not any(route.path.endswith("/onlyoffice/command") for route in router.routes)
 
     result = delete_endpoint(second["id"])
     assert result["deleted"] is True

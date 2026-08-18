@@ -79,6 +79,9 @@ export interface StandardField {
   fieldCode: string;
   label: string;
   groupCode: string;
+  groupCodes?: string[];
+  groupLabel?: string;
+  groupLabels?: string[];
   collectionCode: string;
   dataType: string;
   cardinality: "ONE" | "MANY";
@@ -109,9 +112,16 @@ export interface StandardFieldCatalogChapter {
 
 export interface StandardFieldCatalog {
   chapters: StandardFieldCatalogChapter[];
+  groups: SystemFieldGroup[];
   fields: StandardField[];
   unmappedFields: StandardField[];
   total: number;
+}
+
+export interface SystemFieldGroup {
+  groupCode: string; label: string; description: string; cardinality: 'ONE' | 'MANY';
+  itemPath: string; itemKey: string; orderNo: number; enabled: boolean; fieldCount: number;
+  chapterIds: number[]; fields: Array<{ fieldCode: string; label: string; dataType: string; cardinality: string; fieldPath: string; enabled: boolean }>;
 }
 
 export interface LimsExtractionRule {
@@ -129,6 +139,27 @@ export interface LimsExtractionRule {
   config: Record<string, unknown>;
   enabled: boolean;
   updatedAt: string;
+}
+
+export interface SystemFieldRule {
+  id: number;
+  fieldCode: string;
+  name: string;
+  sourceType: 'LIMS' | 'AI' | 'EXCEL' | 'PDF' | 'CALCULATED' | string;
+  priority: number;
+  config: Record<string, unknown>;
+  transform: string;
+  enabled: boolean;
+  updatedAt: string;
+}
+
+export interface AiServiceConfig {
+  baseUrl: string;
+  model: string;
+  timeout: number;
+  apiKeyConfigured: boolean;
+  apiKeyMasked: string;
+  apiKey?: string;
 }
 
 export interface StandardFieldPreviewItem {
@@ -382,6 +413,11 @@ limsHttp.interceptors.response.use(undefined, (error) => {
 });
 
 export const adminApi = {
+  aiServiceConfig: async () => (await http.get<AiServiceConfig>("/ai-service-config")).data,
+  saveAiServiceConfig: async (data: Partial<AiServiceConfig>) =>
+    (await http.put<AiServiceConfig>("/ai-service-config", data)).data,
+  testAiServiceConfig: async () =>
+    (await http.post<{ success: boolean; output: string }>("/ai-service-config/test")).data,
   users: async (query = '') => (await http.get<ManagedUser[]>('/users', { params: { query } })).data,
   createUser: async (data: { username: string; display_name: string; password: string; role_code: string }) =>
     (await http.post<ManagedUser>('/users', data)).data,
@@ -462,12 +498,12 @@ export const adminApi = {
     ).data,
   onlyOfficeConfig: async () =>
     (await http.get<OnlyOfficeBootstrap>("/onlyoffice/config")).data,
-  sendWordCommand: async (data: Record<string, unknown>) =>
-    (await http.post<{ accepted: boolean; nonce: number }>("/onlyoffice/command", data)).data,
+  forceSaveOnlyOffice: async () =>
+    (await http.post<{ saved: boolean; versionId: string }>("/onlyoffice/force-save")).data,
   mappings: async (params: Record<string, string> = {}) =>
     (await http.get<MappingRule[]>("/mappings", { params })).data,
-  standardFields: async () =>
-    (await http.get<StandardField[]>("/standard-fields")).data,
+  standardFields: async (chapterId?: number) =>
+    (await http.get<StandardField[]>("/standard-fields", { params: { chapter_id: chapterId } })).data,
   allStandardFields: async () =>
     (await http.get<StandardField[]>("/standard-fields", { params: { include_disabled: true } })).data,
   standardFieldCatalog: async () =>
@@ -493,14 +529,24 @@ export const adminApi = {
                     instance_id: item.instanceId, record_key: item.recordKey } },
       )
     ).data,
-  extractionRules: async (fieldCode: string) =>
-    (await http.get<LimsExtractionRule[]>(`/standard-fields/${encodeURIComponent(fieldCode)}/extraction-rules`)).data,
-  createExtractionRule: async (fieldCode: string, data: Partial<LimsExtractionRule>) =>
-    (await http.post<LimsExtractionRule>(`/standard-fields/${encodeURIComponent(fieldCode)}/extraction-rules`, data)).data,
-  updateExtractionRule: async (id: number, data: Partial<LimsExtractionRule>) =>
-    (await http.put<LimsExtractionRule>(`/extraction-rules/${id}`, data)).data,
-  deleteExtractionRule: async (id: number) =>
-    (await http.delete(`/extraction-rules/${id}`)).data,
+  systemFieldRules: async (fieldCode: string) =>
+    (await http.get<SystemFieldRule[]>(`/system-fields/${encodeURIComponent(fieldCode)}/rules`)).data,
+  createSystemFieldRule: async (fieldCode: string, data: Partial<SystemFieldRule>) =>
+    (await http.post<SystemFieldRule>(`/system-fields/${encodeURIComponent(fieldCode)}/rules`, data)).data,
+  updateSystemFieldRule: async (id: number, data: Partial<SystemFieldRule>) =>
+    (await http.put<SystemFieldRule>(`/system-field-rules/${id}`, data)).data,
+  deleteSystemFieldRule: async (id: number) =>
+    (await http.delete(`/system-field-rules/${id}`)).data,
+  previewAiRule: async (data: Record<string, unknown>) =>
+    (await http.post<{ success: boolean; prompt: string; context: Record<string, string>; output: string }>("/system-field-rules/ai-preview", data)).data,
+  fieldGroups: async () => (await http.get<SystemFieldGroup[]>("/field-groups")).data,
+  createFieldGroup: async (data: Partial<SystemFieldGroup>) => (await http.post<SystemFieldGroup>("/field-groups", data)).data,
+  updateFieldGroup: async (groupCode: string, data: Partial<SystemFieldGroup>) =>
+    (await http.put<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}`, data)).data,
+  assignFieldGroup: async (groupCode: string, fieldCode: string, fieldPath = "") =>
+    (await http.post<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/fields`, { fieldCode, fieldPath })).data,
+  assignGroupChapter: async (groupCode: string, chapterId: number) =>
+    (await http.post<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/chapters`, { chapterId })).data,
   createMapping: async (data: Partial<MappingRule>) =>
     (await http.post<MappingRule>("/mappings", data)).data,
   updateMapping: async (id: number, data: Partial<MappingRule>) =>
@@ -532,12 +578,7 @@ export const adminApi = {
   publish: async (note: string) =>
     (await http.post<RuleVersion>("/publish", { note })).data,
   versions: async () => (await http.get<RuleVersion[]>("/versions")).data,
-  limsImports: async () => (await limsHttp.get<LimsImport[]>("/imports")).data,
-  uploadLimsImport: async (file: File) => {
-    const data = new FormData();
-    data.append("file", file);
-    return (await limsHttp.post<LimsImport>("/imports", data)).data;
-  },
+  limsImports: async () => (await limsHttp.get<LimsImport[]>("/queries")).data,
   limsInstance: async (importId: string, instanceId: string) =>
     (
       await limsHttp.get<Record<string, unknown>>(

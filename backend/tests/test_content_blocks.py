@@ -136,6 +136,29 @@ class ContentBlockRegressionTest(unittest.TestCase):
             generated = [text for text in row_texts if any(f"SN-{index}" in text for index in range(1, 4))]
             self.assertEqual(len(generated), 3)
 
+    def test_repeat_row_preserves_static_text_outside_bound_control(self) -> None:
+        settings = get_settings()
+        with tempfile.TemporaryDirectory() as directory:
+            repository = self.repository(directory)
+            snapshot = repository.snapshot()
+            compiled = Path(directory) / "compiled.docx"
+            report = compile_template(
+                settings.template_path, compiled, snapshot["mappings"], snapshot["tableRules"]
+            )
+            self.assertTrue(report["valid"], report["errors"][:3])
+            output = Path(directory) / "samples.docx"
+            build_mapped_docx(compiled, output, snapshot["mappings"], {
+                "samples": [{
+                    "sampleName": "供试品", "batchNo": "B-01", "specification": "1g",
+                    "clientName": "测试科技", "remark": "-",
+                }],
+            }, {})
+            with ZipFile(output) as archive:
+                document = etree.fromstring(archive.read("word/document.xml"))
+            sample_table = document.xpath("./w:body/w:tbl", namespaces=NS)[4]
+            generated_text = "".join(sample_table.xpath(".//w:t/text()", namespaces=NS))
+            self.assertIn("测试科技（上海）有限公司", generated_text)
+
     def test_compiler_accepts_an_interactively_bound_content_control(self) -> None:
         settings = get_settings()
         with tempfile.TemporaryDirectory() as directory:

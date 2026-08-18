@@ -1,0 +1,12 @@
+[Unit]
+Description=Monitor Report Generation System
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=report-generation-healthcheck.service
+
+[Install]
+WantedBy=timers.target

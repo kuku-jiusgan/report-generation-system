@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
 import {
   Clock,
   CopyDocument,
@@ -9,166 +8,19 @@ import {
   Plus,
   Refresh,
 } from "@element-plus/icons-vue";
-import { ElMessage, ElMessageBox } from "element-plus";
-import {
-  adminApi,
-  type AdminTemplate,
-  type AdminTemplateVersion,
-} from "./admin-api";
+import type { AdminTemplate, AdminTemplateVersion } from "./admin-api";
+import { templateVersionStatusText as statusText, useTemplateLibrary } from "./composables/useTemplateLibrary";
 
 const emit = defineEmits<{
   open: [template: AdminTemplate, version: AdminTemplateVersion];
 }>();
-const templates = ref<AdminTemplate[]>([]);
-const versions = ref<AdminTemplateVersion[]>([]);
-const selected = ref<AdminTemplate>();
-const loading = ref(false);
-const versionLoading = ref(false);
-const deletingTemplate = ref(false);
-const templateDialog = ref(false);
-const versionDialog = ref(false);
-const editingTemplate = ref<AdminTemplate>();
-const templateDraft = reactive({ code: "", name: "", description: "" });
-const versionDraft = reactive<{ baseVersionId?: string; note: string }>({
-  note: "",
-});
-
-const selectedTitle = computed(() =>
-  selected.value
-    ? `${selected.value.name} · ${selected.value.code}`
-    : "选择一个模板",
-);
-const statusText: Record<string, string> = {
-  DRAFT: "草稿",
-  PUBLISHED: "已发布",
-  ARCHIVED: "历史版本",
-};
-
-function errorText(error: unknown) {
-  const value = error as {
-    response?: { data?: { detail?: string } };
-    message?: string;
-  };
-  return value.response?.data?.detail || value.message || "操作失败";
-}
-
-async function loadTemplates(preferredId?: string) {
-  loading.value = true;
-  try {
-    templates.value = await adminApi.templates();
-    const target =
-      templates.value.find(
-        (item) => item.id === (preferredId || selected.value?.id),
-      ) || templates.value[0];
-    if (target) await selectTemplate(target);
-  } catch (error) {
-    ElMessage.error(errorText(error));
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function selectTemplate(item: AdminTemplate) {
-  selected.value = item;
-  versionLoading.value = true;
-  try {
-    versions.value = await adminApi.templateVersions(item.id);
-  } catch (error) {
-    ElMessage.error(errorText(error));
-  } finally {
-    versionLoading.value = false;
-  }
-}
-
-function openCreateTemplate() {
-  editingTemplate.value = undefined;
-  Object.assign(templateDraft, { code: "", name: "", description: "" });
-  templateDialog.value = true;
-}
-
-function openEditTemplate() {
-  if (!selected.value) return;
-  editingTemplate.value = selected.value;
-  Object.assign(templateDraft, {
-    code: selected.value.code,
-    name: selected.value.name,
-    description: selected.value.description,
-  });
-  templateDialog.value = true;
-}
-
-async function saveTemplate() {
-  if (!templateDraft.code.trim() || !templateDraft.name.trim())
-    return ElMessage.warning("模板编码和名称不能为空");
-  try {
-    const result = editingTemplate.value
-      ? await adminApi.updateTemplate(editingTemplate.value.id, templateDraft)
-      : await adminApi.createTemplate({
-          ...templateDraft,
-          note: "初始草稿版本",
-        });
-    templateDialog.value = false;
-    await loadTemplates(result.id);
-    ElMessage.success(
-      editingTemplate.value ? "模板信息已保存" : "模板及 V1 已创建",
-    );
-  } catch (error) {
-    ElMessage.error(errorText(error));
-  }
-}
-
-async function removeTemplate() {
-  if (!selected.value) return;
-  const target = selected.value;
-  try {
-    await ElMessageBox.confirm(
-      `删除模板“${target.name}（${target.code}）”？该模板的 ${target.versionCount} 个版本和独立 Word 文件也会一并删除，此操作不可恢复。`,
-      "删除报告模板",
-      { type: "warning", confirmButtonText: "确认删除", cancelButtonText: "取消" },
-    );
-    deletingTemplate.value = true;
-    await adminApi.deleteTemplate(target.id);
-    selected.value = undefined;
-    versions.value = [];
-    await loadTemplates();
-    ElMessage.success("模板已删除");
-  } catch (error) {
-    if (error === "cancel" || error === "close") return;
-    ElMessage.error(errorText(error));
-  } finally {
-    deletingTemplate.value = false;
-  }
-}
-
-function openCreateVersion(base?: AdminTemplateVersion) {
-  versionDraft.baseVersionId = base?.id || versions.value[0]?.id;
-  versionDraft.note = base ? `基于 V${base.versionNo} 创建` : "新建草稿版本";
-  versionDialog.value = true;
-}
-
-async function saveVersion() {
-  if (!selected.value) return;
-  try {
-    await adminApi.createTemplateVersion(selected.value.id, versionDraft);
-    versionDialog.value = false;
-    await loadTemplates(selected.value.id);
-    ElMessage.success("新版本已创建");
-  } catch (error) {
-    ElMessage.error(errorText(error));
-  }
-}
-
-async function enterDesigner(version: AdminTemplateVersion) {
-  if (!selected.value) return;
-  try {
-    await adminApi.activateTemplateVersion(selected.value.id, version.id);
-    emit("open", selected.value, version);
-  } catch (error) {
-    ElMessage.error(errorText(error));
-  }
-}
-
-onMounted(() => loadTemplates());
+const {
+  templates, versions, selected, editingTemplate, loading, versionLoading,
+  deletingTemplate, savingTemplate, savingVersion, activatingVersionId,
+  templateDialog, versionDialog, templateDraft, versionDraft, selectedTitle,
+  loadTemplates, selectTemplate, openCreateTemplate, openEditTemplate,
+  saveTemplate, removeTemplate, openCreateVersion, saveVersion, enterDesigner,
+} = useTemplateLibrary((template, version) => emit("open", template, version));
 </script>
 
 <template>
@@ -317,6 +169,7 @@ onMounted(() => loadTemplates());
                   <el-button
                     type="primary"
                     plain
+                    :loading="activatingVersionId === scope.row.id"
                     @click="enterDesigner(scope.row)"
                     >进入设计器</el-button
                   >
@@ -369,7 +222,7 @@ onMounted(() => loadTemplates());
       /></el-form>
       <template #footer
         ><el-button @click="templateDialog = false">取消</el-button
-        ><el-button type="primary" @click="saveTemplate">{{
+        ><el-button type="primary" :loading="savingTemplate" @click="saveTemplate">{{
           editingTemplate ? "保存修改" : "创建模板"
         }}</el-button></template
       >
@@ -394,7 +247,7 @@ onMounted(() => loadTemplates());
       ></el-form>
       <template #footer
         ><el-button @click="versionDialog = false">取消</el-button
-        ><el-button type="primary" @click="saveVersion"
+        ><el-button type="primary" :loading="savingVersion" @click="saveVersion"
           >创建草稿版本</el-button
         ></template
       >
@@ -407,7 +260,7 @@ onMounted(() => loadTemplates());
   height: 100%;
   min-width: 0;
   color: #263731;
-  background: #edf0ee;
+  background: #f4f7fb;
   overflow: hidden;
 }
 .module-header {
@@ -416,7 +269,7 @@ onMounted(() => loadTemplates());
   display: flex;
   align-items: center;
   background: #fff;
-  border-bottom: 1px solid #d5ddda;
+  border-bottom: 1px solid #e4eaf2;
 }
 .module-title {
   display: flex;
@@ -425,14 +278,14 @@ onMounted(() => loadTemplates());
 }
 .module-title > svg {
   width: 22px;
-  color: #286958;
+  color: #2167e8;
 }
 .module-title strong,
 .module-title small {
   display: block;
 }
 .module-title strong {
-  color: #173f36;
+  color: #263548;
   font-size: 14px;
 }
 .module-title small {
@@ -458,7 +311,7 @@ onMounted(() => loadTemplates());
   display: flex;
   flex-direction: column;
   background: #fff;
-  border-right: 1px solid #d5ddda;
+  border-right: 1px solid #e4eaf2;
 }
 .index-heading {
   height: 78px;
@@ -472,7 +325,7 @@ onMounted(() => loadTemplates());
 .version-heading h1,
 .table-title h2 {
   margin: 0;
-  color: #173f36;
+  color: #263548;
 }
 .index-heading h1 {
   font-size: 18px;
@@ -570,7 +423,7 @@ onMounted(() => loadTemplates());
   display: flex;
   border-top: 1px solid #cfd8d4;
   border-bottom: 1px solid #cfd8d4;
-  background: #f7f9f8;
+  background: #f7f9fc;
 }
 .version-summary span {
   min-width: 150px;

@@ -1,7 +1,7 @@
 {
   "name": "Report Template Link",
-  "guid": "asc.{9C4D6F33-55AE-4AAE-8D86-4B81D7229F10}",
-  "version": "1.0.0",
+  "guid": "asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}",
+  "version": "1.0.15",
   "variations": [
     {
       "description": "Links Word content controls with report template mapping rules.",

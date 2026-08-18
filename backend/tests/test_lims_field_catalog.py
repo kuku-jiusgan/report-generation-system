@@ -6,9 +6,58 @@ from backend.app.database import Database
 from backend.app.services.rule_admin import RuleAdminRepository
 from backend.app.services.lims_configured_extractor import apply_configured_extraction
 from backend.app.services.lims_normalizer import normalize_instance
+from backend.app.services.lims_catalog_defaults import ensure_lims_catalog_defaults
 
 
 class LimsFieldCatalogTest(unittest.TestCase):
+    def test_lims_parser_rules_come_from_admin_system_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "catalog.db")
+            database.initialize()
+            database.upsert_lims_field({
+                "fieldCode": "systemSuitability.sequence", "label": "No.",
+                "groupCode": "系统适用性结果", "collectionCode": "systemSuitability",
+                "dataType": "string", "cardinality": "MANY",
+                "dbTable": "lims_standard_records", "dbColumn": "data_json",
+                "jsonKey": "sequence", "legacyJsonPath": "$.systemSuitability[*].sequence",
+                "description": "", "outputFormat": "", "defaultValue": "",
+                "validationRegex": "", "orderNo": 1, "enabled": True,
+            })
+            database.save_system_field_rule({
+                "fieldCode": "systemSuitability.sequence", "name": "后台规则", "sourceType": "LIMS",
+                "priority": 100, "config": {
+                    "extractionType": "NORMALIZED_PATH",
+                    "sourcePath": "$.systemSuitability[*].sequence",
+                    "sectionPattern": r"(?:实|试)验结果.*系统适用性(?:结果)?",
+                }, "enabled": True,
+            })
+
+            rules = database.list_lims_parser_rules("systemSuitability.sequence")
+
+            self.assertEqual(len(rules), 1)
+            self.assertEqual(rules[0]["name"], "后台规则")
+            self.assertEqual(rules[0]["sectionPattern"], r"(?:实|试)验结果.*系统适用性(?:结果)?")
+
+    def test_report_source_catalog_exposes_canonical_binding_code(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "catalog.db")
+            database.initialize()
+            repository = RuleAdminRepository(database, Path(directory) / "unused.json")
+            chapter = repository.create_template_chapter({
+                "code": "1", "title": "封面", "orderNo": 1,
+            })
+            repository.create_mapping({
+                "chapterId": chapter["id"], "wordLabel": "文件编号",
+                "fieldCode": "document.code", "sourceType": "LIMS",
+                "sourcePath": "$.document.code", "enabled": True,
+            })
+
+            catalog = repository.report_source_catalog()
+
+            field = catalog["chapters"][0]["fields"][0]
+            self.assertEqual(field["fieldCode"], "document.code")
+            self.assertEqual(field["bindingCode"], "report_no")
+
     def test_catalog_uses_live_report_chapter_hierarchy_and_mapping_links(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "catalog.db")
@@ -61,7 +110,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
             database = Database(Path(directory) / "catalog.db")
             database.initialize()
             imported = database.create_lims_import({
-                "id": "import-rich", "file_name": "lims.xlsx", "stored_name": "lims.xlsx",
+                "id": "import-rich", "file_name": "Oracle 查询：XM-RICH", "stored_name": "",
                 "size": 10, "summary": {}, "created_at": "2026-01-01T00:00:00",
             })
             database.replace_lims_instance(
@@ -122,6 +171,134 @@ class LimsFieldCatalogTest(unittest.TestCase):
         enabled = normalize_instance(instance, extraction_rules=[rule])
         self.assertEqual(enabled["systemSuitability"][0]["sequence"], "NDMA-1")
 
+    def test_system_suitability_accepts_named_result_section_and_skips_summary_rows(self) -> None:
+        instance = {
+            "instanceId": "EXP-SYSTEM", "title": "方法验证", "project": {}, "document": {},
+            "richTexts": [{
+                "id": "RICH-SYSTEM", "sectionPath": ["实验结果", "系统适用性"],
+                "html": """<table><tr><th>No.</th><th>NDMA</th><th>NDMA</th></tr>
+                    <tr><th></th><th>保留时间</th><th>峰面积</th></tr>
+                    <tr><td>1</td><td>3.987</td><td>96717</td></tr>
+                    <tr><td>RSD（%）</td><td>0.2</td><td>1.2</td></tr>
+                    <tr><td>结论</td><td colspan="2">符合规定</td></tr></table>""",
+                "plainText": "No. NDMA 保留时间 峰面积",
+                "evidence": {"unitId": "RICH-SYSTEM"},
+            }],
+        }
+        rule = {
+            "enabled": True,
+            "sectionPattern": r"(?:实|试)验结果.*系统适用性(?:结果)?",
+            "headerPattern": r"No\.?.*保留时间.*峰面积",
+            "config": {"parser": "HTML_TABLE_GRID", "parserProfile": "SYSTEM_SUITABILITY_MATRIX"},
+        }
+
+        result = normalize_instance(instance, extraction_rules=[rule])
+
+        self.assertEqual(len(result["systemSuitability"]), 1)
+        self.assertEqual(result["systemSuitability"][0]["sequence"], "NDMA-1")
+
+    def test_impurity_table_uses_semantic_columns_and_preserves_structure_image(self) -> None:
+        instance = {
+            "instanceId": "EXP-IMPURITY", "title": "方法开发", "project": {}, "document": {},
+            "richTexts": [{
+                "id": "RICH-IMPURITY", "sectionPath": ["试验设计"],
+                "html": """<table><tr><th>No.</th><th>名称</th><th>限度（ppm）</th>
+                    <th>结构式</th><th>CAS号</th></tr><tr><td>1</td><td>N-亚硝基氢氯噻嗪</td>
+                    <td>≤ 60 ppm</td><td><img src="/files/structure.png"></td>
+                    <td>63779-86-2</td></tr></table>""",
+                "plainText": "名称 限度 结构式 CAS号", "evidence": {"unitId": "RICH-IMPURITY"},
+            }],
+        }
+        rule = {
+            "enabled": True, "sectionPattern": r"(?:实|试)验设计|参考文件|限度",
+            "headerPattern": r"(?=.*(?:杂质名称|名称))(?=.*CAS)(?=.*(?:杂质)?限度)",
+            "config": {"parser": "HTML_TABLE_GRID", "parserProfile": "IMPURITY_LIMIT_TABLE"},
+        }
+
+        result = normalize_instance(instance, extraction_rules=[rule])
+
+        self.assertEqual(result["impurity"][0]["impurityName"], "N-亚硝基氢氯噻嗪")
+        self.assertEqual(result["impurity"][0]["field2"], "63779-86-2")
+        self.assertEqual(result["impurity"][0]["field3"], "/files/structure.png")
+        self.assertEqual(result["impurity"][0]["field4"], "≤ 60 ppm")
+
+    def test_validation_summary_accepts_header_variants_and_reordered_columns(self) -> None:
+        instance = {
+            "instanceId": "EXP-CRITERIA", "title": "方法验证", "project": {}, "document": {},
+            "richTexts": [{
+                "id": "RICH-CRITERIA", "sectionPath": ["试验设计"],
+                "html": """<table><tr><th>可接受标准</th><th>检验项目</th></tr>
+                    <tr><td>峰面积 RSD 应不大于 20%</td><td>系统适用性</td></tr></table>""",
+                "plainText": "可接受标准 检验项目", "evidence": {"unitId": "RICH-CRITERIA"},
+            }],
+        }
+        rule = {
+            "enabled": True, "sectionPattern": r"(?:实|试)验设计|验证(?:项目|内容)|(?:可)?接受标准",
+            "headerPattern": r"(?=.*(?:验证|试验|检验)?项目)(?=.*(?:可)?接受标准)",
+            "config": {"parser": "HTML_TABLE_GRID", "parserProfile": "VALIDATION_SUMMARY_TABLE"},
+        }
+
+        result = normalize_instance(instance, extraction_rules=[rule])
+
+        self.assertEqual(result["validationSummary"][0]["field1"], "系统适用性")
+        self.assertEqual(result["validationSummary"][0]["acceptanceCriteria"], "峰面积 RSD 应不大于 20%")
+
+    def test_limit_calculation_table_extracts_six_semantic_columns(self) -> None:
+        instance = {
+            "instanceId": "EXP-LIMIT", "title": "方法验证", "project": {}, "document": {},
+            "richTexts": [{
+                "id": "RICH-LIMIT", "sectionPath": ["实验设计"],
+                "html": """<table><tr><th>杂质限度浓度 (ng/ml)</th><th>杂质名称</th>
+                    <th>供试品溶液中 API 浓度 (mg/ml)</th><th>最大日剂量 (mg/day)</th>
+                    <th>AI值 (ng/day)</th><th>杂质限度 (ppm)</th></tr><tr><td>30</td>
+                    <td>N-亚硝基氢氯噻嗪</td><td>0.5</td><td>25（以API计）</td><td>1500</td><td>60</td>
+                    </tr></table>""", "plainText": "限度计算列表", "evidence": {"unitId": "RICH-LIMIT"},
+            }],
+        }
+        rule = {
+            "enabled": True, "sectionPattern": r"(?:实|试)验设计|杂质信息|限度计算",
+            "headerPattern": r"(?=.*杂质名称)(?=.*AI值)(?=.*最大日剂量)(?=.*杂质限度)(?=.*API\s*浓度)(?=.*限度浓度)",
+            "config": {"parser": "HTML_TABLE_GRID", "parserProfile": "LIMIT_CALCULATION_TABLE"},
+        }
+
+        item = normalize_instance(instance, extraction_rules=[rule])["limit"][0]
+
+        self.assertEqual(item["impurityName"], "N-亚硝基氢氯噻嗪")
+        self.assertEqual([item[f"field{index}"] for index in range(2, 7)],
+                         ["1500", "25（以API计）", "60", "0.5", "30"])
+
+    def test_validation_summary_defaults_create_fields_and_parser_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "catalog.db")
+            database.initialize()
+            repository = RuleAdminRepository(database, Path(directory) / "unused.json")
+            chapter = repository.create_template_chapter({
+                "code": "5.1", "title": "验证结果汇总", "orderNo": 1,
+            })
+            repository.create_mapping({
+                "chapterId": chapter["id"], "locationId": "body.T10.dataRow.cell1",
+                "sectionCode": "5.validationSummary", "tableNo": "T10", "wordLabel": "验证项目",
+                "fieldCode": "validationSummary[].field1", "dataType": "string",
+                "sourceType": "CALCULATED", "sourcePath": "$.validationSummary[*].field1",
+                "repeatType": "ROW", "calculationRule": "DOMAIN_FORMULA", "enabled": True,
+            })
+            ensure_lims_catalog_defaults(database)
+            repository._annotate_lims_rules()
+
+            fields = {item["fieldCode"]: item for item in database.list_lims_fields()}
+            self.assertEqual(fields["validationSummary.field1"]["label"], "验证项目")
+            self.assertEqual(
+                fields["validationSummary.acceptanceCriteria"]["label"], "接受标准",
+            )
+            rules = database.list_lims_parser_rules("validationSummary.field1")
+            self.assertEqual(rules[0]["config"]["parserProfile"], "VALIDATION_SUMMARY_TABLE")
+            self.assertIn("试", rules[0]["sectionPattern"])
+            mapping = repository.list_mappings()[0]
+            self.assertEqual(mapping["sourceType"], "LIMS")
+            self.assertEqual(mapping["standardFieldCode"], "validationSummary.field1")
+            catalog = repository.standard_field_catalog()
+            self.assertEqual(catalog["chapters"][0]["fields"][0]["label"], "验证项目")
+
     def test_seed_localizes_display_group_without_changing_collection_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "catalog.db")
@@ -156,14 +333,15 @@ class LimsFieldCatalogTest(unittest.TestCase):
                 "description": "", "outputFormat": "", "defaultValue": "",
                 "validationRegex": "", "orderNo": 1, "enabled": True,
             })
-            database.save_lims_extraction_rule({
+            database.save_system_field_rule({
                 "fieldCode": "systemSuitability.peakArea", "name": "已有标准数据路径",
-                "sourceType": "NORMALIZED_PATH", "sourcePath": "$.systemSuitability[*].peakArea",
-                "transform": "TRIM", "priority": 100, "config": {}, "enabled": True,
+                "sourceType": "LIMS", "transform": "TRIM", "priority": 100,
+                "config": {"extractionType": "NORMALIZED_PATH",
+                           "sourcePath": "$.systemSuitability[*].peakArea"}, "enabled": True,
             })
             repository = RuleAdminRepository(database, Path(directory) / "unused.json")
-            repository._annotate_lims_extraction_rules()
-            rule = database.list_lims_extraction_rules("systemSuitability.peakArea")[0]
+            repository._annotate_lims_rules()
+            rule = database.list_lims_parser_rules("systemSuitability.peakArea")[0]
             self.assertEqual(rule["name"], "HTML 表格解析 → 标准字段")
             self.assertEqual(rule["config"]["parser"], "HTML_TABLE_GRID")
             self.assertEqual(rule["config"]["parserProfile"], "SYSTEM_SUITABILITY_MATRIX")
@@ -171,7 +349,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
             self.assertEqual(rule["config"]["outputField"], "peakArea")
             self.assertIn("保留时间", rule["headerPattern"])
 
-    def test_field_and_extraction_rule_crud(self) -> None:
+    def test_field_and_system_rule_crud(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "catalog.db")
             database.initialize()
@@ -186,14 +364,14 @@ class LimsFieldCatalogTest(unittest.TestCase):
                 "enabled": True,
             })
             self.assertEqual(field["description"], "供试品生产批号")
-            rule = database.save_lims_extraction_rule({
+            rule = database.save_system_field_rule({
                 "fieldCode": field["fieldCode"], "name": "原始样品批号",
-                "sourceType": "RAW_UNIT_FIELD", "sourceUnitType": "Sample",
-                "sourcePath": "batchNo", "transform": "TRIM", "priority": 10,
-                "config": {}, "enabled": True,
+                "sourceType": "LIMS", "transform": "TRIM", "priority": 10,
+                "config": {"extractionType": "RAW_UNIT_FIELD", "sourceUnitType": "Sample",
+                           "sourcePath": "batchNo"}, "enabled": True,
             })
-            self.assertEqual(database.list_lims_extraction_rules(field["fieldCode"])[0]["id"], rule["id"])
-            self.assertTrue(database.delete_lims_extraction_rule(rule["id"]))
+            self.assertEqual(database.list_system_field_rules(field["fieldCode"])[0]["id"], rule["id"])
+            self.assertTrue(database.delete_system_field_rule(rule["id"]))
             self.assertTrue(database.delete_lims_field(field["fieldCode"]))
 
     def test_raw_unit_rule_writes_many_standard_values(self) -> None:
@@ -236,7 +414,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
             database = Database(Path(directory) / "preview.db")
             database.initialize()
             imported = database.create_lims_import({
-                "id": "import-1", "file_name": "lims.xlsx", "stored_name": "lims.xlsx",
+                "id": "import-1", "file_name": "Oracle 查询：XM-1", "stored_name": "",
                 "size": 100, "summary": {}, "created_at": "2026-07-25T08:00:00+00:00",
             })
             database.replace_lims_instance(
@@ -264,7 +442,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
             self.assertEqual(preview["recognizedTotal"], 2)
             self.assertEqual(preview["items"][0]["value"], ["B-001", "B-002"])
             self.assertEqual(len(preview["items"][0]["recordKeys"]), 2)
-            self.assertEqual(preview["items"][0]["fileName"], "lims.xlsx")
+            self.assertEqual(preview["items"][0]["fileName"], "Oracle 查询：XM-1")
             source = database.get_lims_field_source(
                 {"fieldCode": "samples.batchNo", "collectionCode": "samples"},
                 imported["id"], "EXP-1", preview["items"][0]["recordKey"],
@@ -286,6 +464,29 @@ class LimsFieldCatalogTest(unittest.TestCase):
             self.assertEqual(len(instance_source["source"]["unitGroups"][0]["recognizedItems"]), 2)
             self.assertEqual(len(instance_source["source"]["unitGroups"][0]["sourceItems"]), 2)
 
+    def test_workbench_payload_is_rebuilt_from_persisted_standard_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "workbench.db")
+            database.initialize()
+            database.create_lims_import({
+                "id": "import-1", "file_name": "Oracle 查询：P1", "stored_name": "",
+                "size": 0, "summary": {}, "created_at": "2026-07-25T08:00:00+00:00",
+            })
+            database.replace_lims_instance(
+                "import-1",
+                {"instanceId": "EXP-1", "projectId": "P1", "title": "实验一",
+                 "rawStructured": [{"unitType": "Sample", "data": {"batchNo": "RAW"}}]},
+                {"project": {"id": "P1", "name": "项目一"}, "document": {"code": "D1"},
+                 "samples": [{"batchNo": "RULE-VALUE", "evidence": {"unitId": "U1"}}]},
+                ["samples"],
+            )
+
+            payload = database.get_lims_normalized_payload("import-1", "EXP-1")
+
+            self.assertEqual(payload["samples"][0]["batchNo"], "RULE-VALUE")
+            self.assertEqual(payload["samples"][0]["evidence"]["unitId"], "U1")
+            self.assertNotIn("rawStructured", payload)
+
     def test_preview_deduplicates_reimported_lims_instance_and_keeps_latest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "preview.db")
@@ -295,7 +496,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
                 ("import-new", "2026-07-26T08:00:00+00:00", "NEW-001"),
             ):
                 database.create_lims_import({
-                    "id": import_id, "file_name": "lims.xlsx", "stored_name": "lims.xlsx",
+                    "id": import_id, "file_name": f"Oracle 查询：{import_id}", "stored_name": "",
                     "size": 100, "summary": {}, "created_at": created_at,
                 })
                 database.replace_lims_instance(

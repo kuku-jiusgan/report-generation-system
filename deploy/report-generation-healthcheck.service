@@ -1,0 +1,7 @@
+[Unit]
+Description=Report Generation System health check
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/zoutengda/report-generation-system/scripts/service-healthcheck.sh

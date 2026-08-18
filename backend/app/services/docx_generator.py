@@ -4,19 +4,11 @@ from pathlib import Path
 
 from lxml import etree
 
+from .report_fields import REPORT_FIELD_BINDINGS
+
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
-
-
-FIELD_ALIASES = {
-    "project.name": "project_name",
-    "document.code": "report_no",
-    "reportHeader.reportNo": "report_no",
-    "reportHeader.customer": "customer",
-    "reportHeader.sample": "sample",
-    "reportHeader.conclusion": "conclusion",
-}
 
 
 def _replace_content_controls(xml_bytes: bytes, values: dict[str, str]) -> bytes:
@@ -59,7 +51,7 @@ def generate_docx(template_path: Path, output: Path, data: dict) -> None:
         _create_simple_document(output, data)
         return
 
-    values = {tag: str(data.get(field) or "") for tag, field in FIELD_ALIASES.items()}
+    values = {tag: str(data.get(field) or "") for tag, field in REPORT_FIELD_BINDINGS.items()}
     with zipfile.ZipFile(template_path, "r") as source, zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target:
         for item in source.infolist():
             content = source.read(item.filename)
