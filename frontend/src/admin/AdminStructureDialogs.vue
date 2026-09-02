@@ -38,20 +38,20 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
         <el-form-item label="内容块名称"><el-input v-model="block.title" placeholder="例如：对照品表格" /></el-form-item>
         <el-form-item label="内容块类型"><el-select v-model="block.kind"><el-option v-for="item in blockKindOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
       </div>
-      <template v-if="!block.standardGroupCode && ['REPEATING_TABLE', 'MATRIX', 'TABLE_REPEAT'].includes(block.kind || '')">
-        <div class="form-inline">
+      <template v-if="block.standardGroupCode || ['REPEATING_TABLE', 'MATRIX', 'TABLE_REPEAT'].includes(block.kind || '')">
+        <div v-if="!block.standardGroupCode" class="form-inline">
           <el-form-item label="循环数据集合"><el-input v-model="block.sourcePath" placeholder="例如：$.referenceStandards[*]" /></el-form-item>
           <el-form-item label="Word 表格编号"><el-input v-model="block.tableNo" placeholder="例如：T5" /></el-form-item>
         </div>
-        <div class="form-inline">
+        <div v-if="!block.standardGroupCode" class="form-inline">
           <el-form-item label="Word 原型行位置"><el-input v-model="block.prototypeLocation" placeholder="例如：body.T5.dataRow" /></el-form-item>
           <el-form-item label="记录唯一键"><el-input v-model="block.repeatKey" placeholder="例如：recordId" /></el-form-item>
         </div>
-        <div class="form-inline">
+        <div v-if="!block.standardGroupCode" class="form-inline">
           <el-form-item label="去重字段"><el-input v-model="block.dedupKey" placeholder="例如：batchNo" /></el-form-item>
           <el-form-item label="排序规则"><el-input v-model="block.sortRule" placeholder="例如：name ASC, batchNo ASC" /></el-form-item>
         </div>
-        <div class="form-inline">
+        <div v-if="!block.standardGroupCode" class="form-inline">
           <el-form-item label="无数据时"><el-select v-model="block.emptyBehavior"><el-option label="保留一行并清空" value="KEEP" /><el-option label="隐藏数据行" value="HIDE" /></el-select></el-form-item>
           <el-form-item label="单元格合并"><el-select v-model="block.mergeRule"><el-option label="不自动合并" value="NONE" /><el-option label="相同值纵向合并" value="VERTICAL_BY_VALUE" /></el-select></el-form-item>
         </div>
