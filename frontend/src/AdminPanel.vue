@@ -106,7 +106,7 @@ async function detectCurrentTable() {
     ElMessage.success(`已确认第 ${index} 张表格`)
   } catch (error) {
     if (String(error).includes('cancel')) return
-    ElMessage.error('当前 OnlyOffice 版本不支持自动识别表格，请手动填写序号')
+    ElMessage.error('OnlyOffice 插件无法读取当前表格序号。请先将光标放入表格单元格；若仍失败，请手动填写正文表格序号')
   } finally {
     detectingTable.value = false
   }
