@@ -362,6 +362,12 @@ async function bindCurrentWordPosition(mapping: MappingRule) {
       controlTag: tag,
       locationId: identifiers.locationId,
     });
+    // 绑定成功后同步当前编辑草稿，避免随后点击“保存字段配置”用旧的空标签覆盖绑定。
+    if (mappingDraft.value?.id === mapping.id) {
+      mappingDraft.value.controlTag = updated.controlTag;
+      mappingDraft.value.locationId = updated.locationId;
+      mappingDraft.value.fieldCode = updated.fieldCode;
+    }
     if (oldControl && controlId(oldControl) !== controlId(created)) {
       if (hasConnector()) await execWord("RemoveContentControl", [controlId(oldControl)]);
       else await requestPluginUnbind(controlId(oldControl));
