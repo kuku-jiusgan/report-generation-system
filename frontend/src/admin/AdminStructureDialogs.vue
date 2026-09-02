@@ -46,7 +46,7 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
           <el-form-item label="单元格合并"><el-select v-model="block.mergeRule"><el-option label="不自动合并" value="NONE" /><el-option label="相同值纵向合并" value="VERTICAL_BY_VALUE" /></el-select></el-form-item>
         </div>
         <template v-if="block.tableRule">
-          <div class="section-title">Word 表格布局（生成时按这里的配置填充，不再依赖后台内置规则）</div>
+          <div class="section-title">Word 表格布局</div>
           <div class="form-inline">
             <el-form-item label="Word 正文第几张表格">
               <el-input-number v-model="block.tableRule.physicalTableIndex" :min="0" />
