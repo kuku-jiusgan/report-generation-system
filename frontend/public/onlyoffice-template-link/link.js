@@ -110,10 +110,25 @@
   }
 
   function detectTable(command) {
-    window.Asc.plugin.executeMethod('GetCurrentTableIndex', [], function (result) {
-      var index = typeof result === 'number' ? result : Number(result && result.index)
-      send(index > 0 ? 'table-detect-result' : 'table-detect-error', { nonce: command.nonce, index: index })
-    })
+    var methods = ['GetCurrentTableIndex', 'GetCurrentTable', 'GetCurrentTablePr']
+    function read(result) {
+      var value = result && (result.index || result.Index || result.tableIndex || result.TableIndex)
+      var index = typeof result === 'number' ? result : Number(value)
+      if (index > 0) { send('table-detect-result', { nonce: command.nonce, index: index }); return true }
+      return false
+    }
+    function next(position) {
+      if (position >= methods.length) {
+        send('table-detect-error', { nonce: command.nonce, message: 'OnlyOffice 未返回当前表格序号，请将光标放在目标表格内' })
+        return
+      }
+      try {
+        window.Asc.plugin.executeMethod(methods[position], [], function (result) {
+          if (!read(result)) next(position + 1)
+        })
+      } catch (_) { next(position + 1) }
+    }
+    next(0)
   }
 
   window.addEventListener('message', function (event) {
