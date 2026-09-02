@@ -30,3 +30,11 @@ def register_data_source_routes(router: APIRouter, repository: RuleAdminReposito
     def delete_ai_rule(rule_id: int) -> dict[str, bool]:
         if not repository.delete_ai_rule(rule_id): raise HTTPException(404, 'AI规则不存在')
         repository.save_active_workspace(); return {'deleted': True}
+    @router.post('/ai-rules/test')
+    def test_ai_rule(item: dict[str, Any]) -> dict[str, Any]:
+        inputs = item.get('sampleInputs', {})
+        missing = [field for field in item.get('inputFields', []) if field not in inputs]
+        if missing: return {'success': False, 'missingInputs': missing, 'output': '', 'citations': []}
+        facts = '；'.join(f'{key}={value}' for key, value in inputs.items())
+        return {'success': True, 'mock': True, 'output': f'[AI提供方尚未配置] 已接收结构化事实：{facts}',
+                'citations': list(inputs), 'message': '当前仅验证输入、提示词和输出约束；配置模型提供方后执行真实生成。'}

@@ -19,10 +19,10 @@ from .auth import AuthManager
 from .onlyoffice_callback import assert_document_server_url, callback_status, verified_callback_payload
 from .services.rule_admin import RuleAdminRepository
 from .services.system_field_groups import list_system_field_groups
-from .services.template_compiler import compile_template
 from .services.docx_language import ensure_simplified_chinese
 from .admin_routes.rule_catalog import register_rule_catalog_routes
 from .admin_routes.data_sources import register_data_source_routes
+from .admin_routes.publishing import register_publishing_routes
 from .admin_api_metadata import CHAPTER_TITLES, SECTION_TITLES, chapter_key
 
 
@@ -566,63 +566,6 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
 
     register_rule_catalog_routes(router, repository)
     register_data_source_routes(router, repository)
-
-    @router.post("/ai-rules/test")
-    def test_ai_rule(item: dict[str, Any]) -> dict[str, Any]:
-        inputs = item.get("sampleInputs", {})
-        missing = [field for field in item.get("inputFields", []) if field not in inputs]
-        if missing:
-            return {"success": False, "missingInputs": missing, "output": "", "citations": []}
-        facts = "；".join(f"{key}={value}" for key, value in inputs.items())
-        return {
-            "success": True,
-            "mock": True,
-            "output": f"[AI提供方尚未配置] 已接收结构化事实：{facts}",
-            "citations": list(inputs),
-            "message": "当前仅验证输入、提示词和输出约束；配置模型提供方后执行真实生成。",
-        }
-
-    def run_compile() -> tuple[Path, dict[str, Any]]:
-        snapshot = repository.snapshot()
-        output = compiled_dir / f"report-template-bound-{uuid.uuid4().hex[:8]}.docx"
-        report = compile_template(ensure_draft_template(), output, snapshot["mappings"], snapshot["tableRules"])
-        return output, report
-
-    @router.post("/validate")
-    def validate_rules() -> dict[str, Any]:
-        output, report = run_compile()
-        report["previewTemplate"] = output.name
-        return report
-
-    @router.post("/publish")
-    def publish_rules(item: dict[str, Any] | None = None) -> dict[str, Any]:
-        try:
-            output, report = run_compile()
-            if not report["valid"]:
-                raise HTTPException(422, {"message": "规则校验失败，不能发布", "validation": report})
-            snapshot = repository.snapshot()
-            workspace = repository.active_workspace()
-            version_file = active_draft_template()
-            shutil.copy2(output, version_file)
-            # 保留当前 OnlyOffice 会话的 document key。发布后继续在同一编辑器中绑定字段时，
-            # 强制保存仍需使用该 key；回调保存成功后会按实际回调 key 更新它。
-            return repository.publish_active_template_version(snapshot, report, str(version_file))
-        except HTTPException:
-            raise
-        except Exception as error:
-            raise HTTPException(500, f"发布模板版本失败：{error}") from error
-
-    @router.get("/versions")
-    def list_versions() -> list[dict[str, Any]]:
-        active = repository.active_workspace()
-        return repository.list_template_versions(active["templateId"]) if active else []
-
-    @router.get("/compiled/{file_name}")
-    def download_compiled(file_name: str) -> FileResponse:
-        safe_name = Path(file_name).name
-        path = compiled_dir / safe_name
-        if not path.exists() or path.parent.resolve() != compiled_dir.resolve():
-            raise HTTPException(404, "编译模板不存在")
-        return FileResponse(path, filename=safe_name)
+    register_publishing_routes(router, repository, ensure_draft_template, active_draft_template, compiled_dir)
 
     return router
