@@ -4,7 +4,6 @@ from pathlib import Path
 
 from lxml import etree
 
-from .report_fields import REPORT_FIELD_BINDINGS
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -45,13 +44,15 @@ def _create_simple_document(output: Path, data: dict) -> None:
     document.save(output)
 
 
-def generate_docx(template_path: Path, output: Path, data: dict) -> None:
+def generate_docx(template_path: Path, output: Path, data: dict,
+                  bindings: dict[str, str] | None = None) -> None:
+    """控件标签 → 报告字段的对应关系由调用方按设计器配置传入。"""
     output.parent.mkdir(parents=True, exist_ok=True)
     if not template_path.exists():
         _create_simple_document(output, data)
         return
 
-    values = {tag: str(data.get(field) or "") for tag, field in REPORT_FIELD_BINDINGS.items()}
+    values = {tag: str(data.get(field) or "") for tag, field in (bindings or {}).items()}
     with zipfile.ZipFile(template_path, "r") as source, zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target:
         for item in source.infolist():
             content = source.read(item.filename)

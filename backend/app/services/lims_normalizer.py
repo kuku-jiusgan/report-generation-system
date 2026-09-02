@@ -62,6 +62,18 @@ def _hash(value: Any) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _find_column(headers: list[str], patterns: tuple[str, ...]) -> int | None:
+    for pattern in patterns:
+        for index, header in enumerate(headers):
+            if header == pattern:
+                return index
+    for pattern in patterns:
+        for index, header in enumerate(headers):
+            if pattern in header:
+                return index
+    return None
+
+
 def _table_grid(table: html.HtmlElement) -> list[list[str]]:
     grid: list[list[str]] = []
     spans: dict[int, tuple[int, str]] = {}
@@ -192,9 +204,14 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
 
     if profile_enabled("SOLUTION_PREPARATION_TABLE") and (("配制方法" in header and ("溶液名称" in header or "名称" in header)) or header.startswith("名称|溶液配制")):
         headers = [_clean(value) for value in rows[0]]
+        # 列定位必须与进入条件可互相印证：精确优先、子串兜底；定位失败则不认领该表
+        name_index = _find_column(headers, ("溶液名称",))
+        if name_index is None:
+            name_index = next((index for index, value in enumerate(headers) if value == "名称"), None)
+        preparation_index = _find_column(headers, ("配制方法",))
+        if name_index is None or preparation_index is None:
+            return False
         project_index = headers.index("验证项目") if "验证项目" in headers else None
-        name_index = headers.index("溶液名称") if "溶液名称" in headers else headers.index("名称")
-        preparation_index = headers.index("配制方法") if "配制方法" in headers else 1
         project = ""
         for row in rows[1:]:
             if len(row) < 2:
@@ -229,17 +246,17 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
                     result["lod"][-1]["conclusion"] = _clean(row[1] if len(row) > 1 else "")
                 continue
             if _clean(row[0]):
-                result["lod"].append(_record({"name": _clean(row[0]), "field2": _clean(row[1]),
-                    "field3": _clean(row[2]), "field4": _clean(row[3]), "field5": _clean(row[4]),
-                    "field6": _clean(row[5]), "field7": _clean(row[6]), "conclusion": ""}, evidence))
+                result["lod"].append(_record({"name": _clean(row[0]), "field2": _at(row, 1),
+                    "field3": _at(row, 2), "field4": _at(row, 3), "field5": _at(row, 4),
+                    "field6": _at(row, 5), "field7": _at(row, 6), "conclusion": ""}, evidence))
         return True
 
     if "信噪比" in header and "定量限" in header and "峰面积" in header:
         for row in rows[1:]:
             if _clean(row[0]) and _clean(row[0]) != "结论":
-                result["loq"].append(_record({"sequence": _clean(row[0]), "field2": _clean(row[1]),
-                    "peakArea": _clean(row[2]), "field4": _clean(row[3]), "field5": _clean(row[4]),
-                    "field6": _clean(row[5]), "field7": _clean(row[6])}, evidence))
+                result["loq"].append(_record({"sequence": _clean(row[0]), "field2": _at(row, 1),
+                    "peakArea": _at(row, 2), "field4": _at(row, 3), "field5": _at(row, 4),
+                    "field6": _at(row, 5), "field7": _at(row, 6)}, evidence))
         return True
 
     if "溶液名称" in header and "C1" in header and "峰面积" in first_three:
@@ -275,6 +292,7 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
                 if impurity and (retention or peak_area):
                     result["systemSuitability"].append(_record({
                         "sequence": f"{impurity}-{sequence}" if impurity else sequence,
+                        "injectionId": sequence, "impurityName": impurity,
                         "retentionTime": retention, "peakArea": peak_area,
                     }, evidence))
                 column += 2
@@ -286,8 +304,8 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
             current_impurity = _clean(row[0]) or current_impurity
             if len(row) > 1 and _clean(row[1]):
                 result["specificity"].append(_record({"impurityName": current_impurity,
-                    "solutionName": _clean(row[1]), "retentionTime": _clean(row[2]),
-                    "peakArea": _clean(row[3])}, evidence))
+                    "solutionName": _clean(row[1]), "retentionTime": _at(row, 2),
+                    "peakArea": _at(row, 3)}, evidence))
         return True
 
     if "人员/日期" in header and "No." in header and "峰面积" in header:
@@ -295,17 +313,17 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
         current_person = ""
         for row in rows[1:]:
             current_person = _clean(row[0]) or current_person
-            result[target].append(_record({"field1": current_person, "sequence": _clean(row[1]),
-                "field3": _clean(row[2]), "retentionTime": _clean(row[3]), "peakArea": _clean(row[4]),
-                "field6": _clean(row[5]), "field7": _clean(row[6])}, evidence))
+            result[target].append(_record({"field1": current_person, "sequence": _at(row, 1),
+                "field3": _at(row, 2), "retentionTime": _at(row, 3), "peakArea": _at(row, 4),
+                "field6": _at(row, 5), "field7": _at(row, 6)}, evidence))
         return True
 
     if ("No." in header or header.startswith("No|")) and "保留时间" in header and "峰面积" in header and "浓度" in header:
         target = "intermediatePrecision" if "中间精密度" in instance.get("title", "") else "repeatability"
         for row in rows[1:]:
-            result[target].append(_record({"sequence": _clean(row[0]), "field2": _clean(row[1]),
-                "retentionTime": _clean(row[2]), "peakArea": _clean(row[3]),
-                "field5": _clean(row[4]), "field6": _clean(row[5])}, evidence))
+            result[target].append(_record({"sequence": _clean(row[0]), "field2": _at(row, 1),
+                "retentionTime": _at(row, 2), "peakArea": _at(row, 3),
+                "field5": _at(row, 4), "field6": _at(row, 5)}, evidence))
         return True
 
     if "杂质名称" in header and "平均含量" in header:
@@ -330,26 +348,26 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
     if "时间" in header and ("对照品溶液" in header or "100%加标" in header):
         for row in rows[2 if len(rows) > 1 and "浓度" in "|".join(rows[1]) else 1:]:
             result["solutionStability"].append(_record({"timePoint": _clean(row[0]),
-                "field2": _clean(row[1]), "field3": _clean(row[2]), "field4": _clean(row[3]),
-                "field5": _clean(row[4])}, evidence))
+                "field2": _at(row, 1), "field3": _at(row, 2), "field4": _at(row, 3),
+                "field5": _at(row, 4)}, evidence))
         return True
 
     if profile_enabled("ROBUSTNESS_SPECIFICITY_TABLE") and "溶液名称" in header and "色谱柱1" in header and "色谱柱2" in header:
         for row in rows[1:]:
             result["robustnessSpecificity"].append(_record({"solutionName": _clean(row[0]),
-                "field2": _clean(row[1]), "field3": _clean(row[2])}, evidence))
+                "field2": _at(row, 1), "field3": _at(row, 2)}, evidence))
         return True
 
     if profile_enabled("ROBUSTNESS_SEQUENCE_TABLE") and "溶液" in header and "进样针数" in header and "接受标准" in header:
         for row in rows[1:]:
             result["robustnessSequence"].append(_record({"field1": _clean(row[0]),
-                "field2": _clean(row[1]), "acceptanceCriteria": _clean(row[2])}, evidence))
+                "field2": _at(row, 1), "acceptanceCriteria": _at(row, 2)}, evidence))
         return True
 
     if ("溶液|结果" in header or "溶液|结论" in header) and "实验设计" not in path:
         for row in rows[1:]:
             result["robustnessResult"].append(_record({"field1": _clean(row[0]),
-                                                        "field2": _clean(row[1])}, evidence))
+                                                        "field2": _at(row, 1)}, evidence))
         return True
 
     if "实验设计" in path and "溶液" in header and "接受标准" in header:
@@ -368,12 +386,12 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
                 for index, batch in enumerate(batches):
                     result["sampleResults"].append(_record({"name": _clean(impurity_row[0]),
                         "batchNo": _clean(batch), "field3": _clean(concentration[index] if index < len(concentration) else ""),
-                        "peakArea": "", "field5": "", "content": _clean(impurity_row[index + 1])}, evidence))
+                        "peakArea": "", "field5": "", "content": _at(impurity_row, index + 1)}, evidence))
         else:
             for row in rows[1:]:
-                result["sampleResults"].append(_record({"name": _clean(row[1]), "batchNo": _clean(row[2]),
-                    "field3": _clean(row[3]), "peakArea": _clean(row[4]), "field5": "",
-                    "content": _clean(row[5])}, evidence))
+                result["sampleResults"].append(_record({"name": _at(row, 1), "batchNo": _at(row, 2),
+                    "field3": _at(row, 3), "peakArea": _at(row, 4), "field5": "",
+                    "content": _at(row, 5)}, evidence))
         return True
 
     return False
@@ -567,6 +585,8 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
                 merged.append(selected)
         payload[collection] = merged
     payload["validationSummary"] = sort_validation_summary(payload.get("validationSummary", []))
+    payload["lodConclusion"] = next((item.get("conclusion", "") for item in payload.get("lod", [])
+                                     if item.get("conclusion")), "")
     for source in normalized_instances:
         payload["instances"].extend(source["instances"])
         payload["unmatched"].extend(source["unmatched"])

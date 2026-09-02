@@ -86,24 +86,65 @@ export function useChapterBlockEditor(options: EditorOptions) {
       orderNo: options.selectedChapter.value.blocks.length,
       enabled: true,
     }
+    const draft = blockDraft.value
+    if (block?.standardGroupCode && draft && !draft.tableRule) {
+      draft.tableRule = {
+        tableNo: '', sectionCode: options.selectedChapter.value.code, mode: 'STATIC',
+        headerRows: 1, dataRowStart: 2, dataRowEnd: 2, footerRows: 0, recordKey: '', mergeFields: [],
+        physicalTableIndex: 0, preservedRowLabels: [], clearEmbeddedObjects: false, matrixLayout: '',
+        groupKey: block.standardGroupCode, innerMode: 'ROW_REPEAT', enabled: true, notes: '', updatedAt: '',
+      }
+    }
     blockDialog.value = true
   }
 
+  function invalidMatrixLayout(draft: Partial<DesignerBlock>): string {
+    const matrixMode = draft.tableRule?.mode === 'MATRIX'
+      || (draft.tableRule?.mode === 'TABLE_REPEAT' && draft.tableRule?.innerMode === 'MATRIX')
+    if (!matrixMode) return ''
+    const layout = draft.tableRule?.matrixLayout?.trim()
+    if (!layout) return ''
+    try {
+      JSON.parse(layout)
+      return ''
+    } catch (error) {
+      return `矩阵版式不是合法 JSON：${(error as Error).message}`
+    }
+  }
+
   async function saveBlock() {
-    if (!blockDraft.value?.title?.trim()) return ElMessage.warning('内容块名称不能为空')
-    const repeating = ['REPEATING_TABLE', 'MATRIX'].includes(blockDraft.value.kind || '')
+    if (!blockDraft.value?.standardGroupCode && !blockDraft.value?.title?.trim()) return ElMessage.warning('内容块名称不能为空')
+    const layout = blockDraft.value.tableRule
+    if (blockDraft.value.standardGroupCode && layout?.mode !== 'STATIC' && !(layout?.physicalTableIndex || blockDraft.value.tableNo)) {
+      return ElMessage.warning('自动填充模式必须设置 Word 表格序号')
+    }
+    if (blockDraft.value.standardGroupCode && layout?.mode === 'ROW_REPEAT' && !layout.dataRowStart) {
+      return ElMessage.warning('按行向下扩展必须设置原型数据行')
+    }
+    const repeating = !blockDraft.value.standardGroupCode && ['REPEATING_TABLE', 'MATRIX', 'TABLE_REPEAT'].includes(blockDraft.value.kind || '')
     if (repeating && !blockDraft.value.sourcePath?.trim()) return ElMessage.warning('循环表格必须设置数据集合')
+    if (blockDraft.value.standardGroupCode && blockDraft.value.tableRule?.mode === 'TABLE_REPEAT' && !blockDraft.value.tableRule?.groupKey?.trim()) {
+      return ElMessage.warning('按分组复制整表必须设置分组字段')
+    }
+    const layoutError = invalidMatrixLayout(blockDraft.value)
+    if (layoutError) return ElMessage.warning(layoutError)
     options.saving.value = true
     try {
-      const saved = blockDraft.value.id
+      // Word 表格布局与内容块一起保存，避免设计器里改了布局却没落库
+      if (blockDraft.value.tableRule?.tableNo && !blockDraft.value.standardGroupCode) {
+        await adminApi.updateTable(blockDraft.value.tableRule.tableNo, blockDraft.value.tableRule)
+      }
+      const saved = blockDraft.value.standardGroupCode
+        ? await adminApi.saveTemplateBlock(blockDraft.value.standardGroupCode, blockDraft.value)
+        : blockDraft.value.id
         ? await adminApi.updateContentBlock(blockDraft.value.id, blockDraft.value)
         : await adminApi.createContentBlock(blockDraft.value)
       blockDialog.value = false
       await options.reload()
       const chapter = flatten(options.designer.value?.chapters || []).find((item) => item.id === saved.chapterId)
-      const block = chapter?.blocks.find((item) => item.id === saved.id)
+      const block = chapter?.blocks.find((item) => item.id === saved.id || item.standardGroupCode === blockDraft.value?.standardGroupCode)
       if (chapter && block) options.selectBlock(chapter, block, false)
-      ElMessage.success(blockDraft.value.id ? '内容块已保存' : '内容块已新增')
+      ElMessage.success('模板布局已保存')
     } catch (error) {
       ElMessage.error(adminErrorText(error))
     } finally {

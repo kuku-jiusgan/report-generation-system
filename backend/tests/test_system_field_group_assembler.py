@@ -1,4 +1,4 @@
-from app.services.system_field_group_assembler import apply_group_contracts
+from backend.app.services.system_field_group_assembler import apply_group_contracts
 
 
 def test_many_group_preserves_record_pairing_and_evidence():

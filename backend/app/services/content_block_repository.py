@@ -35,12 +35,12 @@ class ContentBlockRepositoryMixin:
     def reorder_content_blocks(self, chapter_id: int, block_ids: list[int]) -> list[dict[str, Any]]:
         with self.database.connect() as connection:
             existing = [int(row["id"]) for row in connection.execute(
-                "SELECT id FROM admin_content_blocks WHERE chapter_id=? ORDER BY order_no,id", (chapter_id,),
+                "SELECT id FROM admin_content_blocks WHERE chapter_id=%s ORDER BY order_no,id", (chapter_id,),
             ).fetchall()]
             if len(block_ids) != len(existing) or set(block_ids) != set(existing):
                 raise ValueError("内容块顺序与当前章节不一致，请刷新后重试")
             connection.executemany(
-                "UPDATE admin_content_blocks SET order_no=?,updated_at=? WHERE id=?",
+                "UPDATE admin_content_blocks SET order_no=%s,updated_at=%s WHERE id=%s",
                 [(order_no, now_iso(), block_id) for order_no, block_id in enumerate(block_ids)],
             )
         return [item for item in self.list_content_blocks() if item["chapterId"] == chapter_id]
@@ -48,12 +48,12 @@ class ContentBlockRepositoryMixin:
     def reorder_block_mappings(self, block_id: int, mapping_ids: list[int]) -> list[int]:
         with self.database.connect() as connection:
             existing = [int(row["mapping_id"]) for row in connection.execute(
-                "SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=? ORDER BY order_no,mapping_id", (block_id,),
+                "SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=%s ORDER BY order_no,mapping_id", (block_id,),
             ).fetchall()]
             if len(mapping_ids) != len(existing) or set(mapping_ids) != set(existing):
                 raise ValueError("字段顺序与当前内容块不一致，请刷新后重试")
             connection.executemany(
-                "UPDATE admin_mapping_blocks SET order_no=? WHERE mapping_id=? AND block_id=?",
+                "UPDATE admin_mapping_blocks SET order_no=%s WHERE mapping_id=%s AND block_id=%s",
                 [(order_no, mapping_id, block_id) for order_no, mapping_id in enumerate(mapping_ids)],
             )
         return mapping_ids
@@ -63,13 +63,13 @@ class ContentBlockRepositoryMixin:
             order_no = item.get("orderNo")
             if order_no is None:
                 order_no = connection.execute(
-                    "SELECT COALESCE(MAX(order_no),-1)+1 FROM admin_content_blocks WHERE chapter_id=?",
+                    "SELECT COALESCE(MAX(order_no),-1)+1 FROM admin_content_blocks WHERE chapter_id=%s",
                     (item["chapterId"],),
                 ).fetchone()[0]
             cursor = connection.execute(
                 """INSERT INTO admin_content_blocks(chapter_id,title,kind,table_no,source_path,repeat_key,
                    prototype_location,dedup_key,sort_rule,empty_behavior,merge_rule,order_no,enabled,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (item["chapterId"], item["title"], item.get("kind", "MAPPED_FIELD"), item.get("tableNo", ""),
                  item.get("sourcePath", ""), item.get("repeatKey", ""), item.get("prototypeLocation", ""),
                  item.get("dedupKey", ""), item.get("sortRule", ""), item.get("emptyBehavior", "KEEP"),
@@ -89,36 +89,36 @@ class ContentBlockRepositoryMixin:
         values["updated_at"] = now_iso()
         with self.database.connect() as connection:
             connection.execute(
-                f"UPDATE admin_content_blocks SET {','.join(f'{key}=?' for key in values)} WHERE id=?",
+                f"UPDATE admin_content_blocks SET {','.join(f'{key}=%s' for key in values)} WHERE id=%s",
                 (*values.values(), block_id),
             )
-            row = connection.execute("SELECT kind FROM admin_content_blocks WHERE id=?", (block_id,)).fetchone()
+            row = connection.execute("SELECT kind FROM admin_content_blocks WHERE id=%s", (block_id,)).fetchone()
             if not row:
                 return None
             kind = item.get("kind") or row[0]
             if kind in {"REPEATING_TABLE", "MATRIX"}:
                 connection.execute(
-                    """UPDATE admin_mapping_rules SET table_no=?,repeat_type='ROW',repeat_key=?,updated_at=?
-                       WHERE id IN (SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=?)""",
+                    """UPDATE admin_mapping_rules SET table_no=%s,repeat_type='ROW',repeat_key=%s,updated_at=%s
+                       WHERE id IN (SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=%s)""",
                     (item.get("tableNo", ""), item.get("repeatKey", ""), now_iso(), block_id),
                 )
             elif "kind" in item:
                 connection.execute(
-                    """UPDATE admin_mapping_rules SET repeat_type='NONE',repeat_key='',updated_at=?
-                       WHERE id IN (SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=?)""",
+                    """UPDATE admin_mapping_rules SET repeat_type='NONE',repeat_key='',updated_at=%s
+                       WHERE id IN (SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=%s)""",
                     (now_iso(), block_id),
                 )
         return next((value for value in self.list_content_blocks() if value["id"] == block_id), None)
 
     def delete_content_block(self, block_id: int, delete_mappings: bool = True) -> bool:
         with self.database.connect() as connection:
-            row = connection.execute("SELECT id FROM admin_content_blocks WHERE id=?", (block_id,)).fetchone()
+            row = connection.execute("SELECT id FROM admin_content_blocks WHERE id=%s", (block_id,)).fetchone()
             if not row:
                 return False
             if delete_mappings:
                 connection.execute(
-                    "DELETE FROM admin_mapping_rules WHERE id IN (SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=?)",
+                    "DELETE FROM admin_mapping_rules WHERE id IN (SELECT mapping_id FROM admin_mapping_blocks WHERE block_id=%s)",
                     (block_id,),
                 )
-            connection.execute("DELETE FROM admin_content_blocks WHERE id=?", (block_id,))
+            connection.execute("DELETE FROM admin_content_blocks WHERE id=%s", (block_id,))
         return True

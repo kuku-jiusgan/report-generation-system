@@ -2,7 +2,6 @@ from collections import defaultdict
 from typing import Any
 
 from ..database import now_iso
-from .report_fields import report_binding_code
 from .system_field_groups import ensure_system_field_groups, list_system_field_groups
 
 
@@ -50,7 +49,8 @@ class ChapterRepositoryMixin:
                 continue
             fields[int(chapter_id)].append({
                 "id": mapping["id"], "wordLabel": mapping["wordLabel"],
-                "fieldCode": mapping["fieldCode"], "bindingCode": report_binding_code(mapping["fieldCode"]),
+                "fieldCode": mapping["fieldCode"],
+                "bindingCode": str(mapping.get("reportBindingCode") or "") or mapping["fieldCode"],
                 "sourceType": mapping["sourceType"], "sourcePath": mapping.get("sourcePath", ""),
                 "repeatType": mapping.get("repeatType", "NONE"), "tableNo": mapping.get("tableNo", ""),
                 "controlTag": mapping.get("controlTag", ""), "orderNo": mapping["id"],
@@ -90,10 +90,8 @@ class ChapterRepositoryMixin:
                    FOREIGN KEY(chapter_id) REFERENCES admin_template_chapters(id) ON DELETE CASCADE)"""
             )
             links = connection.execute(
-                """SELECT DISTINCT mc.chapter_id,m.standard_field_code FROM admin_mapping_chapters mc
-                   JOIN admin_mapping_rules m ON m.id=mc.mapping_id
-                   WHERE COALESCE(m.standard_field_code,'')<>''
-                   UNION SELECT chapter_id,field_code FROM system_field_chapters
+                """SELECT DISTINCT chapter_id,field_code AS standard_field_code
+                   FROM system_field_chapters
                    ORDER BY chapter_id"""
             ).fetchall()
         codes: dict[int, set[str]] = defaultdict(set)
@@ -116,12 +114,12 @@ class ChapterRepositoryMixin:
         with self.database.connect() as connection:
             cursor = connection.execute(
                 """INSERT INTO admin_template_chapters(parent_id,code,title,page_hint,order_no,enabled,updated_at)
-                   VALUES(?,?,?,?,?,?,?)""",
+                   VALUES(%s,%s,%s,%s,%s,%s,%s)""",
                 (item.get("parentId"), item["code"], item["title"], item.get("pageHint"),
                  item.get("orderNo", 999), int(item.get("enabled", True)), now_iso()),
             )
             row = connection.execute(
-                "SELECT * FROM admin_template_chapters WHERE id=?", (cursor.lastrowid,),
+                "SELECT * FROM admin_template_chapters WHERE id=%s", (cursor.lastrowid,),
             ).fetchone()
         return self._chapter_to_api(dict(row))
 
@@ -135,13 +133,13 @@ class ChapterRepositoryMixin:
         values["updated_at"] = now_iso()
         with self.database.connect() as connection:
             connection.execute(
-                f"UPDATE admin_template_chapters SET {','.join(f'{key}=?' for key in values)} WHERE id=?",
+                f"UPDATE admin_template_chapters SET {','.join(f'{key}=%s' for key in values)} WHERE id=%s",
                 (*values.values(), chapter_id),
             )
-            row = connection.execute("SELECT * FROM admin_template_chapters WHERE id=?", (chapter_id,)).fetchone()
+            row = connection.execute("SELECT * FROM admin_template_chapters WHERE id=%s", (chapter_id,)).fetchone()
         return self._chapter_to_api(dict(row)) if row else None
 
     def delete_template_chapter(self, chapter_id: int) -> bool:
         with self.database.connect() as connection:
-            cursor = connection.execute("DELETE FROM admin_template_chapters WHERE id=?", (chapter_id,))
+            cursor = connection.execute("DELETE FROM admin_template_chapters WHERE id=%s", (chapter_id,))
         return cursor.rowcount > 0

@@ -1,9 +1,10 @@
 import hashlib
 import json
+import logging
 import shutil
 import time
 import urllib.request
-import logging
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +15,7 @@ from fastapi.responses import FileResponse
 from .auth import AuthManager
 from .config import Settings
 from .database import Database, now_iso
+from .onlyoffice_callback import assert_document_server_url, callback_status, verified_callback_payload
 from .report_utils import has_custom_report_title, resolved_report_title
 from .services.rule_admin import RuleAdminRepository
 from .services.word_sync import read_bound_values
@@ -25,7 +27,7 @@ def create_report_word_router(
     database: Database, settings: Settings, auth: AuthManager, rule_admin: RuleAdminRepository,
     required_report: Callable[[str], dict[str, Any]],
     required_owned_report: Callable[[str, dict[str, Any]], dict[str, Any]],
-    runtime_template_and_mappings: Callable[[], tuple[Path, list[dict], dict[str, str]]],
+    runtime_template_and_mappings: Callable[[], tuple[Path, list[dict], list[dict], dict[str, str]]],
     render_report_word: Callable[..., str],
     require_automatic_edit_allowed: Callable[[dict[str, Any]], None],
     apply_content_block_rules: Callable[[dict], list[dict]],
@@ -70,7 +72,7 @@ def create_report_word_router(
         path = settings.reports_dir / working_name
         previous_name = item.get("output_name")
         previous_path = settings.reports_dir / previous_name if previous_name else None
-        _, _, template_meta = runtime_template_and_mappings()
+        *_, template_meta = runtime_template_and_mappings()
         template_changed = item["resolved_data"].get("template_revision") != template_meta["template_revision"]
         metadata_changed = any(item["resolved_data"].get(key) != value for key, value in template_meta.items())
         if template_changed and not item.get("word_edit_locked"):
@@ -78,6 +80,8 @@ def create_report_word_router(
             item = database.update_report(
                 item["id"], status="EDITING", output_name=output_name,
                 resolved_data=item["resolved_data"],
+                # 文件已重新渲染，旧编辑会话签发的文档 key 必须失效，防止其回调覆盖新文件
+                onlyoffice_document_key=None,
             )
             return item, settings.reports_dir / output_name
         if metadata_changed and not item.get("word_edit_locked"):
@@ -153,10 +157,14 @@ def create_report_word_router(
             {"purpose": "report-file", "reportId": report_id, "exp": int(time.time()) + 600},
             settings.onlyoffice_jwt_secret, algorithm="HS256",
         )
+        # 文档 key 含文件内容哈希，每次签发后必须落库：回调用它识别当前编辑会话，
+        # 而不是与保存后的文件内容重新比较（那样第二次自动保存起就会被误判为陈旧）
+        doc_key = document_key(report_id, path)
+        item = database.update_report(report_id, onlyoffice_document_key=doc_key)
         config = {
             "document": {
                 "fileType": "docx",
-                "key": document_key(report_id, path),
+                "key": doc_key,
                 "title": f"{item['resolved_data'].get('report_no') or item['title']}.docx",
                 "url": f"{settings.public_base_url}{settings.api_prefix}/reports/{report_id}/file?document_token={file_token}",
                 "permissions": {"edit": True, "download": True, "print": True, "review": True},
@@ -186,39 +194,40 @@ def create_report_word_router(
 
     @router.post(f"{settings.api_prefix}/onlyoffice/callback/{{report_id}}")
     async def onlyoffice_callback(report_id: str, request: Request) -> dict:
+        payload = await verified_callback_payload(request, settings)
+        status = callback_status(payload)
+        if status not in (2, 6):
+            return {"error": 0}
+        assert_document_server_url(payload.get("url"), settings)
         item = required_report(report_id)
-        payload = await request.json()
-        token = payload.get("token")
-        authorization = request.headers.get("authorization", "")
-        if not token and authorization.lower().startswith("bearer "):
-            token = authorization[7:]
-        if settings.onlyoffice_jwt_secret:
-            if not token:
-                raise HTTPException(401, "ONLYOFFICE 回调缺少签名")
-            try:
-                jwt.decode(token, settings.onlyoffice_jwt_secret, algorithms=["HS256"])
-            except jwt.PyJWTError as error:
-                raise HTTPException(401, "ONLYOFFICE 回调签名无效") from error
-
-        status = int(payload.get("status", 0))
-        if status in (2, 6) and payload.get("url"):
-            _, output = ensure_report_file(item)
-            callback_key = str(payload.get("key") or "")
-            if callback_key and callback_key != document_key(report_id, output):
-                return {"error": 0}
-            temp_path = output.with_suffix(".saving.docx")
-            try:
-                with urllib.request.urlopen(payload["url"], timeout=60) as response, temp_path.open("wb") as target:
-                    target.write(response.read())
-                # Validate and extract controls before replacing the known-good working file.
-                snapshot, _ = rule_admin.active_runtime_rules()
-                read_bound_values(temp_path, _apply_content_block_rules(snapshot))
-                temp_path.replace(output)
-                updated = sync_word_fields(item, output)
-                database.create_version(report_id, updated["resolved_data"], "ONLYOFFICE 自动保存")
-            except Exception as error:
-                temp_path.unlink(missing_ok=True)
-                raise HTTPException(502, f"保存 ONLYOFFICE 文件失败：{error}") from error
+        callback_key = str(payload.get("key") or "")
+        if not callback_key:
+            raise HTTPException(400, "ONLYOFFICE 回调缺少文档 key")
+        if not payload.get("url"):
+            raise HTTPException(400, "ONLYOFFICE 回调缺少文件地址")
+        _, output = ensure_report_file(item)
+        # key 必须等于最近一次签发值：既挡住跨报告重放，也挡住陈旧编辑会话的延迟保存。
+        # 必须在 ensure_report_file 之后重新读取——若模板变更触发了重渲染，
+        # 签发记录已被清空，此时保存必须拒绝，不能覆盖新渲染结果
+        refreshed = database.get_report(report_id)
+        issued_key = str((refreshed or {}).get("onlyoffice_document_key") or "")
+        if not issued_key or callback_key != issued_key:
+            logger.warning("ONLYOFFICE 回调文档 key 与签发记录不一致，拒绝保存 report_id=%s", report_id)
+            return {"error": 1}
+        # 唯一临时名：并发的自动保存不能互相截断对方的半截文件
+        temp_path = output.with_name(f"{output.name}.{uuid.uuid4().hex[:8]}.saving.docx")
+        try:
+            with urllib.request.urlopen(payload["url"], timeout=60) as response, temp_path.open("wb") as target:
+                target.write(response.read())
+            # Validate and extract controls before replacing the known-good working file.
+            snapshot, _ = rule_admin.active_runtime_rules()
+            read_bound_values(temp_path, _apply_content_block_rules(snapshot))
+            temp_path.replace(output)
+            updated = sync_word_fields(item, output)
+            database.create_version(report_id, updated["resolved_data"], "ONLYOFFICE 自动保存")
+        except Exception as error:
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(502, f"保存 ONLYOFFICE 文件失败：{error}") from error
         return {"error": 0}
 
     return router

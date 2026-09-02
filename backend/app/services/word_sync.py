@@ -4,7 +4,7 @@ import zipfile
 
 from lxml import etree
 
-from .mapped_docx_generator import NS, REPORT_TAGS
+from .mapped_docx_generator import NS
 
 
 def _control_tag(control: etree._Element) -> str:
@@ -24,6 +24,16 @@ def read_bound_values(path: Path, mappings: list[dict]) -> tuple[dict[str, str |
         str(item.get("controlTag") or ""): str(item.get("fieldCode") or "")
         for item in mappings if item.get("controlTag")
     }
+    # 控件写回哪个报告固定字段，取自映射规则的“报告字段绑定”配置，
+    # 以前是 report_fields 里的常量表，设计器看不到也改不了。
+    report_bindings: dict[str, str] = {}
+    for item in mappings:
+        binding = str(item.get("reportBindingCode") or "")
+        if not binding:
+            continue
+        for key in (str(item.get("controlTag") or ""), str(item.get("fieldCode") or "")):
+            if key:
+                report_bindings[key] = binding
     collected: dict[str, list[str]] = defaultdict(list)
     canonical_candidates: dict[str, list[tuple[int, int, str]]] = defaultdict(list)
     order = 0
@@ -42,10 +52,10 @@ def read_bound_values(path: Path, mappings: list[dict]) -> tuple[dict[str, str |
                 value = _control_text(control)
                 mapped_code = tag_to_field.get(tag) or tag
                 collected[mapped_code].append(value)
-                canonical = REPORT_TAGS.get(tag) or REPORT_TAGS.get(mapped_code)
+                canonical = report_bindings.get(tag) or report_bindings.get(mapped_code)
                 if canonical:
-                    priority = 0 if is_header else (1 if tag == "document.code" or mapped_code == "document.code" else 2)
-                    canonical_candidates[canonical].append((priority, order, value))
+                    # 页眉控件优先，其余按文档顺序取第一个非空值
+                    canonical_candidates[canonical].append((0 if is_header else 1, order, value))
                 order += 1
 
     bound_values: dict[str, str | list[str]] = {

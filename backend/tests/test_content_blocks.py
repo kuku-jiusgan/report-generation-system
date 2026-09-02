@@ -10,6 +10,8 @@ from backend.app.database import Database
 from backend.app.services.mapped_docx_generator import build_mapped_docx
 from backend.app.services.rule_admin import RuleAdminRepository
 from backend.app.services.template_compiler import compile_template
+from backend.app.services.docx_repeat_rows import fill_repeat_rows
+from backend.app.services.table_layout_rules import TableLayoutRules
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -179,6 +181,37 @@ class ContentBlockRegressionTest(unittest.TestCase):
             second_report = compile_template(first_output, second_output, [rebound], snapshot["tableRules"])
             self.assertTrue(second_report["valid"], second_report["errors"])
             self.assertEqual(second_report["success"][0]["action"], "existing-content-control")
+
+    def test_table_repeat_groups_records_and_clones_only_the_table(self) -> None:
+        document = etree.fromstring(f'''<w:document xmlns:w="{NS['w']}"><w:body>
+          <w:p><w:r><w:t>统一接受标准</w:t></w:r></w:p>
+          <w:tbl><w:tr><w:bookmarkStart w:id="1" w:name="repeat_t99_row"/>
+            <w:tc><w:sdt><w:sdtPr><w:tag w:val="result.name"/></w:sdtPr>
+              <w:sdtContent><w:p><w:r><w:t>原型</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc>
+          </w:tr></w:tbl></w:body></w:document>''')
+        mappings = [{
+            "enabled": True, "repeatType": "ROW", "tableNo": "T99",
+            "blockSourcePath": "$.results[*]", "sourcePath": "$.results[*].value",
+            "controlTag": "result.name", "fieldCode": "results[].value",
+        }]
+        rules = TableLayoutRules([{
+            "tableNo": "T99", "mode": "TABLE_REPEAT", "groupKey": "impurityName",
+            "innerMode": "ROW_REPEAT", "preservedRowLabels": [],
+        }])
+        warnings = []
+        fill_repeat_rows(document, mappings, {"results": [
+            {"impurityName": "杂质A", "value": "A-1"},
+            {"impurityName": "杂质A", "value": "A-2"},
+            {"impurityName": "杂质B", "value": "B-1"},
+        ]}, {}, {}, rules, lambda *args: warnings.append(args))
+        tables = document.xpath("./w:body/w:tbl", namespaces=NS)
+        self.assertEqual(len(tables), 2)
+        self.assertIn("A-1", "".join(tables[0].xpath(".//w:t/text()", namespaces=NS)))
+        self.assertIn("A-2", "".join(tables[0].xpath(".//w:t/text()", namespaces=NS)))
+        self.assertNotIn("B-1", "".join(tables[0].xpath(".//w:t/text()", namespaces=NS)))
+        self.assertIn("B-1", "".join(tables[1].xpath(".//w:t/text()", namespaces=NS)))
+        self.assertEqual(document.xpath("count(./w:body/w:p)", namespaces=NS), 1.0)
+        self.assertFalse(warnings)
 
 
 if __name__ == "__main__":

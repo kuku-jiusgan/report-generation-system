@@ -255,13 +255,26 @@ function selectReplaceFile(file: UploadFile) {
 
 async function submitReplaceSource() {
   if (!replaceReport.value || !replaceFile.value) return ElMessage.warning('请选择新的数据源文件')
+  let force = false
+  if (replaceReport.value.word_edit_locked) {
+    try {
+      await ElMessageBox.confirm(
+        '当前 Word 已有人工编辑内容。继续将按新数据源重新生成 Word，现有人工修改会被覆盖。',
+        '确认覆盖人工编辑',
+        { confirmButtonText: '继续替换', cancelButtonText: '取消', type: 'warning' },
+      )
+      force = true
+    } catch {
+      return
+    }
+  }
   actionId.value = replaceReport.value.id
   try {
     const uploaded = replaceType.value === 'EXCEL'
       ? await uploadExcel(replaceFile.value) : await uploadPdf(replaceFile.value)
     if (replaceType.value === 'EXCEL') await extractExcel(uploaded.id)
     else await extractPdf(uploaded.id)
-    await replaceReportSource(replaceReport.value.id, uploaded.id, replaceType.value)
+    await replaceReportSource(replaceReport.value.id, uploaded.id, replaceType.value, force)
     ElMessage.success(`${replaceType.value === 'EXCEL' ? 'Excel' : 'PDF'} 数据源已替换，报告已重新生成`)
     replaceVisible.value = false
     await load()

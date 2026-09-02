@@ -1,5 +1,11 @@
 from typing import Any
 
+from fastapi import HTTPException
+
+
+def manual_edit_locked() -> HTTPException:
+    return HTTPException(409, {"code": "MANUAL_EDIT_LOCKED", "message": "Word 已人工编辑并保存，不能再次自动生成；请新建报告。"})
+
 
 def default_report_data() -> dict[str, Any]:
     return {

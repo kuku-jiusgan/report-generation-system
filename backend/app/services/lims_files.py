@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 
-RELATIVE_FILE_PATTERN = re.compile(r"(?<![A-Za-z0-9])/files/")
+RELATIVE_FILE_PATTERN = re.compile(r"(%s<![A-Za-z0-9])/files/")
 logger = logging.getLogger(__name__)
 
 
@@ -54,7 +54,7 @@ def _migrate_report_json(database: Any, table: str, column: str, base_url: str) 
         for row in rows:
             payload = absolute_lims_file_urls(json.loads(row[column]), base_url)
             connection.execute(
-                f"UPDATE {table} SET {column}=? WHERE id=?",
+                f"UPDATE {table} SET {column}=%s WHERE id=%s",
                 (json.dumps(payload, ensure_ascii=False), row["id"]),
             )
     return len(rows)

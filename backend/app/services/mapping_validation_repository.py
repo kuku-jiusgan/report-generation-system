@@ -19,7 +19,7 @@ class MappingValidationRepositoryMixin:
         current = str(value or "").strip()
         return (
             not current or current.isdigit() or current.startswith("draft.")
-            or re.fullmatch(r"(?:word\.)?contentcontrol\.\d+", current, re.IGNORECASE) is not None
+            or re.fullmatch(r"(%s:word\.)%scontentcontrol\.\d+", current, re.IGNORECASE) is not None
             or re.fullmatch(r"report\..+\.mapping\.\d+", current) is not None
         )
 
@@ -29,11 +29,11 @@ class MappingValidationRepositoryMixin:
             existing = self._existing_mapping(connection, rule_id)
             chapter_id = self._related_id(connection, "admin_mapping_chapters", "chapter_id", result, rule_id)
             chapter = connection.execute(
-                "SELECT code,title FROM admin_template_chapters WHERE id=?", (chapter_id,),
+                "SELECT code,title FROM admin_template_chapters WHERE id=%s", (chapter_id,),
             ).fetchone() if chapter_id else None
             block_id = self._related_id(connection, "admin_mapping_blocks", "block_id", result, rule_id)
             block = connection.execute(
-                "SELECT title FROM admin_content_blocks WHERE id=?", (block_id,),
+                "SELECT title FROM admin_content_blocks WHERE id=%s", (block_id,),
             ).fetchone() if block_id else None
             label = str(result.get("wordLabel") or (existing or {}).get("word_label") or "").strip()
             result["wordLabel"] = label or (f"{block['title']}字段" if block else "未命名字段")
@@ -41,20 +41,21 @@ class MappingValidationRepositoryMixin:
             current_code = result.get("fieldCode", (existing or {}).get("field_code", ""))
             field_code = generated_code if self._is_temporary_identifier(current_code) else str(current_code)
             duplicate = connection.execute(
-                "SELECT id FROM admin_mapping_rules WHERE field_code=? AND (? IS NULL OR id<>?) LIMIT 1",
+                "SELECT id FROM admin_mapping_rules WHERE field_code=%s AND (%s IS NULL OR id<>%s) LIMIT 1",
                 (field_code, rule_id, rule_id),
             ).fetchone()
             result["fieldCode"] = f"{generated_code}.m{rule_id or duplicate['id'] + 1}" if duplicate else field_code
+            explicit_unbound = rule_id is not None and result.get("controlTag") == ""
             current_tag = result.get("controlTag", (existing or {}).get("control_tag", ""))
-            result["controlTag"] = f"cc.{result['fieldCode']}" if self._is_temporary_identifier(current_tag) else str(current_tag)
-            result["locationId"] = self._unique_location(connection, result, existing, rule_id)
+            result["controlTag"] = "" if explicit_unbound else (f"cc.{result['fieldCode']}" if self._is_temporary_identifier(current_tag) else str(current_tag))
+            result["locationId"] = "" if explicit_unbound and result.get("locationId") == "" else self._unique_location(connection, result, existing, rule_id)
         return result
 
     @staticmethod
     def _existing_mapping(connection: Any, rule_id: int | None) -> dict[str, Any] | None:
         if rule_id is None:
             return None
-        row = connection.execute("SELECT * FROM admin_mapping_rules WHERE id=?", (rule_id,)).fetchone()
+        row = connection.execute("SELECT * FROM admin_mapping_rules WHERE id=%s", (rule_id,)).fetchone()
         return dict(row) if row else None
 
     @staticmethod
@@ -64,7 +65,7 @@ class MappingValidationRepositoryMixin:
         api_key = "chapterId" if column == "chapter_id" else "blockId"
         if item.get(api_key) or rule_id is None:
             return item.get(api_key)
-        row = connection.execute(f"SELECT {column} FROM {table} WHERE mapping_id=?", (rule_id,)).fetchone()
+        row = connection.execute(f"SELECT {column} FROM {table} WHERE mapping_id=%s", (rule_id,)).fetchone()
         return row[0] if row else None
 
     def _generated_field_code(
@@ -90,7 +91,7 @@ class MappingValidationRepositoryMixin:
         if self._is_temporary_identifier(current) or not current:
             current = f"word.content_control.{result['controlTag']}"
         duplicate = connection.execute(
-            "SELECT id FROM admin_mapping_rules WHERE location_id=? AND (? IS NULL OR id<>?) LIMIT 1",
+            "SELECT id FROM admin_mapping_rules WHERE location_id=%s AND (%s IS NULL OR id<>%s) LIMIT 1",
             (current, rule_id, rule_id),
         ).fetchone()
         if duplicate:

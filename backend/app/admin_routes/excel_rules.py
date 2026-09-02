@@ -8,6 +8,25 @@ from ..database import Database
 from ..services.excel_rule_engine import ExcelRuleError, execute_excel_rules, validate_excel_snapshot
 
 
+def _collection_sizes(payload: dict[str, Any]) -> dict[str, int]:
+    """按点号路径汇总 payload 里的集合大小，嵌套结构也能给出真实条数。"""
+    sizes: dict[str, int] = {}
+
+    def walk(node: Any, prefix: list[str]) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "_meta":
+                    continue
+                walk(value, [*prefix, str(key)])
+        elif isinstance(node, list):
+            sizes[".".join(prefix)] = len(node)
+        elif prefix:
+            sizes[".".join(prefix)] = 1
+
+    walk(payload, [])
+    return sizes
+
+
 def register_excel_rule_routes(router: APIRouter, database: Database, settings: Settings) -> None:
     @router.get("/excel-rules")
     def get_excel_rules() -> dict[str, Any]:
@@ -34,8 +53,7 @@ def register_excel_rule_routes(router: APIRouter, database: Database, settings: 
         try:
             payload = execute_excel_rules(path, draft["snapshot"], draft["id"])
             report = {"valid": True, "sourceId": source["id"], "warnings": payload["_meta"]["warnings"],
-                      "collections": {key: len(value) if isinstance(value, list) else 1
-                                      for key, value in payload.items() if key != "_meta"}, "payload": payload}
+                      "collections": _collection_sizes(payload), "payload": payload}
         except (ExcelRuleError, KeyError, TypeError, ValueError) as error:
             report = {"valid": False, "sourceId": source["id"], "errors": [str(error)]}
         database.record_excel_rule_validation(draft["id"], report)

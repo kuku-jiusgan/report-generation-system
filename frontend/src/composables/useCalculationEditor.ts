@@ -12,7 +12,7 @@ export function useCalculationEditor(
     draft.value.dataType = 'decimal'
     draft.value.calculationExpression ||= ''
     draft.value.calculationDependencies ||= []
-    draft.value.calculationScope ||= ['REPEATING_TABLE', 'MATRIX'].includes(selectedBlock.value?.kind || '')
+    draft.value.calculationScope ||= ['REPEATING_TABLE', 'MATRIX', 'TABLE_REPEAT'].includes(selectedBlock.value?.kind || '')
       ? 'CURRENT_ROW' : 'REPORT'
     draft.value.calculationPrecision ??= 2
     draft.value.calculationNullBehavior ||= 'ERROR'

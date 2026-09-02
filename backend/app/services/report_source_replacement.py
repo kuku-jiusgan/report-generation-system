@@ -26,6 +26,8 @@ def replace_report_source(data: dict[str, Any], source: dict[str, Any], source_t
         for code in old_pdf_codes:
             values.pop(code, None)
             sources.pop(code, None)
+            # 顶层键是渲染时的直接取值来源，必须一并清除，否则旧 PDF 值会残留进新报告
+            data.pop(code, None)
         for field in source.get("extracted_fields", []):
             code = str(field.get("field_code") or "")
             if code:

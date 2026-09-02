@@ -314,7 +314,8 @@ async function exportWord() {
   if (!report.value) return
   busy.export = true
   try {
-    if (editorMode.value === 'fields') await saveReport(false)
+    // Word 已人工编辑保存时 PUT 会 409；此时直接导出当前工作文件（含人工修改）
+    if (editorMode.value === 'fields' && !report.value.word_edit_locked) await saveReport(false)
     else report.value = await getReport(report.value.id)
     report.value = await generateReport(report.value.id)
     await refreshGenerationHistory()
@@ -366,6 +367,10 @@ function applyExtractedValue(field: ExtractedField) {
 }
 
 async function applyExtracted(field: ExtractedField) {
+  if (report.value?.word_edit_locked) {
+    ElMessage.warning('Word 已人工编辑并保存，不能再用 PDF 自动填充；请新建报告。')
+    return
+  }
   applyExtractedValue(field)
   await saveReport(false)
   await rebuildWordFromSources()

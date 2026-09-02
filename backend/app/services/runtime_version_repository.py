@@ -64,6 +64,8 @@ class RuntimeVersionRepositoryMixin:
         note: str, publish: bool,
     ) -> dict[str, Any]:
         with self.database.connect() as connection:
+            # BEGIN IMMEDIATE 先拿写锁，避免并发发布读到相同 MAX(version_no)
+            connection.execute("BEGIN IMMEDIATE")
             version_no = connection.execute(
                 "SELECT COALESCE(MAX(version_no),0)+1 FROM admin_rule_versions"
             ).fetchone()[0]
@@ -72,12 +74,12 @@ class RuntimeVersionRepositoryMixin:
             timestamp = now_iso()
             cursor = connection.execute(
                 """INSERT INTO admin_rule_versions(version_no,status,note,snapshot,validation_report,compiled_template,
-                   created_at,published_at) VALUES(?,?,?,?,?,?,?,?)""",
+                   created_at,published_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (version_no, "PUBLISHED" if publish else "DRAFT", note,
                  json.dumps(snapshot, ensure_ascii=False), json.dumps(validation, ensure_ascii=False),
                  compiled_template, timestamp, timestamp if publish else None),
             )
-            row = connection.execute("SELECT * FROM admin_rule_versions WHERE id=?", (cursor.lastrowid,)).fetchone()
+            row = connection.execute("SELECT * FROM admin_rule_versions WHERE id=%s", (cursor.lastrowid,)).fetchone()
         return self._version_to_api(dict(row))
 
     def list_versions(self) -> list[dict[str, Any]]:

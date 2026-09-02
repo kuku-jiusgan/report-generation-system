@@ -65,7 +65,7 @@ const selectedChapter = ref<DesignerChapter>();
 const selectedBlock = ref<DesignerBlock>();
 const expandedContentBlockId = ref<number>();
 const selectedMapping = ref<MappingRule>();
-const mappingDraft = ref<Partial<MappingRule>>();
+const mappingDraft = ref<Partial<MappingRule>>({});
 const advancedOpen = ref(false);
 const saving = ref(false);
 const bindingMappingId = ref<number>();
@@ -163,12 +163,12 @@ const { addMapping, saveMapping, removeMapping, saveTableRule } = useMappingEdit
   displayName: generateMappingDisplayName,
   selectMapping,
 });
-
 const blockKindOptions: Array<{ value: ContentBlockKind; label: string }> = [
   { value: "FIXED", label: "固定内容" },
   { value: "MAPPED_FIELD", label: "单值字段组" },
   { value: "REPEATING_TABLE", label: "循环表格" },
   { value: "MATRIX", label: "结果矩阵" },
+  { value: "TABLE_REPEAT", label: "按杂质复制整表" },
   { value: "AI_NARRATIVE", label: "AI 文本块" },
   { value: "CALCULATED", label: "计算内容块" },
 ];
@@ -208,20 +208,9 @@ const calculationFieldOptions = computed(() =>
 );
 function selectChapter(chapter: DesignerChapter) {
   selectedChapter.value = chapter;
-  const ownMappings = chapter.blocks.flatMap((block) => block.mappings);
-  const ownTarget =
-    ownMappings.find((mapping) => mapping.controlTag) || ownMappings[0];
-  selectedBlock.value =
-    chapter.blocks.find((block) =>
-      block.mappings.some((mapping) => mapping.id === ownTarget?.id),
-    ) || chapter.blocks[0];
-  expandedContentBlockId.value = selectedBlock.value?.id;
-  selectMapping(ownTarget, Boolean(ownTarget?.controlTag));
-  if (!ownTarget?.controlTag) {
-    const descendantTarget = firstAnchoredMapping(chapter);
-    if (descendantTarget?.controlTag)
-      void locateInWord(descendantTarget.controlTag);
-  }
+  selectedBlock.value = undefined;
+  expandedContentBlockId.value = undefined;
+  selectMapping(undefined, false);
 }
 function selectBlock(
   chapter: DesignerChapter,
@@ -255,15 +244,19 @@ async function loadDesigner(preserve = true) {
   const chapterId = preserve ? selectedChapter.value?.id : undefined;
   const blockId = preserve ? selectedBlock.value?.id : undefined;
   const mappingId = preserve ? selectedMapping.value?.id : undefined;
-  designer.value = await adminApi.designer();
+  const [currentDesigner, currentStandardFields] = await Promise.all([
+    adminApi.designer(),
+    adminApi.standardFields(),
+  ]);
+  designer.value = currentDesigner;
+  standardFields.value = currentStandardFields;
   expanded.value = flatten(designer.value.chapters).map((item) => item.id);
   const chapter =
     flatten(designer.value.chapters).find((item) => item.id === chapterId) ||
     flatten(designer.value.chapters)[0];
   if (!chapter) return;
   selectedChapter.value = chapter;
-  const block =
-    chapter.blocks.find((item) => item.id === blockId) || chapter.blocks[0];
+  const block = chapter.blocks.find((item) => item.id === blockId);
   selectedBlock.value = block;
   expandedContentBlockId.value = block?.id;
   selectMapping(
@@ -421,6 +414,10 @@ async function unbindCurrentWordPosition() {
       await refreshWordControls();
     } else {
       await requestPluginUnbind();
+    }
+    if (selectedMapping.value) {
+      await adminApi.updateMapping(selectedMapping.value.id, { controlTag: '', locationId: '' });
+      await loadDesigner(true);
     }
     ElMessage.success("已解除 Word 绑定，原文字和样式已保留");
   } catch (error) {

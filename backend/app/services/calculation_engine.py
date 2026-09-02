@@ -116,10 +116,12 @@ def evaluate_formula(
                 return None
             try:
                 return binary[type(node.op)](left, right)
-            except (ArithmeticError, KeyError) as error:
+            except (ArithmeticError, TypeError, ValueError, KeyError) as error:
                 raise CalculationError(f"公式运算失败：{error}") from error
         if isinstance(node, ast.UnaryOp):
             value = evaluate(node.operand)
+            if value is None:
+                raise CalculationError("一元运算依赖了空值字段")
             return -value if isinstance(node.op, ast.USub) else value
         if isinstance(node, ast.BoolOp):
             values_ = [bool(evaluate(value)) for value in node.values]
@@ -128,7 +130,13 @@ def evaluate_formula(
             left = evaluate(node.left)
             for operation, comparator in zip(node.ops, node.comparators):
                 right = evaluate(comparator)
-                if not comparisons[type(operation)](left, right):
+                if left is None or right is None:
+                    raise CalculationError("比较运算依赖了空值字段")
+                try:
+                    matched = comparisons[type(operation)](left, right)
+                except TypeError as error:
+                    raise CalculationError(f"比较运算失败：{error}") from error
+                if not matched:
                     return False
                 left = right
             return True
@@ -147,8 +155,12 @@ def evaluate_formula(
                     raise CalculationError("AVG 没有可计算的数值")
                 return sum(numbers, Decimal(0)) / Decimal(len(numbers))
             if name == "MIN":
+                if not numbers:
+                    raise CalculationError("MIN 没有可计算的数值")
                 return min(numbers)
             if name == "MAX":
+                if not numbers:
+                    raise CalculationError("MAX 没有可计算的数值")
                 return max(numbers)
             if name == "COUNT":
                 return Decimal(len(numbers))

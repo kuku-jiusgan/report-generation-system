@@ -3,7 +3,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from app.services.word_sync import read_bound_values
+from backend.app.services.word_sync import read_bound_values
 
 
 def part(*controls: tuple[str, str]) -> str:
@@ -27,10 +27,14 @@ class WordSyncTest(unittest.TestCase):
                     ("repeat.t1.field1", "甲"),
                     ("repeat.t1.field1", "乙"),
                 ))
+            # 报告固定字段的写回关系来自映射规则的 reportBindingCode（设计器可见配置）
             mappings = [
-                {"controlTag": "reportHeader.reportNo", "fieldCode": "reportHeader.reportNo"},
-                {"controlTag": "document.code", "fieldCode": "document.code"},
-                {"controlTag": "project.name.body", "fieldCode": "project.name.body"},
+                {"controlTag": "reportHeader.reportNo", "fieldCode": "reportHeader.reportNo",
+                 "reportBindingCode": "report_no"},
+                {"controlTag": "document.code", "fieldCode": "document.code",
+                 "reportBindingCode": "report_no"},
+                {"controlTag": "project.name.body", "fieldCode": "project.name.body",
+                 "reportBindingCode": "project_name"},
                 {"controlTag": "repeat.t1.field1", "fieldCode": "approval[].field1"},
             ]
             bound, canonical = read_bound_values(path, mappings)

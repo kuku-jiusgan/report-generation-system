@@ -1,5 +1,4 @@
 import json
-import sqlite3
 from typing import Any
 
 
@@ -9,12 +8,12 @@ class LimsEvidenceRepositoryMixin:
                               record_key: str = "") -> dict[str, Any] | None:
         with self.connect() as connection:
             experiment = connection.execute(
-                "SELECT raw_payload FROM lims_experiments WHERE import_id=? AND instance_id=?",
+                "SELECT raw_payload FROM lims_experiments WHERE import_id=%s AND instance_id=%s",
                 (import_id, instance_id),
             ).fetchone()
             record = connection.execute(
                 """SELECT data_json,evidence_json,order_no FROM lims_standard_records
-                   WHERE import_id=? AND instance_id=? AND record_key=?""",
+                   WHERE import_id=%s AND instance_id=%s AND record_key=%s""",
                 (import_id, instance_id, record_key),
             ).fetchone() if record_key else None
         if not experiment:
@@ -91,13 +90,13 @@ class LimsEvidenceRepositoryMixin:
         """Return one field JSON for an experiment, grouped internally by unitId."""
         with self.connect() as connection:
             experiment = connection.execute(
-                "SELECT * FROM lims_experiments WHERE import_id=? AND instance_id=?",
+                "SELECT * FROM lims_experiments WHERE import_id=%s AND instance_id=%s",
                 (import_id, instance_id),
             ).fetchone()
             rows = connection.execute(
                 """SELECT record_key,data_json,evidence_json,order_no
                    FROM lims_standard_records
-                   WHERE import_id=? AND instance_id=? AND collection_code=?
+                   WHERE import_id=%s AND instance_id=%s AND collection_code=%s
                    ORDER BY order_no,id""",
                 (import_id, instance_id, field.get("collectionCode") or ""),
             ).fetchall()
@@ -230,7 +229,7 @@ class LimsEvidenceRepositoryMixin:
                     JOIN lims_imports i ON i.id=e.import_id WHERE e.{db_column} IS NOT NULL
                     AND trim(CAST(e.{db_column} AS TEXT))<>'' ORDER BY i.created_at DESC,e.normalized_at DESC"""
             ).fetchall()
-        unique: dict[str, sqlite3.Row] = {}
+        unique: dict[str, Any] = {}
         for row in rows:
             unique.setdefault(str(row["instance_id"]), row)
         filtered = [row for key, row in unique.items() if not selected or key in selected]
@@ -258,18 +257,18 @@ class LimsEvidenceRepositoryMixin:
                 "recognizedTotal": recognized, "options": options, "items": filtered[:limit],
                 "storageSupported": True}
 
-    def _standard_preview_rows(self, collection_code: str) -> list[sqlite3.Row]:
+    def _standard_preview_rows(self, collection_code: str) -> list[Any]:
         with self.connect() as connection:
             return connection.execute(
                 """SELECT r.import_id,r.instance_id,r.collection_code,r.record_key,r.data_json,
                           r.evidence_json,e.project_name,e.title,e.normalized_at,i.file_name
                    FROM lims_standard_records r JOIN lims_experiments e
                    ON e.import_id=r.import_id AND e.instance_id=r.instance_id JOIN lims_imports i ON i.id=r.import_id
-                   WHERE r.collection_code=? ORDER BY i.created_at DESC,e.normalized_at DESC,r.order_no""",
+                   WHERE r.collection_code=%s ORDER BY i.created_at DESC,e.normalized_at DESC,r.order_no""",
                 (collection_code,),
             ).fetchall()
 
-    def _group_standard_preview(self, rows: list[sqlite3.Row], json_key: str) -> dict[str, dict[str, Any]]:
+    def _group_standard_preview(self, rows: list[Any], json_key: str) -> dict[str, dict[str, Any]]:
         grouped: dict[str, dict[str, Any]] = {}
         latest: dict[str, str] = {}
         for row in rows:
@@ -290,7 +289,7 @@ class LimsEvidenceRepositoryMixin:
         return grouped
 
     @staticmethod
-    def _preview_group(row: sqlite3.Row, evidence: dict[str, Any]) -> dict[str, Any]:
+    def _preview_group(row: Any, evidence: dict[str, Any]) -> dict[str, Any]:
         return {"importId": row["import_id"], "instanceId": row["instance_id"],
                 "projectName": row["project_name"], "experimentTitle": row["title"],
                 "fileName": row["file_name"], "collectionCode": row["collection_code"],

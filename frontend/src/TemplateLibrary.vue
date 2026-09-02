@@ -9,6 +9,7 @@ import {
   Refresh,
 } from "@element-plus/icons-vue";
 import type { AdminTemplate, AdminTemplateVersion } from "./admin-api";
+import type { UploadFile } from "element-plus";
 import { templateVersionStatusText as statusText, useTemplateLibrary } from "./composables/useTemplateLibrary";
 
 const emit = defineEmits<{
@@ -16,10 +17,10 @@ const emit = defineEmits<{
 }>();
 const {
   templates, versions, selected, editingTemplate, loading, versionLoading,
-  deletingTemplate, savingTemplate, savingVersion, activatingVersionId,
-  templateDialog, versionDialog, templateDraft, versionDraft, selectedTitle,
+  deletingTemplate, deletingVersionId, savingTemplate, savingVersion, activatingVersionId,
+  templateDialog, versionDialog, templateDraft, templateFile, versionDraft, selectedTitle,
   loadTemplates, selectTemplate, openCreateTemplate, openEditTemplate,
-  saveTemplate, removeTemplate, openCreateVersion, saveVersion, enterDesigner,
+  saveTemplate, removeTemplate, openCreateVersion, saveVersion, removeVersion, enterDesigner,
 } = useTemplateLibrary((template, version) => emit("open", template, version));
 </script>
 
@@ -82,9 +83,7 @@ const {
       <section class="version-workspace">
         <div v-if="selected" class="version-heading">
           <div>
-            <div class="path">模板库 / {{ selected.code }}</div>
             <h1>{{ selectedTitle }}</h1>
-            <p>{{ selected.description || "尚未填写模板用途说明" }}</p>
           </div>
           <div>
             <el-button :icon="EditPen" @click="openEditTemplate"
@@ -122,7 +121,6 @@ const {
           <div class="table-title">
             <div>
               <h2>版本记录</h2>
-              <p>点击具体版本进入报告模板设计器</p>
             </div>
           </div>
           <el-table v-loading="versionLoading" :data="versions" row-key="id">
@@ -160,9 +158,10 @@ const {
             >
             <el-table-column
               label="操作"
-              width="300"
+              width="390"
               fixed="right"
-              align="right"
+              align="center"
+              header-align="center"
             >
               <template #default="scope">
                 <div class="version-row-actions">
@@ -177,6 +176,14 @@ const {
                     :icon="CopyDocument"
                     @click="openCreateVersion(scope.row)"
                     >基于此版本新建</el-button
+                  >
+                  <el-button
+                    type="danger"
+                    plain
+                    :icon="Delete"
+                    :loading="deletingVersionId === scope.row.id"
+                    @click="removeVersion(scope.row)"
+                    >删除版本</el-button
                   >
                 </div>
               </template>
@@ -214,6 +221,11 @@ const {
             type="textarea"
             :rows="4"
             placeholder="说明该模板适用的报告类型和范围" /></el-form-item
+        ><el-form-item v-if="!editingTemplate" label="Word 模板基座" required
+          ><el-upload :auto-upload="false" :limit="1" accept=".docx,.docm"
+            :on-change="(file: UploadFile) => { templateFile = file.raw }"
+            :on-remove="() => { templateFile = undefined }"
+          ><el-button>选择 Word 文件</el-button></el-upload></el-form-item
         ><el-alert
           v-if="!editingTemplate"
           title="新模板会使用初始 Word 文件创建独立的 V1；章节和字段规则可在设计器中单独配置。"
@@ -466,7 +478,7 @@ const {
 .version-row-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 8px;
   white-space: nowrap;
 }

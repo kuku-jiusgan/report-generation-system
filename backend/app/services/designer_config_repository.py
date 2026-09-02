@@ -14,34 +14,63 @@ class DesignerConfigRepositoryMixin:
             "headerRows": row["header_rows"], "dataRowStart": row["data_row_start"],
             "dataRowEnd": row["data_row_end"], "footerRows": row["footer_rows"],
             "recordKey": row["record_key"], "mergeFields": json.loads(row["merge_fields"]),
+            "physicalTableIndex": row["physical_table_index"],
+            "preservedRowLabels": json.loads(row["preserved_row_labels"] or "[]"),
+            "clearEmbeddedObjects": bool(row["clear_embedded_objects"]),
+            "matrixLayout": row["matrix_layout"] or "",
+            "groupKey": row["group_key"] or "",
+            "innerMode": row["inner_mode"] or "ROW_REPEAT",
             "enabled": bool(row["enabled"]), "notes": row["notes"], "updatedAt": row["updated_at"],
         }
 
     def list_table_rules(self) -> list[dict[str, Any]]:
         with self.database.connect() as connection:
             rows = [dict(row) for row in connection.execute(
-                "SELECT * FROM admin_table_rules ORDER BY CAST(SUBSTR(table_no,2) AS INTEGER)"
+                "SELECT * FROM admin_table_rules ORDER BY CAST(SUBSTRING(table_no,2) AS SIGNED)"
             ).fetchall()]
         return [self._table_to_api(row) for row in rows]
+
+    @staticmethod
+    def _matrix_layout_text(item: dict[str, Any]) -> str:
+        """矩阵版式以 JSON 文本保存；格式错误必须在保存时就说清楚，不能留到生成时。"""
+        layout = item.get("matrixLayout", "")
+        if isinstance(layout, dict):
+            return json.dumps(layout, ensure_ascii=False)
+        text = str(layout or "").strip()
+        if not text:
+            return ""
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"矩阵版式不是合法 JSON：{error}") from error
+        return text
 
     def upsert_table_rule(self, item: dict[str, Any]) -> dict[str, Any]:
         values = (
             item["tableNo"], item.get("sectionCode", ""), item.get("mode", "ROW_REPEAT"),
             item.get("headerRows", 1), item.get("dataRowStart", 2), item.get("dataRowEnd", 2),
             item.get("footerRows", 0), item.get("recordKey", ""),
-            json.dumps(item.get("mergeFields", []), ensure_ascii=False), int(item.get("enabled", True)),
-            item.get("notes", ""), now_iso(),
+            json.dumps(item.get("mergeFields", []), ensure_ascii=False),
+            int(item.get("physicalTableIndex", 0) or 0),
+            json.dumps(item.get("preservedRowLabels", []), ensure_ascii=False),
+            int(bool(item.get("clearEmbeddedObjects", False))),
+            self._matrix_layout_text(item), int(item.get("enabled", True)),
+            item.get("notes", ""), item.get("groupKey", ""), item.get("innerMode", "ROW_REPEAT"), now_iso(),
         )
         with self.database.connect() as connection:
             connection.execute(
                 """INSERT INTO admin_table_rules(table_no,section_code,mode,header_rows,data_row_start,data_row_end,
-                   footer_rows,record_key,merge_fields,enabled,notes,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(table_no) DO UPDATE SET section_code=excluded.section_code,mode=excluded.mode,
-                   header_rows=excluded.header_rows,data_row_start=excluded.data_row_start,data_row_end=excluded.data_row_end,
-                   footer_rows=excluded.footer_rows,record_key=excluded.record_key,merge_fields=excluded.merge_fields,
-                   enabled=excluded.enabled,notes=excluded.notes,updated_at=excluded.updated_at""", values,
+                   footer_rows,record_key,merge_fields,physical_table_index,preserved_row_labels,
+                   clear_embedded_objects,matrix_layout,enabled,notes,group_key,inner_mode,updated_at)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON DUPLICATE KEY UPDATE section_code=VALUES(section_code),mode=VALUES(mode),
+                   header_rows=VALUES(header_rows),data_row_start=VALUES(data_row_start),data_row_end=VALUES(data_row_end),
+                   footer_rows=VALUES(footer_rows),record_key=VALUES(record_key),merge_fields=VALUES(merge_fields),
+                   physical_table_index=VALUES(physical_table_index),preserved_row_labels=VALUES(preserved_row_labels),
+                   clear_embedded_objects=VALUES(clear_embedded_objects),matrix_layout=VALUES(matrix_layout),
+                   enabled=VALUES(enabled),notes=VALUES(notes),group_key=VALUES(group_key),inner_mode=VALUES(inner_mode),updated_at=VALUES(updated_at)""", values,
             )
-            row = connection.execute("SELECT * FROM admin_table_rules WHERE table_no=?", (item["tableNo"],)).fetchone()
+            row = connection.execute("SELECT * FROM admin_table_rules WHERE table_no=%s", (item["tableNo"],)).fetchone()
         return self._table_to_api(dict(row))
 
     @staticmethod
@@ -67,11 +96,11 @@ class DesignerConfigRepositoryMixin:
         with self.database.connect() as connection:
             connection.execute(
                 """INSERT INTO admin_data_sources(code,name,source_type,priority,enabled,config,updated_at)
-                   VALUES(?,?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET name=excluded.name,
-                   source_type=excluded.source_type,priority=excluded.priority,enabled=excluded.enabled,
-                   config=excluded.config,updated_at=excluded.updated_at""", values,
+                   VALUES(%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE name=VALUES(name),
+                   source_type=VALUES(source_type),priority=VALUES(priority),enabled=VALUES(enabled),
+                   config=VALUES(config),updated_at=VALUES(updated_at)""", values,
             )
-            row = connection.execute("SELECT * FROM admin_data_sources WHERE code=?", (item["code"],)).fetchone()
+            row = connection.execute("SELECT * FROM admin_data_sources WHERE code=%s", (item["code"],)).fetchone()
         return self._data_source_to_api(dict(row))
 
     @staticmethod
@@ -102,16 +131,16 @@ class DesignerConfigRepositoryMixin:
         with self.database.connect() as connection:
             connection.execute(
                 """INSERT INTO admin_ai_rules(field_code,name,input_fields,prompt_template,output_type,max_length,
-                   require_citations,requires_approval,provider,model,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(field_code) DO UPDATE SET name=excluded.name,input_fields=excluded.input_fields,
-                   prompt_template=excluded.prompt_template,output_type=excluded.output_type,max_length=excluded.max_length,
-                   require_citations=excluded.require_citations,requires_approval=excluded.requires_approval,
-                   provider=excluded.provider,model=excluded.model,enabled=excluded.enabled,updated_at=excluded.updated_at""", values,
+                   require_citations,requires_approval,provider,model,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON DUPLICATE KEY UPDATE name=VALUES(name),input_fields=VALUES(input_fields),
+                   prompt_template=VALUES(prompt_template),output_type=VALUES(output_type),max_length=VALUES(max_length),
+                   require_citations=VALUES(require_citations),requires_approval=VALUES(requires_approval),
+                   provider=VALUES(provider),model=VALUES(model),enabled=VALUES(enabled),updated_at=VALUES(updated_at)""", values,
             )
-            row = connection.execute("SELECT * FROM admin_ai_rules WHERE field_code=?", (item["fieldCode"],)).fetchone()
+            row = connection.execute("SELECT * FROM admin_ai_rules WHERE field_code=%s", (item["fieldCode"],)).fetchone()
         return self._ai_to_api(dict(row))
 
     def delete_ai_rule(self, rule_id: int) -> bool:
         with self.database.connect() as connection:
-            cursor = connection.execute("DELETE FROM admin_ai_rules WHERE id=?", (rule_id,))
+            cursor = connection.execute("DELETE FROM admin_ai_rules WHERE id=%s", (rule_id,))
         return cursor.rowcount > 0

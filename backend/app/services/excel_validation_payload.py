@@ -66,6 +66,11 @@ def enrich_excel_payload(payload: dict[str, Any]) -> dict[str, Any]:
         linearity = _records(payload, LINEARITY_FIELDS)
         if linearity:
             payload["linearity"] = linearity
+    records = payload.get("systemSuitability")
+    if isinstance(records, list) and isinstance(payload.get("systemSuitabilityConclusion"), str):
+        for index, record in enumerate(records):
+            if isinstance(record, dict) and index == 0:
+                record["conclusion"] = payload["systemSuitabilityConclusion"]
     return payload
 
 

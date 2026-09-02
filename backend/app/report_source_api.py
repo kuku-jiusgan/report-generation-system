@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from .auth import AuthManager
 from .config import Settings
 from .database import Database
-from .report_utils import resolved_report_title
+from .report_utils import manual_edit_locked, resolved_report_title
 from .schemas import ReplaceSourceRequest, ReportTask
 from .services.report_source_replacement import replace_report_source
 
@@ -33,6 +33,9 @@ def create_report_source_router(
             raise HTTPException(422, "Excel 尚未完成解析")
         if request.source_type == "PDF" and not source.get("extracted_fields"):
             raise HTTPException(422, "PDF 尚未完成解析")
+        # 与 apply-lims 一致：人工编辑已落盘后，重新生成会覆盖用户改动，需前端显式确认
+        if item.get("word_edit_locked") and not request.force:
+            raise manual_edit_locked()
         data = replace_report_source(dict(item["resolved_data"]), source, request.source_type, settings.api_prefix)
         try:
             output_name = render_report_word(item, data)

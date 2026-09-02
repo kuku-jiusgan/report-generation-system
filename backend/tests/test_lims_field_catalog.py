@@ -49,7 +49,8 @@ class LimsFieldCatalogTest(unittest.TestCase):
             repository.create_mapping({
                 "chapterId": chapter["id"], "wordLabel": "文件编号",
                 "fieldCode": "document.code", "sourceType": "LIMS",
-                "sourcePath": "$.document.code", "enabled": True,
+                "sourcePath": "$.document.code", "reportBindingCode": "report_no",
+                "enabled": True,
             })
 
             catalog = repository.report_source_catalog()

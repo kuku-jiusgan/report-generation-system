@@ -1,10 +1,10 @@
 import json
 from pathlib import Path
 
-from app.auth import AuthManager
-from app.config import Settings
-from app.database import Database
-from app.onlyoffice_bridge_api import create_onlyoffice_bridge_router
+from backend.app.auth import AuthManager
+from backend.app.config import Settings
+from backend.app.database import Database
+from backend.app.onlyoffice_bridge_api import create_onlyoffice_bridge_router
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

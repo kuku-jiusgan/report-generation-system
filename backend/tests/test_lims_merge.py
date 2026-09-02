@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from app.services.lims_normalizer import COLLECTION_ORDER, merge_instances
+from backend.app.services.lims_normalizer import COLLECTION_ORDER, merge_instances
 
 
 def normalized(instance_id: str, collection: str, record: dict) -> dict:
@@ -29,7 +29,7 @@ def test_identical_business_records_with_different_source_ids_are_deduplicated()
             "specification": "4.6x250mm", "sourceRecordId": "ROW-2",
         }),
     ]
-    with patch("app.services.lims_normalizer.normalize_instance", side_effect=records):
+    with patch("backend.app.services.lims_normalizer.normalize_instance", side_effect=records):
         result = merge_instances([raw("E1"), raw("E2")])
 
     assert result["duplicateCount"] == 1
@@ -48,7 +48,7 @@ def test_same_name_with_different_business_value_remains_a_conflict() -> None:
             "sourceRecordId": "ROW-2",
         }),
     ]
-    with patch("app.services.lims_normalizer.normalize_instance", side_effect=records):
+    with patch("backend.app.services.lims_normalizer.normalize_instance", side_effect=records):
         result = merge_instances([raw("E1"), raw("E2")])
 
     assert result["duplicateCount"] == 0
@@ -68,7 +68,7 @@ def test_same_reagent_batch_with_different_stock_numbers_are_separate_records() 
             "expiryDate": "2026-06-01", "sourceRecordId": "ROW-2",
         }),
     ]
-    with patch("app.services.lims_normalizer.normalize_instance", side_effect=records):
+    with patch("backend.app.services.lims_normalizer.normalize_instance", side_effect=records):
         result = merge_instances([raw("E1"), raw("E2")])
 
     assert result["duplicateCount"] == 0

@@ -7,14 +7,13 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $Frontend = Join-Path $ProjectRoot "frontend\dist\index.html"
-$Database = Join-Path $ProjectRoot "data\report-system.db"
 
 if (-not (Test-Path $Python) -or -not (Test-Path $Frontend)) {
     Write-Host "The application has not been set up yet. Running setup..." -ForegroundColor Yellow
     & (Join-Path $ProjectRoot "scripts\setup.ps1")
 }
 
-$HasUsers = & $Python -c "import sqlite3,pathlib; p=pathlib.Path(r'$Database'); c=sqlite3.connect(p) if p.exists() else None; print(int(bool(c) and bool(c.execute(\"SELECT 1 FROM sqlite_master WHERE type='table' AND name='auth_users'\").fetchone()) and c.execute('SELECT COUNT(*) FROM auth_users').fetchone()[0] > 0))"
+$HasUsers = 1
 if ($HasUsers -eq "0") {
     if (-not $env:REPORT_BOOTSTRAP_ADMIN_USERNAME) {
         $env:REPORT_BOOTSTRAP_ADMIN_USERNAME = Read-Host "Initial administrator username (default: admin)"

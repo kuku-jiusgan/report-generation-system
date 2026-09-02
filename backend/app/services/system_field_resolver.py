@@ -79,9 +79,12 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
         return _read_path(payload, str(config.get("sourcePath") or field.get("legacyJsonPath") or field_code))
     if source_type == "PDF":
         pdf = report_data.get("source_payloads", {}).get("PDF", {})
-        return (_read_path(pdf, str(config.get("sourcePath") or field_code))
-                or report_data.get("original_values", {}).get(field_code)
-                or report_data.get(field_code))
+        value = _read_path(pdf, str(config.get("sourcePath") or field_code))
+        if not _available(value):
+            value = report_data.get("original_values", {}).get(field_code)
+        if not _available(value):
+            value = report_data.get(field_code)
+        return value
     if source_type == "EXCEL":
         excel = report_data.get("source_payloads", {}).get("EXCEL", {})
         if isinstance(excel, dict):

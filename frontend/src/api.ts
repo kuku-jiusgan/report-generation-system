@@ -213,9 +213,9 @@ export async function rebuildReport(id: string) {
   return (await http.post<ReportTask>(`/reports/${id}/rebuild-word`)).data
 }
 
-export async function replaceReportSource(id: string, sourceDocumentId: string, sourceType: 'PDF' | 'EXCEL') {
+export async function replaceReportSource(id: string, sourceDocumentId: string, sourceType: 'PDF' | 'EXCEL', force = false) {
   return (await http.post<ReportTask>(`/reports/${id}/replace-source`, {
-    source_document_id: sourceDocumentId, source_type: sourceType,
+    source_document_id: sourceDocumentId, source_type: sourceType, force,
   }, { timeout: 300000 })).data
 }
 

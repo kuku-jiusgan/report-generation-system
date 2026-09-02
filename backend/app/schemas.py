@@ -97,6 +97,8 @@ class UpdateReportRequest(BaseModel):
 class ReplaceSourceRequest(BaseModel):
     source_document_id: str = Field(min_length=1)
     source_type: str = Field(pattern=r"^(PDF|EXCEL)$")
+    # Word 已人工编辑保存时默认拒绝；前端确认覆盖后才允许携带 force
+    force: bool = False
 
 
 class ReportTask(BaseModel):

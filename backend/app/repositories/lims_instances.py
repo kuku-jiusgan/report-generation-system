@@ -11,7 +11,7 @@ class LimsInstanceRepositoryMixin:
     def create_lims_import(self, item: dict[str, Any]) -> dict[str, Any]:
         with self.connect() as connection:
             connection.execute(
-                "INSERT INTO lims_imports(id,file_name,stored_name,size,summary,created_at) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO lims_imports(id,file_name,stored_name,size,summary,created_at) VALUES(%s,%s,%s,%s,%s,%s)",
                 (item["id"], item["file_name"], item["stored_name"], item["size"],
                  json.dumps(item["summary"], ensure_ascii=False), item["created_at"]),
             )
@@ -19,7 +19,7 @@ class LimsInstanceRepositoryMixin:
 
     def get_lims_import(self, import_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM lims_imports WHERE id=?", (import_id,)).fetchone()
+            row = connection.execute("SELECT * FROM lims_imports WHERE id=%s", (import_id,)).fetchone()
         return self._decode(row, ("summary",))
 
     def list_lims_imports(self) -> list[dict[str, Any]]:
@@ -45,14 +45,14 @@ class LimsInstanceRepositoryMixin:
         connection.execute(
             """INSERT INTO lims_experiments(import_id,instance_id,project_id,project_name,document_code,
                document_version,title,experiment_version,created_by,created_at_source,approved_by,
-               approved_at_source,raw_payload,normalized_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(import_id,instance_id) DO UPDATE SET project_id=excluded.project_id,
-               project_name=excluded.project_name,document_code=excluded.document_code,
-               document_version=excluded.document_version,title=excluded.title,
-               experiment_version=excluded.experiment_version,created_by=excluded.created_by,
-               created_at_source=excluded.created_at_source,approved_by=excluded.approved_by,
-               approved_at_source=excluded.approved_at_source,raw_payload=excluded.raw_payload,
-               normalized_at=excluded.normalized_at""",
+               approved_at_source,raw_payload,normalized_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               ON DUPLICATE KEY UPDATE project_id=VALUES(project_id),
+               project_name=VALUES(project_name),document_code=VALUES(document_code),
+               document_version=VALUES(document_version),title=VALUES(title),
+               experiment_version=VALUES(experiment_version),created_by=VALUES(created_by),
+               created_at_source=VALUES(created_at_source),approved_by=VALUES(approved_by),
+               approved_at_source=VALUES(approved_at_source),raw_payload=VALUES(raw_payload),
+               normalized_at=VALUES(normalized_at)""",
             (import_id, instance_id, raw.get("projectId"), project.get("name") or "",
              document.get("code") or "", document.get("version") or "", raw.get("title") or "",
              str(raw.get("version") or ""), raw.get("createdBy") or "", raw.get("createdTime"),
@@ -64,7 +64,7 @@ class LimsInstanceRepositoryMixin:
     def _replace_standard_records(cls, connection: Any, import_id: str, instance_id: str,
                                   normalized: dict[str, Any], collections: list[str]) -> None:
         connection.execute(
-            "DELETE FROM lims_standard_records WHERE import_id=? AND instance_id=?", (import_id, instance_id),
+            "DELETE FROM lims_standard_records WHERE import_id=%s AND instance_id=%s", (import_id, instance_id),
         )
         for collection in collections:
             for order_no, item in enumerate(normalized.get(collection, [])):
@@ -73,7 +73,7 @@ class LimsInstanceRepositoryMixin:
                 record_key = f"{collection}:{cls._record_identity(data)}:{order_no}"
                 connection.execute(
                     """INSERT INTO lims_standard_records(import_id,instance_id,collection_code,record_key,
-                       order_no,data_json,evidence_json) VALUES(?,?,?,?,?,?,?)""",
+                       order_no,data_json,evidence_json) VALUES(%s,%s,%s,%s,%s,%s,%s)""",
                     (import_id, instance_id, collection, record_key, order_no,
                      json.dumps(data, ensure_ascii=False), json.dumps(evidence, ensure_ascii=False)),
                 )
@@ -89,13 +89,13 @@ class LimsInstanceRepositoryMixin:
     def _replace_unrecognized(connection: Any, import_id: str, instance_id: str,
                               items: list[dict[str, Any]]) -> None:
         connection.execute(
-            "DELETE FROM lims_unrecognized_items WHERE import_id=? AND instance_id=?", (import_id, instance_id),
+            "DELETE FROM lims_unrecognized_items WHERE import_id=%s AND instance_id=%s", (import_id, instance_id),
         )
         for order_no, item in enumerate(items):
             evidence = item.get("evidence", {}) if isinstance(item, dict) else {}
             connection.execute(
                 """INSERT INTO lims_unrecognized_items(import_id,instance_id,item_key,raw_json,evidence_json)
-                   VALUES(?,?,?,?,?)""",
+                   VALUES(%s,%s,%s,%s,%s)""",
                 (import_id, instance_id, f"unmatched:{order_no}", json.dumps(item, ensure_ascii=False),
                  json.dumps(evidence, ensure_ascii=False)),
             )
@@ -103,7 +103,7 @@ class LimsInstanceRepositoryMixin:
     def get_lims_instance_payload(self, import_id: str, instance_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT raw_payload FROM lims_experiments WHERE import_id=? AND instance_id=?",
+                "SELECT raw_payload FROM lims_experiments WHERE import_id=%s AND instance_id=%s",
                 (import_id, instance_id),
             ).fetchone()
         return json.loads(row["raw_payload"]) if row else None
@@ -113,17 +113,17 @@ class LimsInstanceRepositoryMixin:
             experiment = connection.execute(
                 """SELECT project_id,project_name,document_code,document_version,title,
                           experiment_version,created_by,created_at_source FROM lims_experiments
-                   WHERE import_id=? AND instance_id=?""", (import_id, instance_id),
+                   WHERE import_id=%s AND instance_id=%s""", (import_id, instance_id),
             ).fetchone()
             if not experiment:
                 return None
             rows = connection.execute(
                 """SELECT collection_code,data_json,evidence_json FROM lims_standard_records
-                   WHERE import_id=? AND instance_id=? ORDER BY collection_code,order_no""",
+                   WHERE import_id=%s AND instance_id=%s ORDER BY collection_code,order_no""",
                 (import_id, instance_id),
             ).fetchall()
             unmatched = connection.execute(
-                """SELECT raw_json FROM lims_unrecognized_items WHERE import_id=? AND instance_id=?
+                """SELECT raw_json FROM lims_unrecognized_items WHERE import_id=%s AND instance_id=%s
                    ORDER BY item_key""", (import_id, instance_id),
             ).fetchall()
         payload = self._normalized_header(experiment, instance_id, unmatched)
@@ -150,7 +150,7 @@ class LimsInstanceRepositoryMixin:
         with self.connect() as connection:
             rows = connection.execute(
                 """SELECT id,collection_code,record_key,order_no,data_json,evidence_json
-                   FROM lims_standard_records WHERE import_id=? AND instance_id=?
+                   FROM lims_standard_records WHERE import_id=%s AND instance_id=%s
                    ORDER BY collection_code,order_no""", (import_id, instance_id),
             ).fetchall()
         return [{

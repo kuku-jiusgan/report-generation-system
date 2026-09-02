@@ -5,9 +5,9 @@ import fitz
 
 
 FIELD_RULES = (
-    ("report_no", "报告编号", re.compile(r"报告编号\s*[：:]?\s*([A-Za-z0-9_-]+)")),
-    ("customer", "客户名称", re.compile(r"客户(?:名称)?\s*[：:]?\s*([^\r\n]{2,80})")),
-    ("sample", "样品名称", re.compile(r"样品(?:名称)?\s*[：:]?\s*([^\r\n]{1,80})")),
+    ("report_no", "报告编号", re.compile(r"报告编号\s*[：:]%s\s*([A-Za-z0-9_-]+)")),
+    ("customer", "客户名称", re.compile(r"客户(%s:名称)%s\s*[：:]%s\s*([^\r\n]{2,80})")),
+    ("sample", "样品名称", re.compile(r"样品(%s:名称)%s\s*[：:]%s\s*([^\r\n]{1,80})")),
 )
 
 

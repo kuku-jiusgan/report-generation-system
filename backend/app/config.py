@@ -35,16 +35,17 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = ""
     session_hours: int = 8
     secure_cookies: bool = False
+    mysql_host: str = "127.0.0.1"
+    mysql_port: int = 3306
+    mysql_database: str = "report_generation_system"
+    mysql_user: str = "root"
+    mysql_password: str = ""
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
         env_prefix="REPORT_",
         extra="ignore",
     )
-
-    @property
-    def database_path(self) -> Path:
-        return self.data_dir / "report-system.db"
 
     @property
     def uploads_dir(self) -> Path:

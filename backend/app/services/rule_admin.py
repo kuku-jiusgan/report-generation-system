@@ -12,68 +12,20 @@ from .mapping_repository import MappingRepositoryMixin
 from .chapter_repository import ChapterRepositoryMixin
 from .designer_config_repository import DesignerConfigRepositoryMixin
 from .workspace_repository import WorkspaceRepositoryMixin
+from .template_block_repository import TemplateBlockRepositoryMixin
 from .runtime_version_repository import RuntimeVersionRepositoryMixin
+from .rule_admin_defaults import (
+    SEED_CLEAR_OBJECT_TABLES, SEED_MATRIX_LAYOUT, SEED_MATRIX_TABLES, SEED_PRESERVED_ROW_LABELS,
+    seed_physical_table_index, DEFAULT_TEMPLATE_CHAPTERS, SOLUTION_VIEW_COLLECTIONS,
+    STANDARD_FIELD_GROUP_NAMES, STRUCTURED_UNIT_COLLECTIONS,
+)
 from .lims_parser_profiles import HTML_TABLE_LEGACY_DEFAULTS, HTML_TABLE_PARSER_PROFILES
 from .lims_catalog_defaults import ensure_lims_catalog_defaults
 from .system_field_defaults import ensure_system_field_defaults
 from .system_field_groups import ensure_system_field_groups
-STANDARD_FIELD_GROUP_NAMES = {
-    "accuracySolutions": "准确度溶液",
-    "approval": "审批信息",
-    "columns": "色谱柱",
-    "document": "文档信息",
-    "impurity": "杂质信息",
-    "instruments": "仪器设备",
-    "intermediatePrecisionSolutions": "中间精密度溶液",
-    "lodSolutions": "检出限溶液",
-    "methodParameters": "方法参数",
-    "project": "项目信息",
-    "reagents": "试剂",
-    "referenceStandards": "对照品",
-    "repeatabilitySolutions": "重复性溶液",
-    "robustnessSequence": "耐用性序列",
-    "robustnessSolutions": "耐用性溶液",
-    "robustnessSpecificity": "耐用性专属性",
-    "samples": "样品信息",
-    "specificity": "专属性结果",
-    "specificitySolutions": "专属性溶液",
-    "stabilitySolutions": "稳定性溶液",
-    "systemSuitability": "系统适用性",
-    "systemSuitabilitySolutions": "系统适用性溶液",
-    "validationSummary": "验证结果汇总",
-}
 
-SOLUTION_VIEW_COLLECTIONS = {
-    "accuracySolutions", "intermediatePrecisionSolutions", "lodSolutions",
-    "repeatabilitySolutions", "robustnessSolutions", "specificitySolutions",
-    "stabilitySolutions", "systemSuitabilitySolutions",
-}
-
-STRUCTURED_UNIT_COLLECTIONS = {
-    "approval", "columns", "instruments", "reagents", "referenceStandards", "samples",
-}
-
-DEFAULT_TEMPLATE_CHAPTERS = [
-    ("", "cover", "封面", None, 0),
-    ("", "headerFooter", "页眉与页脚", None, 1),
-    ("", "1", "概述", 4, 2),
-    ("", "2", "目的", 4, 3),
-    ("", "3", "参考文件、限度标准", 4, 4),
-    ("3", "3.1", "参考文件", 4, 5), ("3", "3.2", "限度", 4, 6), ("3", "3.3", "杂质信息", 4, 7),
-    ("", "4", "物料及仪器信息", 5, 8),
-    ("4", "4.1", "供试品", 5, 9), ("4", "4.2", "对照品", 5, 10), ("4", "4.3", "仪器", 5, 11),
-    ("4", "4.4", "色谱柱", 6, 12), ("4", "4.5", "试剂", 6, 13),
-    ("", "5", "结果汇总", 6, 14), ("5", "5.1", "验证结果汇总", 6, 15), ("5", "5.2", "验证结论", 7, 16),
-    ("", "6", "分析方法", 8, 17), ("", "7", "验证内容", 9, 18),
-    ("7", "7.1", "系统适用性", 9, 19), ("7", "7.2", "专属性", 10, 20),
-    ("7", "7.3", "检测限与定量限", 11, 21), ("7", "7.4", "线性与范围", 12, 22),
-    ("7", "7.5", "重复性", 14, 23), ("7", "7.6", "中间精密度", 15, 24),
-    ("7", "7.7", "准确度", 18, 25), ("7", "7.8", "溶液稳定性", 20, 26), ("7", "7.9", "耐用性", 21, 27),
-    ("", "8", "供试品检测", 22, 28), ("8", "8.1", "溶液配制", 22, 29), ("8", "8.2", "试验过程", 22, 30),
-    ("8", "8.3", "可接受标准", 22, 31), ("8", "8.4", "结果及结论", 23, 32), ("8", "8.5", "相关图谱", 23, 33),
-    ("", "9", "计算公式", 23, 34), ("", "10", "偏差", 24, 35), ("", "11", "附件", 24, 36),
-    ("", "12", "变更历史", 25, 37),
-]
+# 一次性遗留映射迁移标记：完成后管理员对映射/表格规则/数据源配置的修改不再被启动回滚
+LEGACY_RULES_MIGRATION = "2026_admin_legacy_rules_migration_v1"
 
 
 def _chapter_for_mapping(item: dict[str, Any]) -> str:
@@ -109,7 +61,7 @@ class RuleAdminRepository(
     RuntimeVersionRepositoryMixin, WorkspaceRepositoryMixin,
     DesignerConfigRepositoryMixin, ChapterRepositoryMixin,
     MappingRepositoryMixin, MappingValidationRepositoryMixin,
-    ContentBlockRepositoryMixin, TemplateCatalogRepositoryMixin,
+    ContentBlockRepositoryMixin, TemplateCatalogRepositoryMixin, TemplateBlockRepositoryMixin,
 ):
     def __init__(self, database: Database, mapping_path: Path):
         self.database = database
@@ -140,8 +92,6 @@ class RuleAdminRepository(
                                          "priority": priority, "enabled": True, "config": config})
         self._migrate_legacy_rules()
         self._assign_unmapped_chapters()
-        self._seed_content_blocks()
-        self._migrate_content_block_rules()
         self._seed_lims_field_catalog()
         ensure_system_field_defaults(self.database)
         ensure_system_field_groups(self.database)
@@ -202,7 +152,7 @@ class RuleAdminRepository(
         with self.database.connect() as connection:
             for group_code, group_name in STANDARD_FIELD_GROUP_NAMES.items():
                 connection.execute(
-                    "UPDATE lims_field_catalog SET group_code=?,updated_at=? WHERE group_code=?",
+                    "UPDATE lims_field_catalog SET group_code=%s,updated_at=%s WHERE group_code=%s",
                     (group_name, now_iso(), group_code),
                 )
 
@@ -272,7 +222,7 @@ class RuleAdminRepository(
                     config.setdefault(key, value)
                 config.update({"sectionPattern": section_pattern, "headerPattern": header_pattern})
                 connection.execute(
-                    "UPDATE system_field_rules SET name=?,config=?,updated_at=? WHERE id=?",
+                    "UPDATE system_field_rules SET name=%s,config=%s,updated_at=%s WHERE id=%s",
                     (name, json.dumps(config, ensure_ascii=False), now_iso(), row["id"]),
                 )
 
@@ -286,17 +236,17 @@ class RuleAdminRepository(
         snapshot = self.snapshot()
         with self.database.connect() as connection:
             connection.execute(
-                "INSERT INTO admin_templates(id,code,name,description,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO admin_templates(id,code,name,description,status,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s)",
                 (template_id, "REPORT", "默认报告模板", "由现有报告模板和映射规则自动迁移", "ACTIVE", timestamp, timestamp),
             )
             connection.execute(
                 """INSERT INTO admin_template_versions(id,template_id,version_no,status,note,snapshot,
-                   validation_report,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                   validation_report,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (version_id, template_id, 1, "DRAFT", "迁移现有模板配置",
                  json.dumps(snapshot, ensure_ascii=False), "{}", timestamp, timestamp),
             )
             connection.execute(
-                "INSERT OR REPLACE INTO admin_template_workspace(id,active_template_id,active_version_id,updated_at) VALUES(1,?,?,?)",
+                "INSERT INTO admin_template_workspace(id,active_template_id,active_version_id,updated_at) VALUES(1,%s,%s,%s) ON DUPLICATE KEY UPDATE active_template_id=VALUES(active_template_id),active_version_id=VALUES(active_version_id),updated_at=VALUES(updated_at)",
                 (template_id, version_id, timestamp),
             )
 
@@ -309,7 +259,7 @@ class RuleAdminRepository(
             for parent_code, code, title, page_hint, order_no in DEFAULT_TEMPLATE_CHAPTERS:
                 parent_id = ids.get(parent_code) if parent_code else None
                 cursor = connection.execute(
-                    "INSERT INTO admin_template_chapters(parent_id,code,title,page_hint,order_no,enabled,updated_at) VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO admin_template_chapters(parent_id,code,title,page_hint,order_no,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s)",
                     (parent_id, code, title, page_hint, order_no, 1, now_iso()),
                 )
                 ids[code] = cursor.lastrowid
@@ -322,9 +272,9 @@ class RuleAdminRepository(
             ).fetchall()
             for row in rows:
                 chapter_code = _chapter_for_mapping({"fieldCode": row["field_code"], "sectionCode": row["section_code"], "sourceType": row["source_type"]})
-                chapter = connection.execute("SELECT id FROM admin_template_chapters WHERE code=?", (chapter_code,)).fetchone()
+                chapter = connection.execute("SELECT id FROM admin_template_chapters WHERE code=%s", (chapter_code,)).fetchone()
                 if chapter:
-                    connection.execute("INSERT OR IGNORE INTO admin_mapping_chapters(mapping_id,chapter_id) VALUES(?,?)", (row["id"], chapter["id"]))
+                    connection.execute("INSERT IGNORE INTO admin_mapping_chapters(mapping_id,chapter_id) VALUES(%s,%s)", (row["id"], chapter["id"]))
 
     def _seed_content_blocks(self) -> None:
         """Turn the legacy inferred mapping groups into persistent, editable blocks."""
@@ -366,13 +316,14 @@ class RuleAdminRepository(
                 source_path = source_match.group(1) if source_match else ""
                 cursor = connection.execute(
                     """INSERT INTO admin_content_blocks(chapter_id,title,kind,table_no,source_path,repeat_key,
-                       prototype_location,order_no,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                       prototype_location,dedup_key,sort_rule,empty_behavior,merge_rule,order_no,enabled,updated_at)
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (chapter_id, title, kind, table_no if is_table else "", source_path,
                      first.get("repeat_key") or "", f"body.{table_no}.dataRow" if is_table else "",
-                     order_no, 1, now_iso()),
+                     "", "", "KEEP", "NONE", order_no, 1, now_iso()),
                 )
                 connection.executemany(
-                    "INSERT INTO admin_mapping_blocks(mapping_id,block_id,order_no) VALUES(?,?,?)",
+                    "INSERT INTO admin_mapping_blocks(mapping_id,block_id,order_no) VALUES(%s,%s,%s)",
                     [(item["id"], cursor.lastrowid, order_no) for order_no, item in enumerate(items)],
                 )
 
@@ -411,12 +362,12 @@ class RuleAdminRepository(
                 if not is_table and title.endswith("表格"):
                     title = title[:-2]
                 connection.execute(
-                    "UPDATE admin_content_blocks SET title=?,kind=?,table_no=?,updated_at=? WHERE id=?",
+                    "UPDATE admin_content_blocks SET title=%s,kind=%s,table_no=%s,updated_at=%s WHERE id=%s",
                     (title, kind, table_no if is_table else "", now_iso(), block_id),
                 )
             connection.execute(
-                """UPDATE admin_content_blocks SET title=substr(title,1,length(title)-2),updated_at=?
-                   WHERE kind NOT IN ('REPEATING_TABLE','MATRIX') AND table_no NOT GLOB 'T[0-9]*'
+                """UPDATE admin_content_blocks SET title=substr(title,1,length(title)-2),updated_at=%s
+                   WHERE kind NOT IN ('REPEATING_TABLE','MATRIX') AND table_no NOT REGEXP '^T[0-9]'
                    AND title LIKE '%表格'""",
                 (now_iso(),),
             )
@@ -434,19 +385,27 @@ class RuleAdminRepository(
                 handled.add(block_id)
                 source_match = re.match(r"(\$\.[A-Za-z0-9_]+\[\*\])", str(row["source_path"] or ""))
                 connection.execute(
-                    """UPDATE admin_content_blocks SET source_path=?,repeat_key=?,prototype_location=?,updated_at=?
-                       WHERE id=?""",
+                    """UPDATE admin_content_blocks SET source_path=%s,repeat_key=%s,prototype_location=%s,updated_at=%s
+                       WHERE id=%s""",
                     (source_match.group(1) if source_match else "", row["repeat_key"] or "",
                      f"body.{row['table_no']}.dataRow" if re.fullmatch(r"T\d+", str(row["table_no"])) else "",
                      now_iso(), block_id),
                 )
 
     def _migrate_legacy_rules(self) -> None:
+        """One-time legacy migration; admin changes must not be rolled back on later startups."""
+        if self.database.migration_applied(LEGACY_RULES_MIGRATION):
+            return
+        self._apply_legacy_rules_migration()
+        # 失败时不标记，下次启动重试
+        self.database.mark_migration_applied(LEGACY_RULES_MIGRATION)
+
+    def _apply_legacy_rules_migration(self) -> None:
         """Correct locations that the original prototype generated from column labels only."""
         with self.database.connect() as connection:
             connection.execute(
                 """UPDATE admin_mapping_rules SET repeat_type='NONE', source_path='$.lodConclusion',
-                   updated_at=? WHERE control_tag='lod.conclusion'""", (now_iso(),)
+                   updated_at=%s WHERE control_tag='lod.conclusion'""", (now_iso(),)
             )
             solution_sources = {
                 "T12": "systemSuitabilitySolutions", "T14": "specificitySolutions",
@@ -455,22 +414,22 @@ class RuleAdminRepository(
             }
             for table_no, collection in solution_sources.items():
                 connection.execute(
-                    """UPDATE admin_mapping_rules SET source_path=replace(source_path,'$.solutions[*]',?),
-                       source_pending=0, updated_at=? WHERE table_no=?""",
+                    """UPDATE admin_mapping_rules SET source_path=replace(source_path,'$.solutions[*]',%s),
+                       source_pending=0, updated_at=%s WHERE table_no=%s""",
                     (f"$.{collection}[*]", now_iso(), table_no),
                 )
             connection.execute(
                 """UPDATE admin_mapping_rules SET source_path=replace(source_path,'$.linearity[*]',
-                   '$.intermediateLinearity[*]'), source_pending=0, updated_at=? WHERE table_no='T25'""",
+                   '$.intermediateLinearity[*]'), source_pending=0, updated_at=%s WHERE table_no='T25'""",
                 (now_iso(),),
             )
             connection.execute(
-                """UPDATE admin_mapping_rules SET enabled=0, source_pending=1, updated_at=?
+                """UPDATE admin_mapping_rules SET enabled=0, source_pending=1, updated_at=%s
                    WHERE table_no IN ('T24','T37')""", (now_iso(),)
             )
             connection.execute(
                 """UPDATE admin_table_rules SET enabled=0,
-                   notes='当前 Word 模板没有该独立表格；数据保留在 LIMS 标准模型和来源证据中', updated_at=?
+                   notes='当前 Word 模板没有该独立表格；数据保留在 LIMS 标准模型和来源证据中', updated_at=%s
                    WHERE table_no IN ('T24','T37')""", (now_iso(),)
             )
             connected_collections = (
@@ -479,23 +438,23 @@ class RuleAdminRepository(
                 "intermediatePrecision", "blankAmount", "accuracy", "solutionStability",
                 "robustnessSpecificity", "robustnessSequence", "robustnessResult", "sampleResults",
             )
-            conditions = " OR ".join("source_path LIKE ?" for _ in connected_collections)
+            conditions = " OR ".join("source_path LIKE %s" for _ in connected_collections)
             connection.execute(
-                f"UPDATE admin_mapping_rules SET source_pending=0, updated_at=? WHERE enabled=1 AND ({conditions})",
+                f"UPDATE admin_mapping_rules SET source_pending=0, updated_at=%s WHERE enabled=1 AND ({conditions})",
                 (now_iso(), *(f"$.{name}[*]%" for name in connected_collections)),
             )
             connection.execute(
                 """UPDATE admin_mapping_rules SET location_id='body.T17.row3.cell2', field_code='lod.conclusion',
                    source_path='$.lodConclusion', repeat_type='NONE', repeat_key='', control_tag='lod.conclusion',
-                   updated_at=? WHERE location_id='body.T17.dataRow.cell8'""", (now_iso(),)
+                   updated_at=%s WHERE location_id='body.T17.dataRow.cell8'""", (now_iso(),)
             )
             direct_lims_prefixes = (
                 "project.name", "document.code", "document.version", "approval[]",
                 "samples[]", "referenceStandards[]", "instruments[]", "columns[]", "reagents[]",
             )
-            conditions = " OR ".join("field_code LIKE ?" for _ in direct_lims_prefixes)
+            conditions = " OR ".join("field_code LIKE %s" for _ in direct_lims_prefixes)
             connection.execute(
-                f"UPDATE admin_mapping_rules SET source_pending=0, updated_at=? WHERE source_type='LIMS' AND ({conditions})",
+                f"UPDATE admin_mapping_rules SET source_pending=0, updated_at=%s WHERE source_type='LIMS' AND ({conditions})",
                 (now_iso(), *(f"{prefix}%" for prefix in direct_lims_prefixes)),
             )
             normalized_paths = {
@@ -509,7 +468,7 @@ class RuleAdminRepository(
             }
             for field_code, source_path in normalized_paths.items():
                 connection.execute(
-                    "UPDATE admin_mapping_rules SET source_path=?, source_pending=0, updated_at=? WHERE field_code=?",
+                    "UPDATE admin_mapping_rules SET source_path=%s, source_pending=0, updated_at=%s WHERE field_code=%s",
                     (source_path, now_iso(), field_code),
                 )
             row = connection.execute("SELECT config FROM admin_data_sources WHERE code='lims-primary'").fetchone()
@@ -518,7 +477,7 @@ class RuleAdminRepository(
                 if config.get("connector") == "mock":
                     config.update({"connector": "sql", "previewAdapter": "oracle", "instanceKey": "INSTANCEID",
                                    "unitBodyField": "UNITBODY", "query": ""})
-                    connection.execute("UPDATE admin_data_sources SET config=?, updated_at=? WHERE code='lims-primary'",
+                    connection.execute("UPDATE admin_data_sources SET config=%s, updated_at=%s WHERE code='lims-primary'",
                                        (json.dumps(config, ensure_ascii=False), now_iso()))
                 if config.get("connector") == "sql":
                     config["previewAdapter"] = "oracle"
@@ -529,7 +488,7 @@ class RuleAdminRepository(
                     "conflictPolicy": "require-user-selection",
                     "preserveUnmatchedEvidence": True,
                 })
-                connection.execute("UPDATE admin_data_sources SET config=?, updated_at=? WHERE code='lims-primary'",
+                connection.execute("UPDATE admin_data_sources SET config=%s, updated_at=%s WHERE code='lims-primary'",
                                    (json.dumps(config, ensure_ascii=False), now_iso()))
             title_mapping = connection.execute(
                 "SELECT 1 FROM admin_mapping_rules WHERE field_code='project.name.body'"
@@ -539,7 +498,7 @@ class RuleAdminRepository(
                     """INSERT INTO admin_mapping_rules(location_id,section_code,table_no,word_label,field_code,
                        data_type,source_type,source_path,repeat_type,repeat_key,merge_rule,fill_rule,
                        calculation_rule,control_tag,required,source_pending,enabled,updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     ("body.paragraph4", "cover", "COVER", "封面项目名称", "project.name.body", "string",
                      "LIMS", "$.project.name", "NONE", "", "PRESERVE", "TEXT", "",
                      "project.name.body", 1, 0, 1, now_iso()),
@@ -560,7 +519,7 @@ class RuleAdminRepository(
             )
             for paragraph_no, label, field_code, source_type in dynamic_paragraphs:
                 exists = connection.execute(
-                    "SELECT 1 FROM admin_mapping_rules WHERE field_code=?", (field_code,)
+                    "SELECT 1 FROM admin_mapping_rules WHERE field_code=%s", (field_code,)
                 ).fetchone()
                 if exists:
                     continue
@@ -568,7 +527,7 @@ class RuleAdminRepository(
                     """INSERT INTO admin_mapping_rules(location_id,section_code,table_no,word_label,field_code,
                        data_type,source_type,source_path,repeat_type,repeat_key,merge_rule,fill_rule,
                        calculation_rule,control_tag,required,source_pending,enabled,updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (f"body.paragraph{paragraph_no}", "narrative", "TEXT", label, field_code, "richText",
                      source_type, "", "NONE", "", "PRESERVE", "TEXT", "", field_code,
                      0, 1, 1, now_iso()),
@@ -582,6 +541,7 @@ class RuleAdminRepository(
         matrix_tables = {"T11", "T20", "T24", "T25"}
         multi_header = {"T13": 2, "T31": 2}
         for table_no, entries in groups.items():
+            # 布局字段一并写入，保证新装环境里的表格规则在设计器中就是完整可见的
             self.upsert_table_rule({
                 "tableNo": table_no,
                 "sectionCode": entries[0]["sectionCode"],
@@ -592,6 +552,10 @@ class RuleAdminRepository(
                 "footerRows": 0,
                 "recordKey": entries[0].get("repeatKey", ""),
                 "mergeFields": [item["fieldCode"] for item in entries if item.get("mergeRule") == "VERTICAL_BY_VALUE"],
+                "physicalTableIndex": seed_physical_table_index(table_no),
+                "preservedRowLabels": list(SEED_PRESERVED_ROW_LABELS),
+                "clearEmbeddedObjects": table_no in SEED_CLEAR_OBJECT_TABLES,
+                "matrixLayout": (SEED_MATRIX_LAYOUT if table_no in SEED_MATRIX_TABLES else ""),
                 "enabled": table_no != "T2",
                 "notes": "由原映射自动生成，发布前需在模板预览中确认数据行范围",
             })

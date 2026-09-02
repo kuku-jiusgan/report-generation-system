@@ -9,9 +9,14 @@ EXCEL_FIELD_PATHS = {
     "impurity.impurityName": "$.impurity[*].impurityName",
     "referenceStandards.name": "$.referenceStandards[*].name",
     "referenceStandards.content": "$.referenceStandards[*].content",
+    "systemSuitability.impurityName": "$.systemSuitability[*].impurityName",
+    "systemSuitability.solutionName": "$.systemSuitability[*].solutionName",
     "systemSuitability.sequence": "$.systemSuitability[*].sequence",
     "systemSuitability.retentionTime": "$.systemSuitability[*].retentionTime",
     "systemSuitability.peakArea": "$.systemSuitability[*].peakArea",
+    "systemSuitability.retentionTimeRsd": "$.systemSuitability[*].retentionTimeRsd",
+    "systemSuitability.peakAreaRsd": "$.systemSuitability[*].peakAreaRsd",
+    "systemSuitability.conclusion": "$.systemSuitabilityConclusion",
     "specificity.impurityName": "$.specificity[*].impurityName",
     "specificity.solutionName": "$.specificity[*].solutionName",
     "specificity.retentionTime": "$.specificity[*].retentionTime",
@@ -58,8 +63,12 @@ EXCEL_WORKBOOK_LOCATIONS = {
     "referenceStandards.name": {"sheet": "对照品配置", "cells": "A3:A*", "matchBy": "非空数据行", "valueColumn": "A（名称）"},
     "referenceStandards.content": {"sheet": "对照品配置", "cells": "C3:C*", "matchBy": "与名称列同一行", "valueColumn": "C（含量）"},
     "systemSuitability.sequence": {"sheet": "系统适用性", "cells": "固定数据行 3:8", "matchBy": "首页 B9 起的杂质顺序 + 进样序号 1-6", "valueColumn": "按行生成，不读取工作表列"},
+    "systemSuitability.solutionName": {"sheet": "系统适用性", "cells": "A3:A8、D3:D8、G3:G8……", "matchBy": "每个杂质对应的系统适用性溶液名称", "valueColumn": "第 3i-2 列"},
     "systemSuitability.retentionTime": {"sheet": "系统适用性", "cells": "B3:B8、E3:E8、H3:H8……", "matchBy": "第 i 个杂质对应首页 B(8+i) 的名称", "valueColumn": "第 3i-1 列（B、E、H、K……）"},
     "systemSuitability.peakArea": {"sheet": "系统适用性", "cells": "C3:C8、F3:F8、I3:I8……", "matchBy": "第 i 个杂质对应首页 B(8+i) 的名称", "valueColumn": "第 3i 列（C、F、I、L……）"},
+    "systemSuitability.retentionTimeRsd": {"sheet": "系统适用性", "cells": "B9、E9、H9、K9……", "matchBy": "第 i 个杂质对应首页 B(8+i) 的名称", "valueColumn": "保留时间 RSD"},
+    "systemSuitability.peakAreaRsd": {"sheet": "系统适用性", "cells": "C9、F9、I9、L9……", "matchBy": "第 i 个杂质对应首页 B(8+i) 的名称", "valueColumn": "峰面积 RSD"},
+    "systemSuitability.conclusion": {"sheet": "系统适用性", "cells": "B10", "matchBy": "固定结论单元格", "valueColumn": "结论"},
     "specificity.impurityName": {"sheet": "专属性", "cells": "每个杂质 5 行分块", "matchBy": "首页杂质名称顺序", "valueColumn": "关联杂质名称"},
     "specificity.solutionName": {"sheet": "专属性", "cells": "B 列，每个杂质块 4 行", "matchBy": "杂质名称分块 + 数据行", "valueColumn": "B（溶液名称）"},
     "specificity.retentionTime": {"sheet": "专属性", "cells": "C 列，每个杂质块 4 行", "matchBy": "杂质名称分块 + 数据行", "valueColumn": "C（保留时间）"},
@@ -153,7 +162,7 @@ REPEATABILITY_SUMMARY_CELLS = {
 
 def _sync_repeated_field_catalog(database: Any, repeated_fields: tuple[str, ...]) -> None:
     with database.connect() as connection:
-        placeholders = ",".join("?" for _ in repeated_fields)
+        placeholders = ",".join("%s" for _ in repeated_fields)
         connection.execute(
             f"UPDATE lims_field_catalog SET cardinality='MANY' WHERE field_code IN ({placeholders})",
             repeated_fields,
@@ -178,7 +187,7 @@ def _sync_repeatability_group_chapter(database: Any) -> None:
         group = connection.execute(
             """SELECT DISTINCT gf.group_code FROM system_field_group_fields gf
                WHERE gf.field_code IN ({}) LIMIT 1""".format(
-                ",".join("?" for _ in REPEATABILITY_DETAIL_COLUMNS)
+                ",".join("%s" for _ in REPEATABILITY_DETAIL_COLUMNS)
             ), tuple(REPEATABILITY_DETAIL_COLUMNS),
         ).fetchone()
         chapter = connection.execute(
@@ -187,7 +196,7 @@ def _sync_repeatability_group_chapter(database: Any) -> None:
         if not group or not chapter:
             return
         connection.execute(
-            "INSERT OR IGNORE INTO system_field_group_chapters(group_code,chapter_id) VALUES(?,?)",
+            "INSERT IGNORE INTO system_field_group_chapters(group_code,chapter_id) VALUES(%s,%s)",
             (group["group_code"], chapter["id"]),
         )
 
@@ -207,18 +216,18 @@ def _sync_excel_field_paths(database: Any) -> None:
         for field_code, source_path in EXCEL_FIELD_PATHS.items():
             is_residual_chart = field_code == "uncategorized.field_029"
             connection.execute(
-                """UPDATE lims_field_catalog SET legacy_json_path=?,
-                   data_type=CASE WHEN ? THEN 'image' ELSE data_type END,updated_at=? WHERE field_code=?""",
+                """UPDATE lims_field_catalog SET legacy_json_path=%s,
+                   data_type=CASE WHEN %s THEN 'image' ELSE data_type END,updated_at=%s WHERE field_code=%s""",
                 (source_path, is_residual_chart, timestamp, field_code),
             )
             connection.execute(
-                """UPDATE admin_mapping_rules SET source_path=?,
-                   data_type=CASE WHEN ? THEN 'image' ELSE data_type END,
-                   repeat_type=CASE WHEN ? THEN 'NONE' ELSE repeat_type END,
-                   location_id=CASE WHEN ? THEN 'body.T20.row9.cell2' ELSE location_id END,
-                   source_pending=CASE WHEN ? THEN 0 ELSE source_pending END,
-                   fill_rule=CASE WHEN ? THEN 'IMAGE_FIT_WIDE' ELSE fill_rule END,updated_at=?
-                   WHERE standard_field_code=?""",
+                """UPDATE admin_mapping_rules SET source_path=%s,
+                   data_type=CASE WHEN %s THEN 'image' ELSE data_type END,
+                   repeat_type=CASE WHEN %s THEN 'NONE' ELSE repeat_type END,
+                   location_id=CASE WHEN %s THEN 'body.T20.row9.cell2' ELSE location_id END,
+                   source_pending=CASE WHEN %s THEN 0 ELSE source_pending END,
+                   fill_rule=CASE WHEN %s THEN 'IMAGE_FIT_WIDE' ELSE fill_rule END,updated_at=%s
+                   WHERE standard_field_code=%s""",
                 (source_path, is_residual_chart, is_residual_chart, is_residual_chart,
                  is_residual_chart, is_residual_chart, timestamp, field_code),
             )
@@ -249,7 +258,7 @@ def _sync_excel_field_paths(database: Any) -> None:
                             changed = True
             if changed:
                 connection.execute(
-                    "UPDATE admin_template_versions SET snapshot=?,updated_at=? WHERE id=?",
+                    "UPDATE admin_template_versions SET snapshot=%s,updated_at=%s WHERE id=%s",
                     (json.dumps(snapshot, ensure_ascii=False), timestamp, version["id"]),
                 )
 
@@ -262,8 +271,22 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
         "layout": "VBA_FIXED_BLOCKS",
         "workbookLocation": EXCEL_WORKBOOK_LOCATIONS.get(field_code, {}),
     }
-    if field_code.startswith("systemSuitability."):
+    if field_code == "systemSuitability.conclusion":
+        config.update({"mode": "FIXED_CELL", "sheet": "系统适用性", "row": 10, "column": 2})
+    elif field_code.startswith("systemSuitability."):
         field = field_code.rsplit(".", 1)[-1]
+        if field == "impurityName":
+            config.update({"mode": "REPEAT_BLOCK", "sheet": "系统适用性", "rowStart": 3, "rowEnd": 8,
+                           "repeatValueSource": {"sheet": "首页", "row": 9, "column": 2, "rowStep": 1},
+                           "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                           "maxRepeat": 15, "valueMode": "REPEAT_VALUE"})
+            return config
+        if field in {"retentionTimeRsd", "peakAreaRsd"}:
+            config.update({"mode": "REPEAT_BLOCK", "sheet": "系统适用性", "rowStart": 9, "rowEnd": 9,
+                           "startColumn": 2 if field == "retentionTimeRsd" else 3, "columnStep": 3,
+                           "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                           "maxRepeat": 15, "valueMode": "CELL", "broadcastRepeat": 6})
+            return config
         config.update({"mode": "REPEAT_BLOCK", "sheet": "系统适用性", "rowStart": 3, "rowEnd": 8,
                        "startColumn": 2 if field == "retentionTime" else 3 if field == "peakArea" else 1,
                        "columnStep": 3, "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
@@ -325,32 +348,39 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
     return config
 
 
+# 一次性工作簿布局同步标记：首次启动把存量 Excel 规则/目录/已发布快照对齐到内置布局；
+# 之后以管理员的修改为准，启动只做"缺失才播种"，不再回滚配置
+EXCEL_LAYOUT_MIGRATION = "2026_excel_rule_defaults_layout_sync_v1"
+
+
 def ensure_excel_field_rules(database: Any) -> None:
-    _ensure_repeated_field_contracts(database)
-    _sync_excel_field_paths(database)
+    first_sync = not database.migration_applied(EXCEL_LAYOUT_MIGRATION)
+    if first_sync:
+        _sync_excel_field_paths(database)
     for field_code, source_path in EXCEL_FIELD_PATHS.items():
         if not database.get_lims_field(field_code):
             continue
         excel_rules = [rule for rule in database.list_system_field_rules(field_code)
                        if rule.get("sourceType") == "EXCEL"]
+        existing: list[dict[str, Any]] = []
         for rule in excel_rules:
             config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
             if config.get("sourcePath") != source_path:
-                database.delete_system_field_rule(rule["id"])
-        existing = [
-            rule for rule in excel_rules
-            if (rule.get("config") or {}).get("sourcePath") == source_path
-        ]
-        if existing:
-            expected = _rule_config(field_code, source_path)
-            for rule in existing:
-                config = dict(rule.get("config") or {})
+                if first_sync:
+                    database.delete_system_field_rule(rule["id"])
+                continue
+            if first_sync:
+                expected = _rule_config(field_code, source_path)
                 if any(config.get(key) != value for key, value in expected.items()):
-                    config.update(expected)
+                    config = {**config, **expected}
                     database.save_system_field_rule({**rule, "config": config}, rule["id"])
+            existing.append(rule)
+        if existing:
             continue
         database.save_system_field_rule({
             "fieldCode": field_code, "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",
             "priority": 50, "transform": "TRIM", "enabled": True,
             "config": _rule_config(field_code, source_path),
         })
+    if first_sync:
+        database.mark_migration_applied(EXCEL_LAYOUT_MIGRATION)

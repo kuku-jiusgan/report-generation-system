@@ -10,7 +10,7 @@ from backend.app.services.calculation_engine import (
     extract_references,
     validate_calculation,
 )
-from backend.app.services.mapped_docx_generator import _row_calculated_values
+from backend.app.services.docx_field_values import row_calculated_values as _row_calculated_values
 from backend.app.services.rule_admin import RuleAdminRepository
 
 
@@ -86,6 +86,7 @@ class CalculationEngineTest(unittest.TestCase):
         values = _row_calculated_values(
             mappings,
             {"measured": "9.95", "added": "10.0"},
+            {},
             {},
         )
         self.assertEqual(values["row.recovery"], Decimal("99.5"))

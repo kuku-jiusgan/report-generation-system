@@ -88,7 +88,10 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
                                     row + repeat_index * int(config.get("rowStep", 0)) + int(config.get("rowOffset", 0)),
                                     int(config.get("startColumn", 1)) + repeat_index * int(config.get("columnStep", 0))
                                     + int(config.get("columnOffset", 0)), bool(config.get("required")))
-            values.append(value)
+            repeat_value = int(config.get("broadcastRepeat", 1))
+            if repeat_value < 1 or repeat_value > 1000:
+                raise ExcelRuleError("重复值展开次数无效")
+            values.extend([value] * repeat_value)
     return values
 
 
@@ -205,6 +208,10 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
         except (ExcelRuleError, KeyError, TypeError, ValueError) as error:
             reader.warnings.append(f"字段 {field_code} 序号生成失败：{error}")
     enrich_excel_payload(payload)
+    conclusion = payload.get("systemSuitabilityConclusion")
+    records = payload.get("systemSuitability")
+    if conclusion not in (None, "") and isinstance(records, list) and records:
+        records[0]["conclusion"] = conclusion
     payload["_meta"] = {"format": "CONFIGURED_FIELD_RULES", "warnings": reader.warnings,
                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     return payload

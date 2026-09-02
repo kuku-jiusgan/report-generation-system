@@ -9,17 +9,20 @@ class WorkspaceRepositoryMixin:
     """Active designer workspace snapshots and restoration."""
 
     def snapshot(self) -> dict[str, Any]:
+        active = self.active_workspace()
         return {
             "mappings": self.list_mappings(), "tableRules": self.list_table_rules(),
             "dataSources": self.list_data_sources(), "aiRules": self.list_ai_rules(),
-            "chapters": self.list_template_chapters(), "contentBlocks": self.list_content_blocks(),
+            "chapters": self.list_template_chapters(),
+            "templateBlocks": self.list_template_blocks(active["versionId"]) if active else [],
         }
 
     def active_workspace(self) -> dict[str, Any] | None:
         with self.database.connect() as connection:
             row = connection.execute(
                 """SELECT w.active_template_id,w.active_version_id,t.name AS template_name,
-                   v.version_no,v.status AS version_status,v.template_file FROM admin_template_workspace w
+                   v.version_no,v.status AS version_status,v.template_file,v.onlyoffice_document_key
+                   FROM admin_template_workspace w
                    JOIN admin_templates t ON t.id=w.active_template_id
                    JOIN admin_template_versions v ON v.id=w.active_version_id WHERE w.id=1"""
             ).fetchone()
@@ -30,34 +33,54 @@ class WorkspaceRepositoryMixin:
             "templateId": item["active_template_id"], "versionId": item["active_version_id"],
             "templateName": item["template_name"], "versionNo": item["version_no"],
             "versionStatus": item["version_status"], "templateFile": item["template_file"],
+            "documentKey": item["onlyoffice_document_key"],
         }
+
+    def set_version_document_key(self, version_id: str, key: str | None) -> None:
+        """记录签发给 ONLYOFFICE 的文档 key，回调据此识别陈旧会话；重渲染时置空使其失效。"""
+        with self.database.connect() as connection:
+            connection.execute(
+                "UPDATE admin_template_versions SET onlyoffice_document_key=%s,updated_at=%s WHERE id=%s",
+                (key, now_iso(), version_id),
+            )
 
     def save_active_workspace(self, template_file: str | None = None) -> None:
         active = self.active_workspace()
         if not active:
             return
         values: list[Any] = [json.dumps(self.snapshot(), ensure_ascii=False)]
-        assignment = "snapshot=?"
+        assignment = "snapshot=%s"
         if template_file is not None:
-            assignment += ",template_file=?"
+            assignment += ",template_file=%s"
             values.append(template_file)
         values.extend([now_iso(), active["versionId"]])
         with self.database.connect() as connection:
             connection.execute(
-                f"UPDATE admin_template_versions SET {assignment},updated_at=? WHERE id=?", values,
+                f"UPDATE admin_template_versions SET {assignment},updated_at=%s WHERE id=%s", values,
             )
 
     def _restore_snapshot(self, snapshot: dict[str, Any]) -> None:
         chapters = snapshot.get("chapters") or self.list_template_chapters()
         with self.database.connect() as connection:
+            group_links = [dict(row) for row in connection.execute(
+                """SELECT gc.group_code,c.code, gc.order_no
+                   FROM system_field_group_chapters gc
+                   JOIN admin_template_chapters c ON c.id=gc.chapter_id"""
+            ).fetchall()]
             self._clear_workspace(connection)
             self._restore_chapters(connection, chapters)
+            for link in group_links:
+                chapter = connection.execute(
+                    "SELECT id FROM admin_template_chapters WHERE code=%s", (link["code"],)
+                ).fetchone()
+                if chapter:
+                    connection.execute(
+                        "INSERT IGNORE INTO system_field_group_chapters(group_code,chapter_id,order_no) VALUES(%s,%s,%s)",
+                        (link["group_code"], chapter["id"], link.get("order_no", 0)),
+                    )
             self._restore_mappings(connection, snapshot.get("mappings", []))
-            self._restore_content_blocks(connection, snapshot.get("contentBlocks", []))
             self._restore_table_rules(connection, snapshot.get("tableRules", []))
             self._restore_ai_rules(connection, snapshot.get("aiRules", []))
-        if not snapshot.get("contentBlocks"):
-            self._seed_content_blocks()
 
     @staticmethod
     def _clear_workspace(connection: Any) -> None:
@@ -72,7 +95,7 @@ class WorkspaceRepositoryMixin:
         for item in sorted(chapters, key=lambda value: (value.get("orderNo", 0), value.get("id", 0))):
             connection.execute(
                 """INSERT INTO admin_template_chapters(id,parent_id,code,title,page_hint,order_no,enabled,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?)""",
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (item["id"], item.get("parentId"), item["code"], item["title"], item.get("pageHint"),
                  item.get("orderNo", 0), int(item.get("enabled", True)), now_iso()),
             )
@@ -97,12 +120,12 @@ class WorkspaceRepositoryMixin:
             values = self._mapping_restore_values(item)
             connection.execute(
                 f"INSERT INTO admin_mapping_rules(id,{','.join(MAPPING_COLUMNS.values())},updated_at) "
-                f"VALUES({','.join('?' for _ in range(len(values) + 2))})",
+                f"VALUES({','.join('%s' for _ in range(len(values) + 2))})",
                 (item["id"], *values, now_iso()),
             )
             if item.get("chapterId"):
                 connection.execute(
-                    "INSERT INTO admin_mapping_chapters(mapping_id,chapter_id) VALUES(?,?)",
+                    "INSERT INTO admin_mapping_chapters(mapping_id,chapter_id) VALUES(%s,%s)",
                     (item["id"], item["chapterId"]),
                 )
 
@@ -112,7 +135,7 @@ class WorkspaceRepositoryMixin:
             connection.execute(
                 """INSERT INTO admin_content_blocks(id,chapter_id,title,kind,table_no,source_path,repeat_key,
                    prototype_location,dedup_key,sort_rule,empty_behavior,merge_rule,order_no,enabled,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (item["id"], item["chapterId"], item["title"], item.get("kind", "MAPPED_FIELD"),
                  item.get("tableNo", ""), item.get("sourcePath", ""), item.get("repeatKey", ""),
                  item.get("prototypeLocation", ""), item.get("dedupKey", ""), item.get("sortRule", ""),
@@ -120,7 +143,7 @@ class WorkspaceRepositoryMixin:
                  int(item.get("enabled", True)), now_iso()),
             )
             connection.executemany(
-                "INSERT INTO admin_mapping_blocks(mapping_id,block_id,order_no) VALUES(?,?,?)",
+                "INSERT INTO admin_mapping_blocks(mapping_id,block_id,order_no) VALUES(%s,%s,%s)",
                 [(mapping_id, item["id"], order_no)
                  for order_no, mapping_id in enumerate(item.get("mappingIds", []))],
             )
@@ -130,12 +153,18 @@ class WorkspaceRepositoryMixin:
         for item in rules:
             connection.execute(
                 """INSERT INTO admin_table_rules(table_no,section_code,mode,header_rows,data_row_start,data_row_end,
-                   footer_rows,record_key,merge_fields,enabled,notes,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   footer_rows,record_key,merge_fields,physical_table_index,preserved_row_labels,
+                   clear_embedded_objects,matrix_layout,enabled,notes,group_key,inner_mode,updated_at)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (item["tableNo"], item.get("sectionCode", ""), item.get("mode", "ROW_REPEAT"),
                  item.get("headerRows", 1), item.get("dataRowStart", 2), item.get("dataRowEnd", 2),
                  item.get("footerRows", 0), item.get("recordKey", ""),
-                 json.dumps(item.get("mergeFields", []), ensure_ascii=False), int(item.get("enabled", True)),
-                 item.get("notes", ""), now_iso()),
+                 json.dumps(item.get("mergeFields", []), ensure_ascii=False),
+                 int(item.get("physicalTableIndex", 0) or 0),
+                 json.dumps(item.get("preservedRowLabels", []), ensure_ascii=False),
+                 int(bool(item.get("clearEmbeddedObjects", False))), item.get("matrixLayout", "") or "",
+                 int(item.get("enabled", True)), item.get("notes", ""), item.get("groupKey", ""),
+                 item.get("innerMode", "ROW_REPEAT"), now_iso()),
             )
 
     @staticmethod
@@ -143,7 +172,7 @@ class WorkspaceRepositoryMixin:
         for item in rules:
             connection.execute(
                 """INSERT INTO admin_ai_rules(id,field_code,name,input_fields,prompt_template,output_type,max_length,
-                   require_citations,requires_approval,provider,model,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   require_citations,requires_approval,provider,model,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (item.get("id"), item["fieldCode"], item["name"],
                  json.dumps(item.get("inputFields", []), ensure_ascii=False), item.get("promptTemplate", ""),
                  item.get("outputType", "richText"), item.get("maxLength", 500),

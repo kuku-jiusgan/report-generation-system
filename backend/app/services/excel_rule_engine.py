@@ -116,6 +116,16 @@ def _repeat(reader: WorkbookValues, rule: dict[str, Any]) -> list[dict[str, Any]
     return records
 
 
+def _place(payload: dict[str, Any], output: str, value: Any) -> None:
+    # 点号路径一律按层级落位，FIXED 与 REPEAT_BLOCK 保持一致；
+    # 否则 REPEAT_BLOCK 配了 "a.b" 会产出字面量为 "a.b" 的扁平键，和 FIXED 的嵌套结构对不上
+    current = payload
+    parts = output.split(".")
+    for part in parts[:-1]:
+        current = current.setdefault(part, {})
+    current[parts[-1]] = value
+
+
 def execute_excel_rules(path: Path, snapshot: dict[str, Any], version_id: int | None = None) -> dict[str, Any]:
     reader = WorkbookValues(path)
     payload: dict[str, Any] = {}
@@ -124,13 +134,9 @@ def execute_excel_rules(path: Path, snapshot: dict[str, Any], version_id: int | 
             continue
         output = str(rule["output"])
         if rule["kind"] == "FIXED":
-            current = payload
-            parts = output.split(".")
-            for part in parts[:-1]:
-                current = current.setdefault(part, {})
-            current[parts[-1]] = _fixed(reader, rule)
+            _place(payload, output, _fixed(reader, rule))
         elif rule["kind"] == "REPEAT_BLOCK":
-            payload[output] = _repeat(reader, rule)
+            _place(payload, output, _repeat(reader, rule))
         else:
             raise ExcelRuleError(f"不支持的 Excel 规则类型：{rule['kind']}")
     payload["_meta"] = {"format": snapshot.get("code", "CUSTOM"), "ruleVersionId": version_id,

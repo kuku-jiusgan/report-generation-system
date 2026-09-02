@@ -33,19 +33,19 @@ def _header_index(headers: list[str], *patterns: str) -> int | None:
 
 def impurity_columns(headers: list[str]) -> dict[str, int | None] | None:
     columns = {
-        "name": _header_index(headers, r"(?:杂质)?名称", r"化合物名称"),
-        "cas": _header_index(headers, r"CAS(?:号|编号|No\.?)?"),
-        "structure": _header_index(headers, r"(?:化学)?结构式?", r"结构图片"),
-        "limit": _header_index(headers, r"(?:杂质)?限度(?:\([^)]*\))?", r"限量(?:\([^)]*\))?"),
+        "name": _header_index(headers, r"(%s:杂质)%s名称", r"化合物名称"),
+        "cas": _header_index(headers, r"CAS(%s:号|编号|No\.%s)%s"),
+        "structure": _header_index(headers, r"(%s:化学)%s结构式%s", r"结构图片"),
+        "limit": _header_index(headers, r"(%s:杂质)%s限度(%s:\([^)]*\))%s", r"限量(%s:\([^)]*\))%s"),
     }
     required = (columns["name"], columns["cas"], columns["limit"])
     return columns if all(value is not None for value in required) else None
 
 
 def validation_summary_columns(headers: list[str]) -> dict[str, int] | None:
-    project = _header_index(headers, r"(?:验证|试验|检验)?项目", r"验证内容", r"项目名称")
+    project = _header_index(headers, r"(%s:验证|试验|检验)%s项目", r"验证内容", r"项目名称")
     criteria = _header_index(
-        headers, r"(?:可)?接受标准", r"接收标准", r"验收标准", r"判定标准", r"AcceptanceCriteria",
+        headers, r"(%s:可)%s接受标准", r"接收标准", r"验收标准", r"判定标准", r"AcceptanceCriteria",
     )
     if project is None or criteria is None:
         return None
@@ -56,10 +56,10 @@ def limit_calculation_records(rows: list[list[str]]) -> list[dict[str, str]]:
     if not rows:
         return []
     patterns = {
-        "impurityName": (r"(?:杂质)?名称",), "field2": (r"AI值(?:\([^)]*\))?", r"每日允许摄入量.*"),
-        "field3": (r"最大日剂量(?:\([^)]*\))?",), "field4": (r"杂质限度(?:\([^)]*\))?",),
-        "field5": (r"供试品溶液中API浓度(?:\([^)]*\))?", r"API浓度(?:\([^)]*\))?"),
-        "field6": (r"杂质限度浓度(?:\([^)]*\))?", r"限度浓度(?:\([^)]*\))?"),
+        "impurityName": (r"(%s:杂质)%s名称",), "field2": (r"AI值(%s:\([^)]*\))%s", r"每日允许摄入量.*"),
+        "field3": (r"最大日剂量(%s:\([^)]*\))%s",), "field4": (r"杂质限度(%s:\([^)]*\))%s",),
+        "field5": (r"供试品溶液中API浓度(%s:\([^)]*\))%s", r"API浓度(%s:\([^)]*\))%s"),
+        "field6": (r"杂质限度浓度(%s:\([^)]*\))%s", r"限度浓度(%s:\([^)]*\))%s"),
     }
     columns = {key: _header_index(rows[0], *aliases) for key, aliases in patterns.items()}
     if any(column is None for column in columns.values()):

@@ -1,6 +1,6 @@
 # 报告自动生成系统
 
-面向单台 Windows 或 Linux 服务器的报告生成应用。前端使用 Vue 3，后端使用 FastAPI；业务数据保存到 SQLite，上传文件和生成报告保存在本机 `data` 目录，不依赖 Docker、MinIO 或外部数据库。
+面向单台 Windows 或 Linux 服务器的报告生成应用。前端使用 Vue 3，后端使用 FastAPI；业务数据保存到本机 MySQL，上传文件和生成报告保存在本机 `data` 目录。
 
 ## 当前功能
 
@@ -159,7 +159,7 @@ cd "E:\报告自动生成系统"
 ## 数据与备份
 
 ```text
-data/report-system.db  报告业务数据
+MySQL `report_generation_system`  数据库（本机服务）
 data/uploads/          上传的 PDF
 data/reports/          生成的 Word 文件
 templates/             报告模板
@@ -170,4 +170,4 @@ mapping/               模板字段映射
 
 ## 生产部署
 
-当前使用 SQLite，systemd 服务保持单个 Uvicorn 进程运行。对外部署建议再通过 Nginx 提供 HTTPS；`data` 目录应放在定期备份的独立数据盘。若直接绑定 `0.0.0.0`，请同时限制防火墙访问范围。后续迁移到 PostgreSQL 后，再根据并发量增加 Uvicorn 工作进程。
+当前使用本机 MySQL，systemd 服务保持单个 Uvicorn 进程运行。对外部署建议再通过 Nginx 提供 HTTPS；文件目录应放在定期备份的独立数据盘。

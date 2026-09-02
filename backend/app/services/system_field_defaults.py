@@ -1,13 +1,16 @@
 from ..database import Database
 
+# 一次性遗留数据清理标记：首次启动执行后，管理员对这些字段/规则的修改不再被启动自愈回滚
+LEGACY_CLEANUP_MIGRATION = "2026_system_field_defaults_legacy_cleanup_v1"
+
 
 def _field_code(database: Database, legacy: str) -> str:
     with database.connect() as connection:
         table = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='standard_field_code_aliases'"
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='standard_field_code_aliases'"
         ).fetchone()
         row = connection.execute(
-            "SELECT new_code FROM standard_field_code_aliases WHERE old_code=?", (legacy,),
+            "SELECT new_code FROM standard_field_code_aliases WHERE old_code=%s", (legacy,),
         ).fetchone() if table else None
     return str(row["new_code"]) if row else legacy
 
@@ -67,30 +70,35 @@ def ensure_system_field_defaults(database: Database) -> None:
         "outputType": "richText", "model": "", "maxLength": 800,
         "requireCitations": True, "requiresApproval": True,
     }
+    # 以下清理只属于首次部署的遗留数据修正：无条件重跑会把管理员对映射、目录和规则的
+    # 修改在每次重启时回滚。用迁移标记保证只执行一次，之后的启动只保留"缺失才播种"。
+    legacy_cleanup_done = database.migration_applied(LEGACY_CLEANUP_MIGRATION)
     if not ai_rules:
         database.save_system_field_rule({
             "fieldCode": field_code, "name": "AI 生成概述章节", "sourceType": "AI", "priority": 10,
             "config": ai_config,
             "transform": "TRIM", "enabled": True,
         })
-    elif not ai_rules[0].get("config", {}).get("contextVariables"):
+    elif not legacy_cleanup_done and not ai_rules[0].get("config", {}).get("contextVariables"):
         database.save_system_field_rule({**ai_rules[0], "config": ai_config}, ai_rules[0]["id"])
-    with database.connect() as connection:
-        connection.execute(
-            "UPDATE admin_mapping_rules SET standard_field_code=?,source_type='SYSTEM' WHERE field_code='narrative.purpose'",
-            ("uncategorized.field_001",),
-        )
-        connection.execute("UPDATE lims_field_catalog SET data_type='string' WHERE field_code=?",
-                           (_field_code(database, "samples.clientName"),))
-        connection.execute(
-            "DELETE FROM system_field_rules WHERE field_code=? AND source_type<>'FIXED'", (executor_code,),
-        )
-        connection.execute(
-            "DELETE FROM system_field_rules WHERE field_code=? AND source_type<>'AI'", (field_code,),
-        )
-        chapter = connection.execute("SELECT id FROM admin_template_chapters WHERE code='1'").fetchone()
-        if chapter:
+    if not legacy_cleanup_done:
+        with database.connect() as connection:
             connection.execute(
-                """INSERT OR IGNORE INTO system_field_chapters(field_code,chapter_id,order_no)
-                   VALUES(?,?,?)""", (field_code, chapter["id"], 0),
+                "UPDATE admin_mapping_rules SET standard_field_code=%s,source_type='SYSTEM' WHERE field_code='narrative.purpose'",
+                ("uncategorized.field_001",),
             )
+            connection.execute("UPDATE lims_field_catalog SET data_type='string' WHERE field_code=%s",
+                               (_field_code(database, "samples.clientName"),))
+            connection.execute(
+                "DELETE FROM system_field_rules WHERE field_code=%s AND source_type<>'FIXED'", (executor_code,),
+            )
+            connection.execute(
+                "DELETE FROM system_field_rules WHERE field_code=%s AND source_type<>'AI'", (field_code,),
+            )
+            chapter = connection.execute("SELECT id FROM admin_template_chapters WHERE code='1'").fetchone()
+            if chapter:
+                connection.execute(
+                    """INSERT IGNORE INTO system_field_chapters(field_code,chapter_id,order_no)
+                       VALUES(%s,%s,%s)""", (field_code, chapter["id"], 0),
+                )
+        database.mark_migration_applied(LEGACY_CLEANUP_MIGRATION)

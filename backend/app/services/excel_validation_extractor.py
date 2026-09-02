@@ -101,7 +101,8 @@ class ValidationWorkbookReader:
             for sequence in range(1, 7):
                 row = 2 + sequence
                 result.append({
-                    "impurityName": name, "sequence": sequence,
+                    "impurityName": name, "solutionName": self.cell("系统适用性", f"{_col(start_col)}{row}"),
+                    "sequence": sequence,
                     "retentionTime": self.cell("系统适用性", f"{_col(start_col + 1)}{row}"),
                     "peakArea": self.cell("系统适用性", f"{_col(start_col + 2)}{row}"),
                     "_evidence": self.evidence("系统适用性", f"{_col(start_col)}{row}:{_col(start_col + 2)}{row}"),

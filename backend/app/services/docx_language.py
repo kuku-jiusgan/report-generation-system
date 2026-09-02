@@ -1,4 +1,5 @@
 import copy
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -6,6 +7,19 @@ from lxml import etree
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 W = f"{{{W_NS}}}"
+
+
+def write_docx_parts_atomic(parts: dict[str, tuple[zipfile.ZipInfo, bytes]], output: Path) -> None:
+    """先写唯一临时文件再原子替换目标，避免并发读到写了一半的 docx。"""
+    temporary = output.with_name(f"{output.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as target:
+            for info, content in parts.values():
+                target.writestr(info, content)
+        temporary.replace(output)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def normalize_part_languages(parts: dict[str, tuple[zipfile.ZipInfo, bytes]]) -> None:

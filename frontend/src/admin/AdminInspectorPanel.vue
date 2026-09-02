@@ -1,28 +1,17 @@
 <script setup lang="ts">
-import { Delete, EditPen, Files, Link, Plus, Rank, Unlock } from '@element-plus/icons-vue'
+import { computed } from 'vue'
+import { Delete, EditPen, Files, Link, Rank, Unlock } from '@element-plus/icons-vue'
 import type { DesignerBlock, DesignerChapter, MappingRule, StandardField } from '../admin-api'
 import StandardFieldPicker from '../StandardFieldPicker.vue'
 import { blockTone, sourceTagType } from './designer-formatters'
 
-defineProps<{
-  selectedBlock?: DesignerBlock
-  selectedMapping?: MappingRule
-  expandedContentBlockId?: number
-  draggingBlockId?: number
-  draggingMappingId?: number
-  bindingMappingId?: number
-  unbindingWord: boolean
-  saving: boolean
-  standardFields: StandardField[]
-  calculationFieldOptions: Array<{ code: string; label: string }>
-}>()
 const emit = defineEmits<{
   saveChapter: []
   editBlock: [block?: DesignerBlock]
   startBlockDrag: [event: DragEvent, block: DesignerBlock]
   finishDrag: []
   toggleBlock: [chapter: DesignerChapter, block: DesignerBlock]
-  addMapping: [block: DesignerBlock]
+  addMapping: [block: DesignerBlock, field?: { fieldCode: string; label: string }]
   removeBlock: [block: DesignerBlock]
   dropBlock: [event: DragEvent, block: DesignerBlock]
   selectBlock: [chapter: DesignerChapter, block: DesignerBlock, locate?: boolean]
@@ -40,10 +29,38 @@ const emit = defineEmits<{
   saveMapping: []
 }>()
 const selectedChapter = defineModel<DesignerChapter | undefined>('selectedChapter', { required: true })
-const mappingDraft = defineModel<Partial<MappingRule> | undefined>('mappingDraft', { required: true })
+const mappingDraft = defineModel<Partial<MappingRule>>('mappingDraft', { required: true })
 const advancedOpen = defineModel<boolean>('advancedOpen', { required: true })
 const dragOverBlockId = defineModel<number | undefined>('dragOverBlockId', { required: true })
 const dragOverMappingId = defineModel<number | undefined>('dragOverMappingId', { required: true })
+const props = defineProps<{
+  selectedBlock?: DesignerBlock
+  selectedMapping?: MappingRule
+  expandedContentBlockId?: number
+  draggingBlockId?: number
+  draggingMappingId?: number
+  bindingMappingId?: number
+  unbindingWord: boolean
+  saving: boolean
+  standardFields: StandardField[]
+  calculationFieldOptions: Array<{ code: string; label: string }>
+}>()
+const selectedStandardField = computed(() => props.standardFields.find(
+  (field) => field.fieldCode === props.selectedMapping?.standardFieldCode,
+))
+const displayBlocks = computed<DesignerBlock[]>(() => {
+  if (selectedChapter.value?.blocks?.length) return selectedChapter.value.blocks
+  return (selectedChapter.value?.standardGroups || []).map((group, index) => ({
+    id: -(selectedChapter.value!.id * 1000 + index + 1), chapterId: selectedChapter.value!.id,
+    title: group.label, kind: 'MAPPED_FIELD', tableNo: '', sourcePath: '', repeatKey: '',
+    prototypeLocation: '', dedupKey: '', sortRule: '', emptyBehavior: 'KEEP', mergeRule: 'NONE',
+    orderNo: index, enabled: true, mappingIds: [], controlTags: [], sources: [], status: 'READY', mappings: [],
+    standardFields: group.fields, standardGroupCode: group.groupCode,
+  }))
+})
+const standardFieldFor = (mapping: MappingRule) => props.standardFields.find(
+  (field) => field.fieldCode === mapping.standardFieldCode,
+)
 
 const sourceLabels: Record<string, string> = {
   SYSTEM: '系统标准字段',
@@ -66,7 +83,7 @@ const editBlock = (block?: DesignerBlock) => emit('editBlock', block)
 const startBlockDrag = (event: DragEvent, block: DesignerBlock) => emit('startBlockDrag', event, block)
 const finishDrag = () => emit('finishDrag')
 const toggleContentBlock = (chapter: DesignerChapter, block: DesignerBlock) => emit('toggleBlock', chapter, block)
-const addMapping = (block: DesignerBlock) => emit('addMapping', block)
+const addMapping = (block: DesignerBlock, field?: { fieldCode: string; label: string }) => emit('addMapping', block, field)
 const removeBlock = (block: DesignerBlock) => emit('removeBlock', block)
 const dropBlock = (event: DragEvent, block: DesignerBlock) => emit('dropBlock', event, block)
 const selectBlock = (chapter: DesignerChapter, block: DesignerBlock, locate = true) => emit('selectBlock', chapter, block, locate)
@@ -132,17 +149,13 @@ const saveMapping = () => emit('saveMapping')
               >
             </div></el-form
           >
-          <div class="inspector-subhead fields-head">
+          <div v-if="selectedChapter" class="inspector-subhead fields-head">
             <div>
-              <strong>本章节内容块与字段</strong>
+              <strong>本章节内容块与字段配置</strong>
             </div>
-            <el-button type="primary" plain :icon="Plus" @click="editBlock()"
-              >新增内容块</el-button
-            >
           </div>
+          <template v-for="block in displayBlocks" :key="block.id">
           <div
-            v-for="block in selectedChapter?.blocks"
-            :key="block.id"
             class="field-block"
             :class="{
               expanded: expandedContentBlockId === block.id,
@@ -183,18 +196,14 @@ const saveMapping = () => emit('saveMapping')
               </button>
               <div class="field-block-actions">
                 <el-button
-                  text
-                  :icon="Plus"
-                  aria-label="在内容块中新增字段"
-                  title="新增字段"
-                  @click="addMapping(block)"
-                /><el-button
+                  v-if="block.standardGroupCode || block.id > 0"
                   text
                   :icon="EditPen"
-                  aria-label="编辑内容块"
-                  title="编辑内容块"
+                  :aria-label="block.standardGroupCode ? '配置模板布局' : '编辑内容块'"
+                  :title="block.standardGroupCode ? '配置模板布局' : '编辑内容块'"
                   @click="editBlock(block)"
                 /><el-button
+                  v-if="block.id > 0"
                   text
                   type="danger"
                   :icon="Delete"
@@ -209,7 +218,7 @@ const saveMapping = () => emit('saveMapping')
               class="field-block-body"
             >
               <div
-                v-for="mapping in block.mappings"
+                v-for="mapping in block.mappings.filter((item) => item.controlTag || !item.standardFieldCode)"
                 :key="mapping.id"
                 class="field-line"
                 :class="{
@@ -243,15 +252,15 @@ const saveMapping = () => emit('saveMapping')
                   @dragend="finishDrag"
                 ><Rank /></button>
                 <span
-                  ><b>{{ mapping.wordLabel }}</b
+                  ><b>{{ standardFieldFor(mapping)?.label || mapping.wordLabel }}</b
                   ><small
-                    >{{ mapping.fieldCode }} ·
-                    {{ sourceLabels[mapping.sourceType] || "其他来源" }}</small
+                    >{{ standardFieldFor(mapping)?.fieldCode || "未绑定标准字段" }} ·
+                    {{ standardFieldFor(mapping) ? "系统标准字段" : "旧模板字段" }}</small
                   ></span
                 ><el-tag
                   size="small"
-                  :type="sourceTagType(mapping.sourceType) as any"
-                  >{{ sourceLabels[mapping.sourceType] || "其他来源" }}</el-tag
+                  :type="standardFieldFor(mapping) ? 'success' : 'warning'"
+                  >{{ standardFieldFor(mapping) ? "标准字段" : "待清理" }}</el-tag
                 ><span class="field-line-actions"
                   ><el-button
                     text
@@ -261,104 +270,55 @@ const saveMapping = () => emit('saveMapping')
                     aria-label="绑定当前 Word 位置"
                     title="先在 Word 中选择文字，再点击绑定"
                     @click.stop="bindCurrentWordPosition(mapping)"
-                  /><el-button
-                    text
-                    type="danger"
-                    :icon="Delete"
-                    aria-label="删除字段"
-                    title="删除字段"
-                    @click.stop="removeMapping(mapping)"
                   /></span
                 >
+                <div v-if="selectedMapping?.id === mapping.id && mappingDraft" class="inline-field-settings" @click.stop>
+                  <el-form label-position="top" class="inspector-form field-detail-form">
+                    <div class="form-inline">
+                      <el-form-item label="空值处理"><el-select v-model="mappingDraft.fillRule"><el-option v-for="item in fillRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+                      <el-form-item label="冲突/合并行为"><el-select v-model="mappingDraft.mergeRule"><el-option v-for="item in mergeRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+                    </div>
+                    <div class="switches"><el-checkbox v-model="mappingDraft.required">生成前必须有值</el-checkbox><el-checkbox v-model="mappingDraft.enabled">启用</el-checkbox></div>
+                    <div class="word-binding-actions">
+                      <el-button type="primary" plain :icon="Link" :loading="bindingMappingId === mapping.id" @click="bindCurrentWordPosition(mapping)">绑定当前 Word 位置</el-button>
+                      <el-button plain :icon="Unlock" :loading="unbindingWord" @click="unbindCurrentWordPosition">解除当前绑定</el-button>
+                    </div>
+                    <div class="field-detail-actions"><el-button type="primary" :loading="saving" @click="saveMapping">保存字段配置</el-button></div>
+                  </el-form>
+                </div>
               </div>
-              <div v-if="!block.mappings.length && !mappingDraft" class="block-empty">
+              <div v-if="block.standardFields?.length" class="standard-block-fields">
+                <template v-for="field in block.standardFields" :key="field.fieldCode">
+                  <div v-if="!block.mappings.some((mapping) => mapping.standardFieldCode === field.fieldCode && mapping.controlTag)" class="field-line standard-unbound-field" :class="{ selected: mappingDraft?.standardFieldCode === field.fieldCode }">
+                    <span><b>{{ field.label }}</b><small>{{ field.fieldCode }}</small></span>
+                    <el-tag size="small" type="info">未配置模板绑定</el-tag>
+                    <span class="field-line-actions">
+                      <el-button plain type="primary" :icon="Link" @click.stop="addMapping(block, field)">配置绑定</el-button>
+                    </span>
+                    <div v-if="mappingDraft?.standardFieldCode === field.fieldCode" class="inline-field-settings" @click.stop>
+                      <el-form label-position="top" class="inspector-form field-detail-form">
+                        <div class="form-inline">
+                          <el-form-item label="空值处理"><el-select v-model="mappingDraft.fillRule"><el-option v-for="item in fillRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+                          <el-form-item label="冲突/合并行为"><el-select v-model="mappingDraft.mergeRule"><el-option v-for="item in mergeRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+                        </div>
+                        <div class="switches"><el-checkbox v-model="mappingDraft.required">生成前必须有值</el-checkbox><el-checkbox v-model="mappingDraft.enabled">启用</el-checkbox></div>
+                        <div class="word-binding-actions">
+                          <el-button type="primary" plain :icon="Link" :loading="mappingDraft.id !== undefined && bindingMappingId === mappingDraft.id" @click="mappingDraft.id ? bindCurrentWordPosition(mappingDraft as MappingRule) : $emit('saveMapping')">{{ mappingDraft.id ? '绑定当前 Word 位置' : '保存后绑定 Word 位置' }}</el-button>
+                        </div>
+                        <div class="field-detail-actions"><el-button type="primary" :loading="saving" @click="saveMapping">保存字段配置</el-button></div>
+                      </el-form>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div v-if="!block.mappings.length && !block.standardFields?.length && !mappingDraft" class="block-empty">
                 当前内容块还没有字段
               </div>
-              <template v-if="mappingDraft">
-                <div class="inspector-subhead detail-head">
-                  <strong>{{
-                    selectedMapping ? "字段详细设置" : "新字段设置"
-                  }}</strong>
-                </div>
-                <el-form label-position="top" class="inspector-form field-detail-form"
-                  ><div v-if="selectedMapping" class="word-binding-actions">
-                    <el-button
-                      type="primary"
-                      plain
-                      :icon="Link"
-                      :loading="bindingMappingId === selectedMapping.id"
-                      @click="bindCurrentWordPosition(selectedMapping)"
-                      >绑定当前 Word 位置</el-button
-                    ><el-button
-                      plain
-                      :icon="Unlock"
-                      :loading="unbindingWord"
-                      @click="unbindCurrentWordPosition"
-                      >解除当前绑定</el-button
-                    >
-                  </div><el-form-item label="显示名称"
-                    ><el-input v-model="mappingDraft.wordLabel"
-                  /></el-form-item>
-                  <StandardFieldPicker
-                    :model-value="mappingDraft.standardFieldCode"
-                    :fields="standardFields"
-                    @open="$emit('refreshStandardFields')"
-                    @select="selectStandardField"
-                  />
-                  <div class="form-inline">
-                    <el-form-item label="空值处理"
-                      ><el-select v-model="mappingDraft.fillRule"
-                        ><el-option
-                          v-for="item in fillRuleOptions"
-                          :key="item.value"
-                          :label="item.label"
-                          :value="item.value" /></el-select></el-form-item
-                    ><el-form-item label="冲突/合并行为"
-                      ><el-select v-model="mappingDraft.mergeRule"
-                        ><el-option
-                          v-for="item in mergeRuleOptions"
-                          :key="item.value"
-                          :label="item.label"
-                          :value="item.value" /></el-select
-                    ></el-form-item>
-                  </div>
-                  <div class="switches">
-                    <el-checkbox v-model="mappingDraft.required"
-                      >生成前必须有值</el-checkbox
-                    ><el-checkbox v-model="mappingDraft.enabled">启用</el-checkbox>
-                  </div>
-                  <div
-                    class="advanced-toggle"
-                    @click="advancedOpen = !advancedOpen"
-                  >
-                    <span>高级位置与结构设置</span
-                    ><small>{{ advancedOpen ? "收起" : "展开" }}</small>
-                  </div>
-                  <div v-if="advancedOpen" class="advanced-fields">
-                    <el-form-item label="字段编码"
-                      ><el-input v-model="mappingDraft.fieldCode" readonly /></el-form-item
-                    ><el-form-item label="Word 内容控件标记"
-                      ><el-input v-model="mappingDraft.controlTag" readonly /></el-form-item
-                    ><el-form-item label="Word 位置编码"
-                      ><el-input v-model="mappingDraft.locationId" readonly
-                    /></el-form-item>
-                  </div>
-                  <div class="field-detail-actions">
-                    <el-button
-                      type="primary"
-                      :loading="saving"
-                      @click="saveMapping"
-                      >{{
-                        selectedMapping ? "保存字段修改" : "保存新增字段"
-                      }}</el-button
-                    >
-                  </div></el-form
-                >
-              </template>
             </div>
           </div>
-          <div v-if="!selectedChapter?.blocks.length" class="inspector-empty">
-            <Files /><strong>本章节暂时没有内容块</strong>
+          </template>
+          <div v-if="selectedChapter && !displayBlocks.length" class="inspector-empty">
+            <Files /><strong>本章节暂无系统标准编组</strong>
           </div>
         </div>
       </aside>

@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Any
 
@@ -7,7 +8,7 @@ from ..services.rule_admin import RuleAdminRepository
 from ..services.calculation_engine import CalculationError, validate_calculation
 from ..services.ai_field_generator import AiGenerationError, generate_ai_text, render_ai_prompt
 from ..services.ai_service_config import load_ai_service_config, save_ai_service_config
-from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, list_system_field_groups, save_system_field_group
+from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, delete_system_field_group, list_system_field_groups, remove_field_from_group, reorder_group_fields, save_system_field_group
 
 
 CHAPTER_FIELD_PREFIXES = {
@@ -22,12 +23,56 @@ def _field_prefix(repository: RuleAdminRepository, chapter_id: Any) -> str:
     with repository.database.connect() as connection:
         row = connection.execute(
             """WITH RECURSIVE lineage(id,parent_id,code) AS (
-               SELECT id,parent_id,code FROM admin_template_chapters WHERE id=?
+               SELECT id,parent_id,code FROM admin_template_chapters WHERE id=%s
                UNION ALL SELECT c.id,c.parent_id,c.code FROM admin_template_chapters c
                JOIN lineage l ON l.parent_id=c.id)
                SELECT code FROM lineage WHERE parent_id IS NULL LIMIT 1""", (chapter_id,),
         ).fetchone() if chapter_id else None
     return (CHAPTER_FIELD_PREFIXES.get(str(row["code"])) if row else None) or "uncategorized"
+
+
+def _is_real_template_reference(item: dict[str, Any]) -> bool:
+    """Exclude mappings created by standard-field synchronization defaults."""
+    field_code = str(item.get("fieldCode") or "").strip()
+    standard_code = str(item.get("standardFieldCode") or "").strip()
+    default_tag = f"cc.{standard_code}"
+    default_location = f"word.content_control.{default_tag}"
+    control_tag = str(item.get("controlTag") or "").strip()
+    location_id = str(item.get("locationId") or "").strip()
+    if control_tag and control_tag != default_tag:
+        return True
+    if location_id and location_id != default_location:
+        return True
+    return bool(field_code and field_code != standard_code)
+
+
+def _template_references(repository: RuleAdminRepository, field_code: str) -> list[dict[str, Any]]:
+    with repository.database.connect() as connection:
+        versions = connection.execute(
+            """SELECT t.name AS template_name,t.code AS template_code,
+                      v.snapshot,v.version_no,v.status
+                 FROM admin_template_versions v
+                 JOIN admin_templates t ON t.id=v.template_id
+                WHERE v.status IN ('DRAFT','PUBLISHED')
+                ORDER BY t.name,t.code,v.version_no DESC"""
+        ).fetchall()
+    references: list[dict[str, Any]] = []
+    for version in versions:
+        try:
+            snapshot = json.loads(version["snapshot"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        template_name = str(version["template_name"])
+        template_code = str(version["template_code"] or "")
+        display_name = f"{template_name} · {template_code}" if template_code else template_name
+        for item in snapshot.get("mappings", []):
+            if item.get("standardFieldCode") != field_code or not _is_real_template_reference(item):
+                continue
+            references.append({
+                **item, "templateName": display_name,
+                "templateCode": template_code, "versionNo": version["version_no"],
+            })
+    return references
 
 
 def _validate_standard_field(
@@ -38,7 +83,7 @@ def _validate_standard_field(
         prefix = _field_prefix(repository, item.get("chapterId"))
         with repository.database.connect() as connection:
             rows = connection.execute(
-                "SELECT field_code FROM lims_field_catalog WHERE field_code LIKE ?", (f"{prefix}.field_%",),
+                "SELECT field_code FROM lims_field_catalog WHERE field_code LIKE %s", (f"{prefix}.field_%",),
             ).fetchall()
         numbers = [int(match.group(1)) for row in rows
                    if (match := re.fullmatch(rf"{re.escape(prefix)}\.field_(\d+)", str(row["field_code"]))) is not None]
@@ -134,6 +179,9 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
 
 
 def _resolve_standard_field(repository: RuleAdminRepository, item: dict[str, Any]) -> None:
+    # 解绑等局部更新只修改 Word 绑定信息，不应重新解析标准字段目录。
+    if set(item).issubset({'controlTag', 'locationId'}):
+        return
     code = str(item.get("standardFieldCode") or "")
     if not code:
         return
@@ -143,7 +191,7 @@ def _resolve_standard_field(repository: RuleAdminRepository, item: dict[str, Any
     )
     if not field:
         raise HTTPException(422, "标准字段不存在或已停用")
-    item["sourcePath"] = field["legacyJsonPath"]
+    item["sourcePath"] = field.get("legacyJsonPath") or field.get("sourcePath") or ""
     item["dataType"] = field["dataType"]
     item["sourceType"] = "SYSTEM"
     item["calculationExpression"] = ""
@@ -198,10 +246,33 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
 
+    @router.delete("/field-groups/{group_code}")
+    def delete_field_group(group_code: str) -> dict[str, bool]:
+        if not delete_system_field_group(repository.database, group_code):
+            raise HTTPException(404, "编组不存在")
+        return {"deleted": True}
+
     @router.post("/field-groups/{group_code}/fields")
     def assign_group_field(group_code: str, item: dict[str, Any]) -> dict[str, Any]:
         try:
             return assign_field_to_group(repository.database, group_code, str(item.get("fieldCode") or ""), str(item.get("fieldPath") or ""))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.delete("/field-groups/{group_code}/fields/{field_code}")
+    def remove_group_field(group_code: str, field_code: str) -> dict[str, Any]:
+        try:
+            return remove_field_from_group(repository.database, group_code, field_code)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.put("/field-groups/{group_code}/fields/order")
+    def reorder_group_field_items(group_code: str, item: dict[str, Any]) -> dict[str, Any]:
+        try:
+            codes = item.get("fieldCodes")
+            if not isinstance(codes, list) or not all(isinstance(code, str) for code in codes):
+                raise ValueError("字段排序列表无效")
+            return reorder_group_fields(repository.database, group_code, codes)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
 
@@ -229,8 +300,8 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
         if item.get("chapterId"):
             with repository.database.connect() as connection:
                 connection.execute(
-                    """INSERT OR IGNORE INTO system_field_chapters(field_code,chapter_id,order_no)
-                       VALUES(?,?,?)""", (saved["fieldCode"], item["chapterId"], saved.get("orderNo", 0)),
+                    """INSERT IGNORE INTO system_field_chapters(field_code,chapter_id,order_no)
+                       VALUES(%s,%s,%s)""", (saved["fieldCode"], item["chapterId"], saved.get("orderNo", 0)),
                 )
         if item.get("groupCode"):
             assign_field_to_group(repository.database, str(item["groupCode"]), saved["fieldCode"])
@@ -248,10 +319,7 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
 
     @router.delete("/standard-fields/{field_code:path}")
     def delete_standard_field(field_code: str) -> dict[str, bool]:
-        with repository.database.connect() as connection:
-            used = connection.execute(
-                "SELECT COUNT(*) FROM admin_mapping_rules WHERE standard_field_code=?", (field_code,),
-            ).fetchone()[0]
+        used = len(_template_references(repository, field_code))
         if used:
             raise HTTPException(409, f"该标准字段正被 {used} 个模板字段引用，请先停用或迁移引用")
         if not repository.database.delete_lims_field(field_code):
@@ -265,6 +333,10 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
             raise HTTPException(404, "标准字段不存在")
         selected = [value.strip() for value in instance_ids.split(",") if value.strip()]
         return repository.database.preview_lims_field(field, limit, selected)
+
+    @router.get("/standard-fields/{field_code:path}/references")
+    def standard_field_references(field_code: str) -> list[dict[str, Any]]:
+        return _template_references(repository, field_code)
 
     @router.get("/standard-field-source")
     def standard_field_source(

@@ -121,8 +121,11 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
     def report_history(query: str = "", status: str = "", user_id: str = "", date_from: str = "",
                        date_to: str = "", page: int = 1, page_size: int = 20,
                        actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_VIEW", "admin"))) -> dict[str, Any]:
-        return database.list_generations(query, status, user_id, date_from, date_to,
-                                         max(1, page), min(100, max(1, page_size)))
+        try:
+            return database.list_generations(query, status, user_id, date_from, date_to,
+                                             max(1, page), min(100, max(1, page_size)))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
 
     @router.get("/report-history/{generation_id}")
     def report_history_detail(generation_id: str,

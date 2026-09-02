@@ -1,5 +1,12 @@
 import axios from "axios";
 
+export type {
+  ContentBlockKind, DesignerBlock, DesignerChapter, MappingRule, TableRule, TemplateDesigner,
+} from "./admin-designer-types";
+import type {
+  DesignerBlock, DesignerChapter, MappingRule, TableRule, TemplateDesigner,
+} from "./admin-designer-types";
+
 const http = axios.create({ baseURL: "/api/v1/admin", timeout: 120000 });
 http.interceptors.response.use(undefined, (error) => {
   if (error.response?.status === 401) window.dispatchEvent(new Event("auth-expired"));
@@ -18,50 +25,6 @@ export interface AdminOverview {
   template: { name: string; size: number; exists: boolean };
 }
 
-export interface MappingRule {
-  id: number;
-  locationId: string;
-  sectionCode: string;
-  tableNo: string;
-  wordLabel: string;
-  fieldCode: string;
-  dataType: string;
-  sourceType: string;
-  sourcePath: string;
-  standardFieldCode?: string;
-  repeatType: string;
-  repeatKey: string;
-  mergeRule: string;
-  fillRule: string;
-  calculationRule: string;
-  calculationExpression: string;
-  calculationDependencies: string[];
-  calculationScope: "REPORT" | "BLOCK" | "CURRENT_ROW";
-  calculationPrecision: number;
-  calculationNullBehavior: "ERROR" | "ZERO" | "SKIP";
-  controlTag: string;
-  required: boolean;
-  sourcePending: boolean;
-  enabled: boolean;
-  updatedAt: string;
-  chapterId?: number;
-  blockId?: number;
-}
-
-export interface TableRule {
-  tableNo: string;
-  sectionCode: string;
-  mode: string;
-  headerRows: number;
-  dataRowStart: number;
-  dataRowEnd: number;
-  footerRows: number;
-  recordKey: string;
-  mergeFields: string[];
-  enabled: boolean;
-  notes: string;
-  updatedAt: string;
-}
 
 export interface DataSourceRule {
   id: number;
@@ -277,67 +240,6 @@ export interface AdminTemplateVersion {
   publishedAt?: string;
 }
 
-export type ContentBlockKind =
-  | "FIXED"
-  | "MAPPED_FIELD"
-  | "REPEATING_TABLE"
-  | "MATRIX"
-  | "CALCULATED"
-  | "AI_NARRATIVE";
-export interface DesignerBlock {
-  id: number;
-  chapterId: number;
-  title: string;
-  kind: ContentBlockKind;
-  tableNo: string;
-  sourcePath: string;
-  repeatKey: string;
-  prototypeLocation: string;
-  dedupKey: string;
-  sortRule: string;
-  emptyBehavior: string;
-  mergeRule: string;
-  orderNo: number;
-  enabled: boolean;
-  mappingIds: number[];
-  controlTags: string[];
-  sources: string[];
-  status: "READY" | "PENDING" | "DISABLED";
-  mappings: MappingRule[];
-  tableRule?: TableRule;
-}
-export interface DesignerChapter {
-  id: number;
-  parentId?: number;
-  code: string;
-  title: string;
-  pageHint?: number;
-  orderNo: number;
-  enabled: boolean;
-  blocks: DesignerBlock[];
-  children: DesignerChapter[];
-}
-export interface TemplateDesigner {
-  template: {
-    id: string;
-    name: string;
-    draftFile: string;
-    templateId?: string;
-    templateName?: string;
-    versionId?: string;
-    versionNo?: number;
-    publishedVersion?: number;
-    status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
-  };
-  chapters: DesignerChapter[];
-  summary: {
-    chapters: number;
-    blocks: number;
-    mappings: number;
-    pending: number;
-  };
-}
-
 export interface OnlyOfficeBootstrap {
   documentServerUrl: string;
   config: Record<string, unknown> & {
@@ -440,6 +342,13 @@ export const adminApi = {
     description?: string;
     note?: string;
   }) => (await http.post<AdminTemplate>("/templates", data)).data,
+  createTemplateWithFile: async (data: { code: string; name: string; description?: string; note?: string; templateFile: File }) => {
+    const form = new FormData()
+    form.append('code', data.code); form.append('name', data.name)
+    form.append('description', data.description || ''); form.append('note', data.note || '')
+    form.append('template_file', data.templateFile)
+    return (await http.post<AdminTemplate>('/templates/with-file', form)).data
+  },
   updateTemplate: async (id: string, data: Partial<AdminTemplate>) =>
     (await http.put<AdminTemplate>(`/templates/${id}`, data)).data,
   deleteTemplate: async (id: string) =>
@@ -458,8 +367,10 @@ export const adminApi = {
       await http.post<AdminTemplateVersion>(
         `/templates/${templateId}/versions`,
         data,
-      )
+    )
     ).data,
+  deleteTemplateVersion: async (templateId: string, versionId: string) =>
+    (await http.delete(`/templates/${templateId}/versions/${versionId}`)).data,
   activateTemplateVersion: async (templateId: string, versionId: string) =>
     (await http.post(`/templates/${templateId}/versions/${versionId}/activate`))
       .data,
@@ -478,12 +389,14 @@ export const adminApi = {
     (await http.post<DesignerBlock>("/content-blocks", data)).data,
   updateContentBlock: async (id: number, data: Partial<DesignerBlock>) =>
     (await http.put<DesignerBlock>(`/content-blocks/${id}`, data)).data,
+  saveTemplateBlock: async (groupCode: string, data: Partial<DesignerBlock>) =>
+    (await http.put<DesignerBlock>(`/template-blocks/${encodeURIComponent(groupCode)}`, data)).data,
   deleteContentBlock: async (id: number, deleteMappings = true) =>
     (
       await http.delete(`/content-blocks/${id}`, {
         params: { delete_mappings: deleteMappings },
       })
-    ).data,
+      ).data,
   reorderContentBlocks: async (chapterId: number, blockIds: number[]) =>
     (
       await http.post(`/chapters/${chapterId}/content-blocks/reorder`, {
@@ -514,6 +427,8 @@ export const adminApi = {
     (await http.put<StandardField>(`/standard-fields/${encodeURIComponent(fieldCode)}`, data)).data,
   deleteStandardField: async (fieldCode: string) =>
     (await http.delete(`/standard-fields/${encodeURIComponent(fieldCode)}`)).data,
+  standardFieldReferences: async (fieldCode: string) =>
+    (await http.get<MappingRule[]>(`/standard-fields/${encodeURIComponent(fieldCode)}/references`)).data,
   standardFieldPreview: async (fieldCode: string, limit = 12, instanceIds: string[] = []) =>
     (
       await http.get<StandardFieldPreview>(
@@ -543,8 +458,14 @@ export const adminApi = {
   createFieldGroup: async (data: Partial<SystemFieldGroup>) => (await http.post<SystemFieldGroup>("/field-groups", data)).data,
   updateFieldGroup: async (groupCode: string, data: Partial<SystemFieldGroup>) =>
     (await http.put<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}`, data)).data,
+  deleteFieldGroup: async (groupCode: string) =>
+    (await http.delete(`/field-groups/${encodeURIComponent(groupCode)}`)).data,
   assignFieldGroup: async (groupCode: string, fieldCode: string, fieldPath = "") =>
     (await http.post<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/fields`, { fieldCode, fieldPath })).data,
+  removeFieldGroup: async (groupCode: string, fieldCode: string) =>
+    (await http.delete<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/fields/${encodeURIComponent(fieldCode)}`)).data,
+  reorderFieldGroup: async (groupCode: string, fieldCodes: string[]) =>
+    (await http.put<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/fields/order`, { fieldCodes })).data,
   assignGroupChapter: async (groupCode: string, chapterId: number) =>
     (await http.post<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/chapters`, { chapterId })).data,
   createMapping: async (data: Partial<MappingRule>) =>

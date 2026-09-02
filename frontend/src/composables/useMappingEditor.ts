@@ -27,18 +27,18 @@ function flatten(chapters: DesignerChapter[]): DesignerChapter[] {
 }
 
 export function useMappingEditor(options: MappingEditorOptions) {
-  function addMapping(block = options.selectedBlock.value) {
+  function addMapping(block = options.selectedBlock.value, standardField?: { fieldCode: string; label: string }) {
     const chapter = options.selectedChapter.value
     if (!chapter || !block) return ElMessage.warning('请先新增或选择一个内容块')
     options.selectedBlock.value = block
     options.expandedBlockId.value = block.id
     options.selectedMapping.value = undefined
-    const repeating = ['REPEATING_TABLE', 'MATRIX'].includes(block.kind)
+    const repeating = ['REPEATING_TABLE', 'MATRIX', 'TABLE_REPEAT'].includes(block.kind)
     options.draft.value = {
-      chapterId: chapter.id, blockId: block.id,
+      chapterId: chapter.id, ...(block.id > 0 ? { blockId: block.id } : {}),
       locationId: `draft.block${block.id}.${Date.now()}`,
-      sectionCode: chapter.code, tableNo: block.tableNo || 'TEXT', wordLabel: '新字段',
-      fieldCode: '', dataType: 'string', sourceType: 'SYSTEM', sourcePath: '',
+      sectionCode: chapter.code, tableNo: block.tableNo || 'TEXT', wordLabel: standardField?.label || '新字段',
+      fieldCode: '', standardFieldCode: standardField?.fieldCode || '', dataType: 'string', sourceType: 'SYSTEM', sourcePath: '',
       repeatType: repeating ? 'ROW' : 'NONE', repeatKey: block.repeatKey || '',
       mergeRule: 'PRESERVE', fillRule: 'TEXT', calculationRule: '',
       calculationExpression: '', calculationDependencies: [],

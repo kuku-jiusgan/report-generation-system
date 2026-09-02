@@ -38,12 +38,13 @@ from .services.system_field_resolver import resolve_system_fields
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
 from .services.excel_rule_defaults import ensure_excel_field_rules
+from .services.content_block_cleanup import remove_legacy_content_blocks
 from .services.excel_report_source import apply_excel_source, apply_pdf_source, build_source_document
 from .services.rule_admin import RuleAdminRepository
 from .services.template_compiler import compile_template
 from .source_api import create_source_router
 from .report_utils import (
-    binding_label, default_report_data, flatten_values, resolved_report_title,
+    binding_label, default_report_data, flatten_values, manual_edit_locked, resolved_report_title,
 )
 from .report_word_api import create_report_word_router
 from .report_source_api import create_report_source_router
@@ -51,7 +52,7 @@ from .onlyoffice_bridge_api import create_onlyoffice_bridge_router
 
 
 settings = get_settings()
-database = Database(settings.database_path)
+database = Database(settings)
 rule_admin = RuleAdminRepository(database, settings.data_dir.parent / "mapping" / "template-mapping.json")
 auth = AuthManager(database, settings)
 REPORT_LIFECYCLE_MIGRATION = "2026_report_lifecycle_reset_v1"
@@ -81,8 +82,12 @@ async def lifespan(_: FastAPI):
     if bootstrap_user_id:
         database.backfill_report_ownership(bootstrap_user_id)
     rule_admin.seed()
+    remove_legacy_content_blocks(database)
     ensure_excel_field_rules(database)
-    migrate_stored_lims_file_urls(database, settings.lims_file_base_url)
+    # 文件地址迁移只需执行一次，避免每次启动扫描全部实验和报告数据。
+    if not database.migration_applied("LIMS_FILE_URLS_MYSQL_V1"):
+        migrate_stored_lims_file_urls(database, settings.lims_file_base_url)
+        database.mark_migration_applied("LIMS_FILE_URLS_MYSQL_V1")
     yield
 
 
@@ -179,13 +184,16 @@ def _apply_group_repeat_rules(mappings: list[dict]) -> list[dict]:
     return result
 
 
-def runtime_template_and_mappings() -> tuple[Path, list[dict], dict[str, str]]:
+def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[str, str]]:
     active = rule_admin.active_runtime_template()
     if active:
         snapshot = active["snapshot"]
+        # 表格布局是设计器的当前配置；重新生成不能继续使用发布快照中的旧布局。
+        snapshot = {**snapshot, "tableRules": rule_admin.list_table_rules()}
         published_template = active.get("templateFile")
     else:
         snapshot, published_template = rule_admin.active_runtime_rules()
+        snapshot = {**snapshot, "tableRules": rule_admin.list_table_rules()}
     mappings = _apply_group_repeat_rules(_apply_content_block_rules(snapshot))
     if published_template:
         candidate = Path(published_template)
@@ -200,7 +208,7 @@ def runtime_template_and_mappings() -> tuple[Path, list[dict], dict[str, str]]:
                 report = compile_template(candidate, output, mappings, snapshot["tableRules"])
                 if not report["valid"]:
                     raise RuntimeError(f"运行时模板编译失败：{len(report['errors'])} 个错误")
-            return output, mappings, {
+            return output, mappings, snapshot["tableRules"], {
                 "template_id": str(active.get("templateId", "")) if active else "",
                 "template_name": str(active.get("templateName", "")) if active else "",
                 "template_code": str(active.get("templateCode", "")) if active else "",
@@ -212,7 +220,7 @@ def runtime_template_and_mappings() -> tuple[Path, list[dict], dict[str, str]]:
     report = compile_template(settings.template_path, output, mappings, snapshot["tableRules"])
     if not report["valid"]:
         raise RuntimeError(f"运行时模板编译失败：{len(report['errors'])} 个错误")
-    return output, mappings, {
+    return output, mappings, snapshot["tableRules"], {
         "template_version": "V1.0",
         "template_revision": hashlib.sha256(output.read_bytes()).hexdigest(),
     }
@@ -220,7 +228,7 @@ def runtime_template_and_mappings() -> tuple[Path, list[dict], dict[str, str]]:
 
 def render_report_word(item: dict, data: dict, payload: dict | None = None,
                        output_suffix: str = "") -> str:
-    template, mappings, template_meta = runtime_template_and_mappings()
+    template, mappings, table_rules, template_meta = runtime_template_and_mappings()
     data.update(template_meta)
     output_name = (f"report-{item['id']}-{output_suffix}.docx" if output_suffix
                    else f"report-{item['id']}-working.docx")
@@ -246,12 +254,9 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
                     pending_codes.append(dependency)
     system_fields = [field for field in all_fields if field["fieldCode"] in required_codes]
     resolve_system_fields(system_fields, all_rules, active_payload, data)
-    build_mapped_docx(template, settings.reports_dir / output_name, mappings, active_payload, data)
+    build_mapped_docx(template, settings.reports_dir / output_name, mappings,
+                      active_payload, data, table_rules)
     return output_name
-
-
-def manual_edit_locked() -> HTTPException:
-    return HTTPException(409, {"code": "MANUAL_EDIT_LOCKED", "message": "Word 已人工编辑并保存，不能再次自动生成；请新建报告。"})
 
 
 def require_automatic_edit_allowed(item: dict) -> None:
@@ -261,21 +266,14 @@ def require_automatic_edit_allowed(item: dict) -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "storage": "local", "database": "sqlite"}
+    return {"status": "ok", "storage": "local", "database": "mysql"}
 
 
 @app.get(f"{settings.api_prefix}/reports", response_model=list[ReportTask])
 def list_reports(user: dict = Depends(auth.require("REPORT_EDIT"))) -> list[ReportTask]:
-    items = database.list_reports(user["id"])
-    _, _, template_meta = runtime_template_and_mappings()
-    for index, item in enumerate(items):
-        data = item["resolved_data"]
-        same_revision = data.get("template_revision") == template_meta["template_revision"]
-        metadata_changed = any(data.get(key) != value for key, value in template_meta.items())
-        if same_revision and metadata_changed and not item.get("word_edit_locked"):
-            data.update(template_meta)
-            items[index] = database.update_report(item["id"], resolved_data=data)
-    return [report_response(item) for item in items]
+    # GET 保持纯读：模板元数据的惰性补写由 ensure_report_file 在生成文件时完成，
+    # 这里若边读边写，会与并发保存的 sync_word_fields 互相覆盖（丢失更新）
+    return [report_response(item) for item in database.list_reports(user["id"])]
 
 
 @app.get(f"{settings.api_prefix}/template-source-catalog")
@@ -344,7 +342,7 @@ def create_report(request: CreateReportRequest,
     if excel_source and excel_source.get("source_type") != "EXCEL":
         raise HTTPException(422, "Excel 数据源类型无效")
     data = request.data.model_dump() if request.data else default_report_data()
-    _, _, template_meta = runtime_template_and_mappings()
+    *_, template_meta = runtime_template_and_mappings()
     data.update(template_meta)
     if source:
         apply_pdf_source(data, source)
@@ -397,6 +395,8 @@ def delete_report(report_id: str, user: dict = Depends(auth.require("REPORT_EDIT
 def update_report(report_id: str, request: UpdateReportRequest,
                   user: dict = Depends(auth.require("REPORT_EDIT"))) -> ReportTask:
     current = required_owned_report(report_id, user)
+    # 人工编辑落盘后，PUT 保存会静默丢弃用户在 Word 里的改动
+    require_automatic_edit_allowed(current)
     before = flatten_values(current["resolved_data"])
     after_data = request.data.model_dump()
     after = flatten_values(after_data)
@@ -500,7 +500,9 @@ def rebuild_report_word(report_id: str, user: dict = Depends(auth.require("REPOR
         raise HTTPException(500, f"Word 重建失败：{error}") from error
     return report_response(database.update_report(
         report_id, status="EDITING", output_name=output_name,
-        resolved_data=item["resolved_data"], updated_by=user["id"]
+        resolved_data=item["resolved_data"], updated_by=user["id"],
+        # 文件已重建，未保存的编辑会话不得再回写覆盖
+        onlyoffice_document_key=None,
     ))
 
 

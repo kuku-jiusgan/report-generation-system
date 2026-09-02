@@ -10,8 +10,8 @@ class LimsCatalogRepositoryMixin:
     @staticmethod
     def _group_tables_exist(connection: Any) -> bool:
         rows = connection.execute(
-            """SELECT name FROM sqlite_master WHERE type='table'
-               AND name IN ('system_field_groups','system_field_group_fields')"""
+            """SELECT table_name AS name FROM information_schema.tables
+               WHERE table_schema=DATABASE() AND table_name IN ('system_field_groups','system_field_group_fields')"""
         ).fetchall()
         return len(rows) == 2
 
@@ -21,14 +21,12 @@ class LimsCatalogRepositoryMixin:
                 """INSERT INTO lims_field_catalog(field_code,label,group_code,collection_code,data_type,
                    cardinality,db_table,db_column,json_key,legacy_json_path,description,output_format,
                    default_value,validation_regex,order_no,enabled,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(field_code) DO UPDATE SET
-                   label=excluded.label,group_code=excluded.group_code,collection_code=excluded.collection_code,
-                   data_type=excluded.data_type,cardinality=excluded.cardinality,db_table=excluded.db_table,
-                   db_column=excluded.db_column,json_key=excluded.json_key,
-                   legacy_json_path=excluded.legacy_json_path,description=excluded.description,
-                   output_format=excluded.output_format,default_value=excluded.default_value,
-                   validation_regex=excluded.validation_regex,order_no=excluded.order_no,
-                   enabled=excluded.enabled,updated_at=excluded.updated_at""",
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
+                   label=VALUES(label),group_code=VALUES(group_code),collection_code=VALUES(collection_code),
+                   data_type=VALUES(data_type),cardinality=VALUES(cardinality),db_table=VALUES(db_table),
+                   db_column=VALUES(db_column),json_key=VALUES(json_key),legacy_json_path=VALUES(legacy_json_path),
+                   description=VALUES(description),output_format=VALUES(output_format),default_value=VALUES(default_value),
+                   validation_regex=VALUES(validation_regex),order_no=VALUES(order_no),enabled=VALUES(enabled),updated_at=VALUES(updated_at)""",
                 (item["fieldCode"], item["label"], item["groupCode"], item["collectionCode"],
                  item.get("dataType", "string"), item.get("cardinality", "ONE"), item["dbTable"],
                  item["dbColumn"], item.get("jsonKey", ""), item.get("legacyJsonPath", ""),
@@ -60,20 +58,20 @@ class LimsCatalogRepositoryMixin:
         with self.connect() as connection:
             if not self._group_tables_exist(connection):
                 row = connection.execute(
-                    "SELECT *,NULL AS group_codes,NULL AS group_labels FROM lims_field_catalog WHERE field_code=?",
+                    "SELECT *,NULL AS group_codes,NULL AS group_labels FROM lims_field_catalog WHERE field_code=%s",
                     (field_code,),
                 ).fetchone()
             else:
                 row = connection.execute(
-                """SELECT f.*,groups.group_codes,groups.group_labels FROM lims_field_catalog f
+                """SELECT f.*,grp.group_codes,grp.group_labels FROM lims_field_catalog f
                    LEFT JOIN (
-                     SELECT gf.field_code,GROUP_CONCAT(g.group_code,' / ') AS group_codes,
-                            GROUP_CONCAT(g.label,' / ') AS group_labels
+                     SELECT gf.field_code,GROUP_CONCAT(g.group_code SEPARATOR ' / ') AS group_codes,
+                            GROUP_CONCAT(g.label SEPARATOR ' / ') AS group_labels
                      FROM system_field_group_fields gf
                      JOIN system_field_groups g ON g.group_code=gf.group_code
                      WHERE g.enabled=1 GROUP BY gf.field_code
-                   ) groups ON groups.field_code=f.field_code
-                   WHERE f.field_code=?""", (field_code,),
+                   ) grp ON grp.field_code=f.field_code
+                   WHERE f.field_code=%s""", (field_code,),
                 ).fetchone()
         return self._lims_field_to_api(row) if row else None
 
@@ -87,18 +85,18 @@ class LimsCatalogRepositoryMixin:
                 ).fetchall()
             else:
                 rows = connection.execute(
-                """SELECT f.*,groups.group_codes,groups.group_labels FROM lims_field_catalog f
+                """SELECT f.*,grp.group_codes,grp.group_labels FROM lims_field_catalog f
                    LEFT JOIN (
-                     SELECT grouped.field_code,GROUP_CONCAT(grouped.group_code,' / ') AS group_codes,
-                            GROUP_CONCAT(grouped.label,' / ') AS group_labels
+                     SELECT grouped.field_code,GROUP_CONCAT(grouped.group_code SEPARATOR ' / ') AS group_codes,
+                            GROUP_CONCAT(grouped.label SEPARATOR ' / ') AS group_labels
                      FROM (
                        SELECT gf.field_code,g.group_code,g.label FROM system_field_group_fields gf
                        JOIN system_field_groups g ON g.group_code=gf.group_code
                        WHERE g.enabled=1 ORDER BY g.order_no,g.group_code
                      ) grouped GROUP BY grouped.field_code
-                   ) groups ON groups.field_code=f.field_code """
+                   ) grp ON grp.field_code=f.field_code """
                 + ("" if include_disabled else "WHERE f.enabled=1 ")
-                + "ORDER BY COALESCE(groups.group_labels,f.group_code),f.order_no,f.field_code"
+                + "ORDER BY COALESCE(grp.group_labels,f.group_code),f.order_no,f.field_code"
                 ).fetchall()
         return [self._lims_field_to_api(row) for row in rows]
 
@@ -108,14 +106,18 @@ class LimsCatalogRepositoryMixin:
             rows = connection.execute(
                 """SELECT DISTINCT gf.field_code FROM system_field_group_chapters gc
                    JOIN system_field_group_fields gf ON gf.group_code=gc.group_code
-                   WHERE gc.chapter_id=?""",
+                   WHERE gc.chapter_id=%s""",
                 (chapter_id,),
             ).fetchall()
         return [fields[row["field_code"]] for row in rows if row["field_code"] in fields]
 
     def delete_lims_field(self, field_code: str) -> bool:
         with self.connect() as connection:
-            cursor = connection.execute("DELETE FROM lims_field_catalog WHERE field_code=?", (field_code,))
+            connection.execute("DELETE FROM system_field_rules WHERE field_code=%s", (field_code,))
+            if self._group_tables_exist(connection):
+                connection.execute("DELETE FROM system_field_group_fields WHERE field_code=%s", (field_code,))
+            connection.execute("DELETE FROM system_field_chapters WHERE field_code=%s", (field_code,))
+            cursor = connection.execute("DELETE FROM lims_field_catalog WHERE field_code=%s", (field_code,))
         return bool(cursor.rowcount)
 
     @staticmethod
@@ -131,7 +133,7 @@ class LimsCatalogRepositoryMixin:
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM system_field_rules "
-                + ("WHERE field_code=? " if field_code else "")
+                + ("WHERE field_code=%s " if field_code else "")
                 + "ORDER BY field_code,priority,id", (field_code,) if field_code else (),
             ).fetchall()
         return [self._system_rule_to_api(row) for row in rows]
@@ -161,20 +163,20 @@ class LimsCatalogRepositoryMixin:
             if rule_id is None:
                 cursor = connection.execute(
                     """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
-                       transform,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?)""", values,
+                       transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", values,
                 )
                 rule_id = int(cursor.lastrowid)
             else:
                 connection.execute(
-                    """UPDATE system_field_rules SET field_code=?,name=?,source_type=?,priority=?,config=?,
-                       transform=?,enabled=?,updated_at=? WHERE id=?""", (*values, rule_id),
+                    """UPDATE system_field_rules SET field_code=%s,name=%s,source_type=%s,priority=%s,config=%s,
+                       transform=%s,enabled=%s,updated_at=%s WHERE id=%s""", (*values, rule_id),
                 )
-            row = connection.execute("SELECT * FROM system_field_rules WHERE id=?", (rule_id,)).fetchone()
+            row = connection.execute("SELECT * FROM system_field_rules WHERE id=%s", (rule_id,)).fetchone()
         if not row:
             raise KeyError(rule_id)
         return self._system_rule_to_api(row)
 
     def delete_system_field_rule(self, rule_id: int) -> bool:
         with self.connect() as connection:
-            cursor = connection.execute("DELETE FROM system_field_rules WHERE id=?", (rule_id,))
+            cursor = connection.execute("DELETE FROM system_field_rules WHERE id=%s", (rule_id,))
         return bool(cursor.rowcount)

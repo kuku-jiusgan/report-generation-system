@@ -1,21 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Coin, CopyDocument, Delete, EditPen, Plus, Refresh, Search, View } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowUp, Coin, Delete, EditPen, Plus, Refresh, Search } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   adminApi,
-  type LimsFieldSourcePreview,
   type LimsExtractionRule,
   type StandardField,
+  type MappingRule,
   type StandardFieldCatalogChapter,
-  type StandardFieldPreview,
-  type StandardFieldPreviewItem,
   type SystemFieldRule,
   type SystemFieldGroup,
 } from "./admin-api";
 import SystemAiRuleEditor from "./SystemAiRuleEditor.vue";
 import SystemFieldTree from "./SystemFieldTree.vue";
-import SystemFieldGroupManager from "./SystemFieldGroupManager.vue";
+import SystemFieldCatalogTree from "./SystemFieldCatalogTree.vue";
 import ExcelWorkbookLocation from "./ExcelWorkbookLocation.vue";
 import ExcelFieldRuleEditor from "./ExcelFieldRuleEditor.vue";
 import FieldOutputFormatSelect from "./FieldOutputFormatSelect.vue";
@@ -30,21 +28,17 @@ const catalogUnmappedFields = ref<StandardField[]>([]);
 const expandedChapters = ref<Set<number>>(new Set());
 const selected = ref<StandardField>();
 const selectedChapterId = ref<number>();
+const selectedGroupCode = ref("");
+const selectedGroup = computed(() => groups.value.find((group) => group.groupCode === selectedGroupCode.value));
+const groupDraft = ref<Partial<SystemFieldGroup>>({});
+const selectedChapter = ref<StandardFieldCatalogChapter>();
 const draft = ref<Partial<StandardField>>();
 const rules = ref<CatalogRule[]>([]);
+const references = ref<MappingRule[]>([]);
 const search = ref("");
 const ruleDialog = ref(false);
 const ruleDraft = ref<Partial<CatalogRule>>();
 const ruleConfig = ref<Record<string, unknown>>({});
-const preview = ref<StandardFieldPreview>();
-const previewLoading = ref(false);
-const previewInstanceIds = ref<string[]>([]);
-const rawJsonVisible = ref(false);
-const rawJsonLoading = ref(false);
-const rawJson = ref<unknown>();
-const rawJsonMatch = ref<LimsFieldSourcePreview>();
-const rawJsonContext = ref<StandardFieldPreviewItem>();
-let previewRequest = 0;
 const dataTypes = [
   { value: "string", label: "文本" }, { value: "decimal", label: "数值" },
   { value: "date", label: "日期" }, { value: "richText", label: "富文本" },
@@ -91,7 +85,7 @@ const parserLabel = (rule: CatalogRule) => {
   const parser = String(rule.config?.parser || "");
   return parsers.find((item) => item.value === parser)?.label || sourceTypeLabel(rule.sourceType);
 };
-const rawJsonText = computed(() => JSON.stringify(rawJson.value || {}, null, 2)); function ruleOrigin(rule: Partial<CatalogRule>) {
+function ruleOrigin(rule: Partial<CatalogRule>) {
   const parser = String(rule.config?.parser || "");
   if (rule.sourceType !== "LIMS") return sourceTypeLabel(String(rule.sourceType));
   if (parser === "HTML_TABLE_GRID") return "LIMS SQL：UNITBODY（TYPE=RichText）内的 HTML 表格";
@@ -209,6 +203,75 @@ function toggleChapter(id: number) {
   else next.add(id);
   expandedChapters.value = next;
 }
+function selectGroup(group: SystemFieldGroup) { selectedGroupCode.value = group.groupCode; groupDraft.value = JSON.parse(JSON.stringify(group)); selected.value = undefined; draft.value = undefined }
+function selectChapter(chapter: StandardFieldCatalogChapter) { selectedGroupCode.value = ''; selectedChapter.value = chapter; selected.value = undefined; draft.value = undefined }
+async function saveSelectedGroup() {
+  if (!selectedGroup.value || !groupDraft.value.label) return
+  try { await adminApi.updateFieldGroup(selectedGroup.value.groupCode, groupDraft.value); await loadFields(); ElMessage.success('编组已保存') }
+  catch (error) { ElMessage.error(errorText(error)) }
+}
+async function moveGroupField(index: number, delta: number) {
+  if (!selectedGroup.value) return
+  const next = index + delta
+  if (next < 0 || next >= selectedGroup.value.fields.length) return
+  const codes = selectedGroup.value.fields.map(field => field.fieldCode)
+  ;[codes[index], codes[next]] = [codes[next], codes[index]]
+  try {
+    await adminApi.reorderFieldGroup(selectedGroup.value.groupCode, codes)
+    const group = groups.value.find(item => item.groupCode === selectedGroup.value?.groupCode)
+    if (group) {
+      const fieldsByCode = new Map(group.fields.map(field => [field.fieldCode, field]))
+      group.fields = codes.map(fieldCode => fieldsByCode.get(fieldCode)!).filter(Boolean)
+    }
+    ElMessage.success('字段顺序已保存')
+  }
+  catch (error) { ElMessage.error(errorText(error)) }
+}
+async function removeSelectedGroup() {
+  if (!selectedGroup.value) return
+  try {
+    await ElMessageBox.confirm(`删除编组“${selectedGroup.value.label}”？字段本身不会被删除。`, '删除编组', { type: 'warning' })
+    await adminApi.deleteFieldGroup(selectedGroup.value.groupCode)
+    selectedGroupCode.value = ''
+    groupDraft.value = {}
+    await loadFields()
+    ElMessage.success('编组已删除')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(errorText(error))
+  }
+}
+async function saveSelectedChapter() {
+  if (!selectedChapter.value) return
+  try { await adminApi.updateChapter(selectedChapter.value.id, { code: selectedChapter.value.code, title: selectedChapter.value.title }); await loadFields(); ElMessage.success('章节已保存') }
+  catch (error) { ElMessage.error(errorText(error)) }
+}
+async function removeSelectedChapter() {
+  if (!selectedChapter.value) return
+  try {
+    await ElMessageBox.confirm(`删除章节“${selectedChapter.value.title}”？章节下的编组和字段不会被删除。`, '删除章节', { type: 'warning' })
+    await adminApi.deleteChapter(selectedChapter.value.id)
+    selectedChapter.value = undefined
+    await loadFields()
+    ElMessage.success('章节已删除')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(errorText(error))
+  }
+}
+async function createGroupInChapter() {
+  if (!selectedChapter.value) return
+  try {
+    const result = await ElMessageBox.prompt('请输入编组名称', '新增编组', { confirmButtonText: '创建', cancelButtonText: '取消', inputPlaceholder: '例如：定量限结果' })
+    if (!result.value.trim()) return ElMessage.warning('编组名称不能为空')
+    const code = `custom_${Date.now()}`
+    await adminApi.createFieldGroup({ groupCode: code, label: result.value.trim(), cardinality: 'MANY' })
+    await adminApi.assignGroupChapter(code, selectedChapter.value.id)
+    await loadFields()
+    selectedGroupCode.value = code
+    ElMessage.success('编组已创建')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(errorText(error))
+  }
+}
 function errorText(error: unknown) {
   const value = error as { response?: { data?: { detail?: string } }; message?: string };
   return value.response?.data?.detail || value.message || "操作失败";
@@ -227,88 +290,29 @@ async function loadFields(preferred?: string) {
   finally { loading.value = false; }
 }
 async function selectField(field: StandardField, chapterId?: number) {
+  selectedGroupCode.value = '';
+  selectedChapter.value = undefined;
   if (chapterId) selectedChapterId.value = chapterId;
   selected.value = field;
   draft.value = JSON.parse(JSON.stringify(field));
-  previewInstanceIds.value = [];
-  await Promise.all([loadRules(field.fieldCode), loadPreview(field.fieldCode)]);
+  await Promise.all([loadRules(field.fieldCode), loadReferences(field.fieldCode)]);
 }
 async function loadRules(fieldCode: string) {
   try { rules.value = (await adminApi.systemFieldRules(fieldCode)).map((rule) => ({ ...rule.config, ...rule })) as CatalogRule[]; }
   catch (error) { ElMessage.error(errorText(error)); }
 }
-async function loadPreview(fieldCode?: string) {
-  if (!fieldCode) { preview.value = undefined; return; }
-  const requestId = ++previewRequest;
-  previewLoading.value = true;
-  try {
-    const result = await adminApi.standardFieldPreview(
-      fieldCode,
-      previewInstanceIds.value.length ? Math.min(50, previewInstanceIds.value.length) : 12,
-      previewInstanceIds.value,
-    );
-    if (requestId === previewRequest) preview.value = result;
-  } catch (error) {
-    if (requestId === previewRequest) preview.value = undefined;
-    ElMessage.error(errorText(error));
-  } finally {
-    if (requestId === previewRequest) previewLoading.value = false;
-  }
+async function loadReferences(fieldCode: string) {
+  try { references.value = await adminApi.standardFieldReferences(fieldCode) }
+  catch (error) { references.value = []; ElMessage.error(errorText(error)) }
 }
-function previewOptionLabel(item: NonNullable<StandardFieldPreview["options"]>[number]) {
-  return `${item.experimentTitle || item.projectName || "未命名实验"} · ${item.instanceId}`;
-}
-function changePreviewSelection() {
-  void loadPreview(selected.value?.fieldCode);
-}
-function previewValue(value: unknown) {
-  if (Array.isArray(value)) {
-    if (!value.length) return "-";
-    const rendered = value.map((item) => typeof item === "string" ? item : JSON.stringify(item));
-    const unique = Array.from(new Set(rendered));
-    if (unique.length === 1) return `${unique[0]}（${value.length} 项）`;
-    return `${unique.slice(0, 2).join("、")}${unique.length > 2 ? ` 等 ${unique.length} 种` : ""}（共 ${value.length} 项）`;
-  }
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-function evidenceLabel(evidence: Record<string, unknown>, fallback: string) {
-  const section = evidence.sectionPath || evidence.section || evidence.chapterPath;
-  if (Array.isArray(section)) return section.join(" / ");
-  return String(section || fallback || "标准记录");
-}
-async function showRawJson(item: StandardFieldPreviewItem) {
-  rawJsonContext.value = item;
-  rawJson.value = undefined;
-  rawJsonMatch.value = undefined;
-  rawJsonVisible.value = true;
-  rawJsonLoading.value = true;
-  try {
-    const result = await adminApi.rawLimsFieldSource(selected.value?.fieldCode || "", item);
-    rawJsonMatch.value = result;
-    rawJson.value = result.source;
-  } catch (error) {
-    ElMessage.error(errorText(error));
-  } finally {
-    rawJsonLoading.value = false;
-  }
-}
-async function copyRawJson() {
-  try {
-    await navigator.clipboard.writeText(rawJsonText.value);
-    ElMessage.success("原始 JSON 已复制");
-  } catch {
-    ElMessage.error("复制失败，请在 JSON 内容中手动选择复制");
-  }
-}
-async function newField() {
+async function newField(groupCode = selectedGroupCode.value) {
   try {
     const result = await ElMessageBox.prompt("请输入字段名称", "新增系统字段", {
       confirmButtonText: "创建", cancelButtonText: "取消", inputPlaceholder: "例如：报告摘要",
       inputValidator: (value) => Boolean(value.trim()) || "字段名称不能为空",
     });
     // 新字段先进入未映射区，章节和编组由用户在目录管理中明确关联。
-    const saved = await adminApi.createStandardField({ label: result.value.trim() });
+    const saved = await adminApi.createStandardField({ label: result.value.trim(), groupCode });
     await loadFields(saved.fieldCode);
     ElMessage.success(`系统字段已创建，编码：${saved.fieldCode}`);
   } catch (error) {
@@ -319,9 +323,10 @@ async function saveField() {
   if (!draft.value?.fieldCode?.trim() || !draft.value.label?.trim()) return ElMessage.warning("字段编码和名称不能为空");
   saving.value = true;
   try {
+    const payload = { ...draft.value, enabled: true };
     const saved = selected.value
-      ? await adminApi.updateStandardField(selected.value.fieldCode, draft.value)
-      : await adminApi.createStandardField(draft.value);
+      ? await adminApi.updateStandardField(selected.value.fieldCode, payload)
+      : await adminApi.createStandardField(payload);
     await loadFields(saved.fieldCode);
     ElMessage.success(selected.value ? "标准字段已保存" : "标准字段已创建");
   } catch (error) { ElMessage.error(errorText(error)); }
@@ -333,19 +338,18 @@ async function removeField() {
     await ElMessageBox.confirm(`删除标准字段“${selected.value.label}”？该字段的提取规则也会删除。`, "删除标准字段", { type: "warning" });
     await adminApi.deleteStandardField(selected.value.fieldCode);
     selected.value = undefined; draft.value = undefined; rules.value = [];
-    preview.value = undefined;
     await loadFields();
     ElMessage.success("标准字段已删除");
   } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(errorText(error)); }
 }
 function editRule(rule?: CatalogRule) {
   if (!draft.value?.fieldCode) return ElMessage.warning("请先保存标准字段，再配置提取规则");
-  const nextRule: Partial<CatalogRule> = rule ? JSON.parse(JSON.stringify(rule)) : {
+  const nextRule: Partial<CatalogRule> = rule ? JSON.parse(JSON.stringify(rule)) : (rules.value[0] ? JSON.parse(JSON.stringify(rules.value[0])) : {
     fieldCode: draft.value.fieldCode, name: "新来源规则", sourceType: "LIMS",
     sourceUnitType: "", sourcePath: draft.value.legacyJsonPath || "", sectionPattern: "",
     headerPattern: "", valuePattern: "", transform: "TRIM", priority: (rules.value.length + 1) * 10,
     config: { parser: "NORMALIZED_JSON", extractionType: "NORMALIZED_PATH" }, enabled: true,
-  };
+  });
   const legacyType = String(nextRule.sourceType || "LIMS");
   if (limsExtractionTypes.some((item) => item.value === legacyType)) {
     nextRule.sourceType = "LIMS";
@@ -364,6 +368,7 @@ async function saveRule() {
       sourceUnitType: ruleDraft.value.sourceUnitType, sourcePath: ruleDraft.value.sourcePath,
       sectionPattern: ruleDraft.value.sectionPattern, headerPattern: ruleDraft.value.headerPattern,
       valuePattern: ruleDraft.value.valuePattern } : savedConfig;
+    delete ruleDraft.value.priority;
     if (ruleDraft.value.id) await adminApi.updateSystemFieldRule(ruleDraft.value.id, ruleDraft.value);
     else await adminApi.createSystemFieldRule(selected.value.fieldCode, ruleDraft.value);
     await loadRules(selected.value.fieldCode);
@@ -386,72 +391,32 @@ onMounted(() => loadFields());
     <header class="module-header">
       <div class="module-title"><Coin /><div><strong>系统标准字段</strong><small>字段目录与统一来源规则</small></div></div>
       <div class="header-actions">
-        <SystemFieldGroupManager :groups="directoryOrderedGroups" :fields="catalogUnmappedFields" :chapters="chapters" @changed="loadFields()" />
         <el-button :icon="Refresh" @click="loadFields()">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="newField">新增系统字段</el-button>
+        <el-button type="primary" :icon="Plus" :disabled="!selectedGroupCode" @click="newField()">在当前编组新增字段</el-button>
       </div>
     </header>
     <main class="catalog-main">
       <aside class="field-index">
         <div class="index-head"><h1>标准字段目录</h1><span>{{ fields.length }} 个字段</span></div>
         <el-input v-model="search" :prefix-icon="Search" placeholder="搜索字段名称或编码" clearable />
-        <SystemFieldTree :rows="visibleChapterRows" :groups="directoryOrderedGroups" :fields="fields" :unmapped="unmappedFields" :selected-code="selected?.fieldCode" :loading="loading" @toggle="toggleChapter" @select="selectField" />
+        <SystemFieldCatalogTree :chapters="chapterTree" :groups="directoryOrderedGroups" :fields="fields" :selected-code="selected?.fieldCode" @select="selectField" @group="selectGroup" @chapter="selectChapter" />
       </aside>
       <section class="field-workspace">
+        <section v-if="selectedGroup && !draft" class="definition-band">
+          <div class="workspace-head"><div><span>字段编组</span><h1>{{ selectedGroup.label }}</h1></div><el-tag>{{ selectedGroup.groupCode }}</el-tag></div>
+          <div class="form-grid two"><el-form-item label="编组名称"><el-input v-model="groupDraft.label" /></el-form-item><el-form-item label="数据关系"><el-select v-model="groupDraft.cardinality"><el-option label="单值" value="ONE" /><el-option label="数组/多行" value="MANY" /></el-select></el-form-item></div><el-button type="primary" @click="saveSelectedGroup">保存编组</el-button><el-button type="danger" plain @click="removeSelectedGroup">删除编组</el-button>
+          <div class="group-field-order"><div class="group-field-order-head"><span>字段顺序</span><small>调整后自动保存</small></div><div v-for="(field,index) in selectedGroup.fields" :key="field.fieldCode" class="group-field-order-row"><span class="group-field-order-index">{{ String(index + 1).padStart(2, '0') }}</span><b>{{ field.label }}</b><code>{{ field.fieldCode }}</code><div class="group-field-order-actions"><el-tooltip content="上移" placement="top"><el-button circle text size="small" :icon="ArrowUp" :disabled="index===0" aria-label="上移" @click="moveGroupField(index,-1)" /></el-tooltip><el-tooltip content="下移" placement="top"><el-button circle text size="small" :icon="ArrowDown" :disabled="index===selectedGroup.fields.length-1" aria-label="下移" @click="moveGroupField(index,1)" /></el-tooltip></div></div><p v-if="!selectedGroup.fields.length" class="group-field-order-empty">当前编组暂无字段</p></div>
+          <p class="form-help">当前编组包含 {{ selectedGroup.fields.length }} 个字段。点击左侧字段进入具体配置。</p>
+        </section>
+        <section v-else-if="selectedChapter && !draft" class="definition-band">
+          <div class="workspace-head"><div><span>章节</span><h1>{{ selectedChapter.title }}</h1></div><el-tag>{{ selectedChapter.code }}</el-tag></div>
+<div class="form-grid two"><el-form-item label="章节编号"><el-input v-model="selectedChapter.code" /></el-form-item><el-form-item label="章节名称"><el-input v-model="selectedChapter.title" /></el-form-item></div><el-button type="primary" @click="saveSelectedChapter">保存章节</el-button><el-button type="primary" plain @click="createGroupInChapter">新增编组</el-button><el-button type="danger" plain @click="removeSelectedChapter">删除章节</el-button><p class="form-help">该章节下可管理编组和字段。请从左侧选择具体编组或字段。</p>
+        </section>
         <template v-if="draft">
           <div class="workspace-head">
             <div><span>全局字段库 / {{ groupDisplay(draft) || "未分组" }}</span><h1>{{ draft.label || "新标准字段" }}</h1></div>
             <div><el-button v-if="selected" type="danger" plain :icon="Delete" @click="removeField">删除字段</el-button><el-button type="primary" :loading="saving" @click="saveField">保存字段</el-button></div>
           </div>
-          <section v-loading="previewLoading" class="result-preview-band">
-            <div class="preview-head">
-              <div>
-                <h2>字段结果预览</h2>
-                <span v-if="preview?.storageSupported && preview.total">共 {{ preview.total }} 个实验记录<template v-if="preview.recognizedTotal !== undefined">、{{ preview.recognizedTotal }} 个识别结果</template>，显示最近 {{ preview.items.length }} 个实验记录</span>
-                <span v-else>最近解析的 LIMS 标准数据</span>
-              </div>
-              <div class="preview-actions">
-                <el-select
-                  v-model="previewInstanceIds"
-                  class="preview-instance-select"
-                  multiple
-                  filterable
-                  clearable
-                  collapse-tags
-                  collapse-tags-tooltip
-                  placeholder="选择实验记录（默认最近 12 个）"
-                  :disabled="!selected || previewLoading"
-                  @change="changePreviewSelection"
-                >
-                  <el-option
-                    v-for="item in preview?.options || []"
-                    :key="item.instanceId"
-                    :label="previewOptionLabel(item)"
-                    :value="item.instanceId"
-                  >
-                    <span class="preview-option"><b>{{ item.experimentTitle || item.projectName || '未命名实验' }}</b><small>{{ item.instanceId }} · {{ item.recognizedCount }} 个识别结果</small></span>
-                  </el-option>
-                </el-select>
-                <el-button :icon="Refresh" :disabled="!selected" @click="loadPreview(selected?.fieldCode)">刷新预览</el-button>
-              </div>
-            </div>
-            <el-table v-if="preview?.items.length" :data="preview.items" size="small" max-height="260">
-              <el-table-column label="识别结果" min-width="220">
-                <template #default="scope"><span class="preview-value" :title="previewValue(scope.row.value)">{{ previewValue(scope.row.value) }}</span></template>
-              </el-table-column>
-              <el-table-column label="实验记录" min-width="190">
-                <template #default="scope"><span class="preview-context"><b>{{ scope.row.experimentTitle || scope.row.projectName || '未命名实验' }}</b><small>{{ scope.row.instanceId }}</small></span></template>
-              </el-table-column>
-              <el-table-column label="数据来源" min-width="190">
-                <template #default="scope"><span class="preview-context"><b>{{ evidenceLabel(scope.row.evidence, scope.row.collectionCode) }}</b><small>{{ scope.row.fileName }}</small></span></template>
-              </el-table-column>
-              <el-table-column label="原始数据" width="132" align="right">
-                <template #default="scope"><el-button link type="primary" :icon="View" @click="showRawJson(scope.row)">查看原始 JSON</el-button></template>
-              </el-table-column>
-            </el-table>
-            <div v-else-if="preview && !preview.storageSupported" class="preview-empty">当前数据库位置暂不支持自动预览</div>
-            <div v-else-if="!previewLoading" class="preview-empty">暂无已解析结果，导入并识别 LIMS 数据后会显示在这里</div>
-          </section>
           <div class="definition-band">
             <h2>字段定义</h2>
             <el-form label-position="top">
@@ -478,40 +443,24 @@ onMounted(() => loadFields());
                 <el-form-item label="数据库列"><el-input v-model="draft.dbColumn" /></el-form-item>
                 <el-form-item label="JSON 属性"><el-input v-model="draft.jsonKey" /></el-form-item>
               </div>
-              <el-checkbox v-model="draft.enabled">启用该标准字段</el-checkbox>
             </el-form>
           </div>
+          <section class="references-band">
+            <div class="rules-head"><div><h2>模板引用</h2></div></div>
+            <el-table v-if="references.length" :data="references" size="small">
+              <el-table-column label="模板" prop="templateName" min-width="240" />
+              <el-table-column label="模板字段" prop="wordLabel" min-width="180" />
+              <el-table-column label="字段编码" prop="fieldCode" min-width="180" />
+              <el-table-column label="位置" prop="locationId" min-width="220" />
+              <el-table-column label="表格" prop="tableNo" width="100" />
+            </el-table>
+            <el-empty v-else description="当前字段暂未被模板字段引用" :image-size="55" />
+          </section>
           <div class="rules-band">
-            <div class="rules-head"><div><h2>提取规则</h2><span>按优先级从小到大执行，首个有效结果写入标准字段；“正则”与“JSONPath”会明确区分</span></div><el-button type="primary" plain :icon="Plus" @click="editRule()">新增规则</el-button></div>
-            <div class="rule-flow" aria-label="当前字段数据流">
-              <span><b>原始来源</b>规则配置的数据源</span><i>→</i>
-              <span><b>规则处理</b>JSONPath / 正则 / 表格列</span><i>→</i>
-              <span><b>标准 JSON</b><code>{{ draft.legacyJsonPath || draft.fieldCode }}</code></span><i>→</i>
-              <span><b>入库位置</b><code>{{ draft.dbTable }}.{{ draft.dbColumn }}<template v-if="draft.jsonKey"> → {{ draft.jsonKey }}</template></code></span>
-            </div>
+            <div class="rules-head"><div><h2>提取规则</h2></div><el-button type="primary" plain :icon="EditPen" @click="editRule(rules[0])">配置规则</el-button></div>
             <el-table :data="rules" row-key="id">
-              <el-table-column prop="priority" label="优先级" width="76" />
               <el-table-column prop="name" label="规则名称" min-width="150" />
               <el-table-column label="原始数据库字段" min-width="260"><template #default="scope"><span class="rule-source"><b>{{ ruleOrigin(scope.row) }}</b><small>{{ ruleMethodNote(scope.row) }}</small></span></template></el-table-column>
-              <el-table-column label="定位与提取规则" min-width="330">
-                <template #default="scope">
-                  <div class="rule-detail">
-                    <el-tag size="small" effect="plain">{{ parserLabel(scope.row) }}</el-tag>
-                    <span v-if="scope.row.config?.parserProfile"><b>解析配置</b><code>{{ scope.row.config.parserProfile }}</code></span>
-                    <span v-if="scope.row.sourceType === 'EXCEL' && scope.row.sourcePath"><b>标准 JSON 路径</b><code>{{ scope.row.sourcePath }}</code></span>
-                    <span v-else-if="scope.row.sourcePath"><b>{{ scope.row.config?.extractionType === 'HTML_TABLE_COLUMN' ? '列标题正则' : '字段路径' }}</b><code>{{ scope.row.sourcePath }}</code></span>
-                    <template v-if="scope.row.sourceType === 'EXCEL' && workbookLocation(scope.row.config).sheet">
-                      <span><b>来源 Sheet</b><code>{{ workbookLocation(scope.row.config).sheet }}</code></span>
-                      <span><b>匹配维度</b><code>{{ workbookLocation(scope.row.config).matchBy }}</code></span>
-                      <span><b>取值位置</b><code>{{ workbookLocation(scope.row.config).valueColumn }} · {{ workbookLocation(scope.row.config).cells }}</code></span>
-                    </template>
-                    <span v-if="scope.row.sectionPattern"><b>章节正则</b><code>/{{ scope.row.sectionPattern }}/i</code></span>
-                    <span v-if="scope.row.headerPattern"><b>表头正则</b><code>/{{ scope.row.headerPattern }}/i</code></span>
-                    <span v-if="scope.row.valuePattern"><b>取值正则</b><code>/{{ scope.row.valuePattern }}/is</code></span>
-                    <span v-if="scope.row.config?.rowPattern"><b>数据行正则</b><code>/{{ scope.row.config.rowPattern }}/i</code></span>
-                  </div>
-                </template>
-              </el-table-column>
               <el-table-column label="结果处理" min-width="130"><template #default="scope"><span class="rule-transform"><b>{{ transformLabel(scope.row.transform) }}</b><small>写入 {{ draft.legacyJsonPath || draft.fieldCode }}</small></span></template></el-table-column>
               <el-table-column label="状态" width="76"><template #default="scope"><el-tag size="small" :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '启用' : '停用' }}</el-tag></template></el-table-column>
               <el-table-column label="操作" width="130" align="right"><template #default="scope"><el-button link type="primary" :icon="EditPen" @click="editRule(scope.row)" /><el-button link type="danger" :icon="Delete" @click="removeRule(scope.row)" /></template></el-table-column>
@@ -527,7 +476,6 @@ onMounted(() => loadFields());
         <div class="form-grid three">
           <el-form-item label="规则名称"><el-input v-model="ruleDraft.name" /></el-form-item>
           <el-form-item label="提取方式"><el-select v-model="ruleDraft.sourceType"><el-option v-for="item in sourceTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
-          <el-form-item label="优先级"><el-input-number v-model="ruleDraft.priority" :min="1" controls-position="right" /></el-form-item>
         </div>
         <div class="rule-origin-note"><b>数据来源：</b>{{ ruleOrigin(ruleDraft) }}</div>
         <template v-if="ruleDraft.sourceType === 'PDF'">
@@ -578,20 +526,6 @@ onMounted(() => loadFields());
       <template #footer><el-button @click="ruleDialog = false">取消</el-button><el-button type="primary" @click="saveRule">保存规则</el-button></template>
     </el-dialog>
 
-    <el-drawer v-model="rawJsonVisible" size="58%" class="raw-json-drawer" destroy-on-close>
-      <template #header>
-        <div class="raw-json-head">
-          <div><h2>当前字段的原始 JSON</h2><span>{{ selected?.label }} · {{ rawJsonContext?.fileName }} · 实验实例 {{ rawJsonContext?.instanceId }}</span></div>
-          <el-button :icon="CopyDocument" :disabled="rawJsonLoading || !rawJson" @click="copyRawJson">复制 JSON</el-button>
-        </div>
-      </template>
-      <div v-loading="rawJsonLoading" class="raw-json-body">
-        <p v-if="rawJsonMatch?.matchedBy !== 'none'">这是当前字段在该实验记录下的完整 JSON；最外层按实验实例聚合，内部按 <code>unitId</code> 分组并保留全部识别结果与来源项。</p>
-        <p v-else-if="!rawJsonLoading">当前标准记录缺少可定位的 <code>unitId / richTextId</code>，未返回整份实验 JSON。</p>
-        <pre v-if="rawJson">{{ rawJsonText }}</pre>
-        <el-empty v-else-if="!rawJsonLoading" description="未找到当前字段对应的原始 JSON 记录" />
-      </div>
-    </el-drawer>
   </div>
 </template>
 
@@ -601,4 +535,4 @@ onMounted(() => loadFields());
 .chapter-entry{min-width:0}.field-list .chapter-row{--indent:calc(var(--chapter-depth) * 16px);width:100%;height:34px;min-height:34px;padding:0 8px 0 calc(4px + var(--indent));display:grid;grid-template-columns:14px minmax(34px,auto) minmax(0,1fr) 24px;align-items:center;gap:6px;border:0;border-bottom:1px solid #f4f7fb;border-radius:0;background:transparent;color:#3d554d;text-align:left;cursor:pointer}.field-list .chapter-row:hover{background:#f1f6f4;border-color:#f4f7fb}.chapter-row.muted{opacity:.58}.chapter-row b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:600}.chapter-caret{display:block;color:#71827b;font-size:18px;line-height:1;transform:rotate(0deg);transition:transform 160ms ease-out}.chapter-caret.open{transform:rotate(90deg)}.chapter-code{color:#697a74;font:10px/1.2 Consolas,"SFMono-Regular",monospace}.chapter-count{color:#84928d;font-size:10px;text-align:right}.chapter-fields{margin:4px 0 8px;padding-left:calc(20px + var(--chapter-depth) * 16px);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 7px}.field-list .field-item{width:100%;min-width:0;min-height:44px;padding:6px var(--space-sm);display:grid;grid-template-columns:minmax(0,1fr) 8px;align-items:center;gap:6px;border:1px solid #e4e9e6;border-radius:4px;background:#fff;text-align:left;cursor:pointer}.field-list .field-item:hover{background:#f1f6f4;border-color:#b8cbc4}.field-list .field-item.selected{background:#e5f0ed;border-color:#4f8ee8}.unmapped-fields{margin-top:14px;padding-top:6px;border-top:1px solid #dde4e1}.field-list .unmapped-fields h2{margin-top:4px}.field-list .el-empty{padding:28px 0}
 .preview-actions{display:flex;align-items:center;gap:8px}.preview-instance-select{width:360px}.preview-option{display:grid;gap:2px;line-height:1.25}.preview-option b{max-width:310px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#31463f;font-size:12px;font-weight:500}.preview-option small{color:#71817b;font-size:10px}@media(max-width:1200px){.preview-actions{width:100%;align-items:stretch}.preview-instance-select{min-width:0;flex:1}.preview-head{align-items:stretch;flex-direction:column}}
 @media(prefers-reduced-motion:reduce){.chapter-caret{transition:none}}
-</style>
+.group-field-order{margin-top:18px;padding:14px 16px;border:1px solid #e1e8e5;border-radius:8px;background:#f8fafb}.group-field-order-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#30483f;font-size:12px;font-weight:650}.group-field-order-head small{color:#81908a;font-size:10px;font-weight:400}.group-field-order-row{min-height:38px;display:grid;grid-template-columns:34px minmax(120px,1fr) minmax(120px,1fr) auto;align-items:center;gap:10px;padding:5px 4px;border-top:1px solid #e8eeeb}.group-field-order-index{color:#7d9188;font:11px/1 Consolas,monospace}.group-field-order-row b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2d443b;font-size:12px;font-weight:550}.group-field-order-row code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#778a83;font:10px/1.3 Consolas,monospace}.group-field-order-actions{display:flex;gap:2px}.group-field-order-actions .el-button{width:28px;height:28px;margin:0;color:#477265}.group-field-order-actions .el-button:not(.is-disabled):hover{color:#2167e8;background:#e8f0ff}.group-field-order-empty{margin:10px 0 2px;color:#8a9993;font-size:11px;text-align:center}@media(max-width:700px){.group-field-order-row{grid-template-columns:28px minmax(0,1fr) auto}.group-field-order-row code{display:none}}.group-index{max-height:220px;overflow:auto;margin-bottom:12px}.group-index h1{margin:0 0 8px;font-size:13px}.group-index .el-menu{border-right:0}.group-index .el-menu-item{height:36px;line-height:36px;padding:0 10px!important;display:flex;justify-content:space-between}</style>

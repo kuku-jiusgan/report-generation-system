@@ -56,6 +56,13 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
             raise HTTPException(502, f"LIMS Oracle 查询失败：{error}") from error
         if not instances:
             raise HTTPException(404, f"项目编号 {request.project_id} 未查询到 LIMS 数据")
+        fields = database.list_lims_fields()
+        rules = database.list_lims_parser_rules()
+        # 先完成全部归一化：任一实例解析失败时不留下 0 实例的孤儿导入记录
+        try:
+            normalized = [(raw, normalize_instance(raw, fields, rules)) for raw in instances]
+        except (ValueError, IndexError, KeyError, TypeError) as error:
+            raise HTTPException(502, f"LIMS 数据解析失败：{error}") from error
         import_id = uuid.uuid4().hex
         item = database.create_lims_import({
             "id": import_id,
@@ -65,12 +72,8 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
             "summary": summary,
             "created_at": now_iso(),
         })
-        fields = database.list_lims_fields()
-        rules = database.list_lims_parser_rules()
-        for raw in instances:
-            database.replace_lims_instance(
-                import_id, raw, normalize_instance(raw, fields, rules), COLLECTION_ORDER,
-            )
+        for raw, payload in normalized:
+            database.replace_lims_instance(import_id, raw, payload, COLLECTION_ORDER)
         return import_response(item)
 
     @router.get("/queries")

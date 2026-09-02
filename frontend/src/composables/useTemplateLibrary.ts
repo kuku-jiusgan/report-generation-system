@@ -21,12 +21,14 @@ export function useTemplateLibrary(
   const loading = ref(false)
   const versionLoading = ref(false)
   const deletingTemplate = ref(false)
+  const deletingVersionId = ref<string>()
   const savingTemplate = ref(false)
   const savingVersion = ref(false)
   const activatingVersionId = ref<string>()
   const templateDialog = ref(false)
   const versionDialog = ref(false)
   const templateDraft = reactive({ code: '', name: '', description: '' })
+  const templateFile = ref<File>()
   const versionDraft = reactive<{ baseVersionId?: string; note: string }>({ note: '' })
   const selectedTitle = computed(() => selected.value
     ? `${selected.value.name} · ${selected.value.code}` : '选择一个模板')
@@ -63,6 +65,7 @@ export function useTemplateLibrary(
   function openCreateTemplate() {
     editingTemplate.value = undefined
     Object.assign(templateDraft, { code: '', name: '', description: '' })
+    templateFile.value = undefined
     templateDialog.value = true
   }
 
@@ -82,11 +85,15 @@ export function useTemplateLibrary(
       ElMessage.warning('模板编码和名称不能为空')
       return
     }
+    if (!editingTemplate.value && !templateFile.value) {
+      ElMessage.warning('请选择 Word 模板基座文件')
+      return
+    }
     savingTemplate.value = true
     try {
       const result = editingTemplate.value
         ? await adminApi.updateTemplate(editingTemplate.value.id, templateDraft)
-        : await adminApi.createTemplate({ ...templateDraft, note: '初始草稿版本' })
+        : await adminApi.createTemplateWithFile({ ...templateDraft, note: '初始草稿版本', templateFile: templateFile.value as File })
       templateDialog.value = false
       await loadTemplates(result.id)
       ElMessage.success(editingTemplate.value ? '模板信息已保存' : '模板及 V1 已创建')
@@ -144,6 +151,27 @@ export function useTemplateLibrary(
     }
   }
 
+  async function removeVersion(version: AdminTemplateVersion) {
+    if (!selected.value) return
+    try {
+      await ElMessageBox.confirm(
+        `删除版本 V${version.versionNo}？该版本对应的 Word 草稿文件也会一并删除，此操作不可恢复。`,
+        '删除模板版本',
+        { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
+      )
+      deletingVersionId.value = version.id
+      await adminApi.deleteTemplateVersion(selected.value.id, version.id)
+      await loadTemplates(selected.value.id)
+      ElMessage.success(`版本 V${version.versionNo} 已删除`)
+    } catch (error) {
+      if (error === 'cancel' || error === 'close') return
+      console.error('[模板库] 删除模板版本失败', { versionId: version.id, error })
+      ElMessage.error(errorText(error))
+    } finally {
+      deletingVersionId.value = undefined
+    }
+  }
+
   async function enterDesigner(version: AdminTemplateVersion) {
     if (!selected.value) return
     activatingVersionId.value = version.id
@@ -161,9 +189,9 @@ export function useTemplateLibrary(
   onMounted(loadTemplates)
   return {
     templates, versions, selected, editingTemplate, loading, versionLoading,
-    deletingTemplate, savingTemplate, savingVersion, activatingVersionId,
-    templateDialog, versionDialog, templateDraft, versionDraft, selectedTitle,
+    deletingTemplate, deletingVersionId, savingTemplate, savingVersion, activatingVersionId,
+    templateDialog, versionDialog, templateDraft, templateFile, versionDraft, selectedTitle,
     loadTemplates, selectTemplate, openCreateTemplate, openEditTemplate,
-    saveTemplate, removeTemplate, openCreateVersion, saveVersion, enterDesigner,
+    saveTemplate, removeTemplate, openCreateVersion, saveVersion, removeVersion, enterDesigner,
   }
 }

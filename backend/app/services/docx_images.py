@@ -80,11 +80,13 @@ def embed_image_controls(parts: dict[str, tuple[zipfile.ZipInfo, bytes]],
     if not image_tags:
         return
     content_types = etree.fromstring(parts["[Content_Types].xml"][1])
-    if not content_types.xpath("./*[local-name()='Default'][@Extension='png']"):
-        content_types.append(etree.Element(f"{{{CONTENT_TYPES_NS}}}Default", Extension="png",
-                                           ContentType="image/png"))
-    parts["[Content_Types].xml"] = (parts["[Content_Types].xml"][0], etree.tostring(
-        content_types, xml_declaration=True, encoding="UTF-8", standalone=True))
+
+    def register_extension(extension: str, media_type: str) -> None:
+        if content_types.xpath(f"./*[local-name()='Default'][@Extension='{extension}']"):
+            return
+        content_types.append(etree.Element(f"{{{CONTENT_TYPES_NS}}}Default", Extension=extension,
+                                           ContentType=media_type))
+
     for part_name, root in roots.items():
         rels_name = "word/_rels/" + Path(part_name).name + ".rels"
         if rels_name not in parts:
@@ -103,7 +105,9 @@ def embed_image_controls(parts: dict[str, tuple[zipfile.ZipInfo, bytes]],
             if not downloaded:
                 continue
             image_bytes, content_type = downloaded
-            extension = "jpg" if content_type == "image/jpeg" else content_type.split("/", 1)[-1]
+            extension = ("jpg" if content_type == "image/jpeg"
+                         else content_type.split("/", 1)[-1].split("+")[0]).lower()
+            register_extension(extension, content_type)
             media_name = f"word/media/structure-{uuid.uuid4().hex}.{extension}"
             info = zipfile.ZipInfo(media_name)
             info.compress_type = zipfile.ZIP_DEFLATED
@@ -117,3 +121,5 @@ def embed_image_controls(parts: dict[str, tuple[zipfile.ZipInfo, bytes]],
             _set_control_image(control, relationship_id, Path(media_name).name, wide)
         parts[rels_name] = (parts[rels_name][0], etree.tostring(
             rels, xml_declaration=True, encoding="UTF-8", standalone=True))
+    parts["[Content_Types].xml"] = (parts["[Content_Types].xml"][0], etree.tostring(
+        content_types, xml_declaration=True, encoding="UTF-8", standalone=True))

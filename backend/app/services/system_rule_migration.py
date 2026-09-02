@@ -4,7 +4,7 @@ from typing import Any
 
 def migrate_legacy_lims_rules(connection: Any) -> None:
     exists = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lims_extraction_rules'",
+        "SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='lims_extraction_rules'",
     ).fetchone()
     if not exists:
         return
@@ -16,9 +16,9 @@ def migrate_legacy_lims_rules(connection: Any) -> None:
             "headerPattern": row["header_pattern"], "valuePattern": row["value_pattern"],
         })
         connection.execute(
-            """INSERT OR IGNORE INTO system_field_rules
+            """INSERT IGNORE INTO system_field_rules
                (field_code,name,source_type,priority,config,transform,enabled,updated_at)
-               VALUES(?,?,?,?,?,?,?,?)""",
+               VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
             (row["field_code"], row["name"], "LIMS", row["priority"],
              json.dumps(config, ensure_ascii=False), row["transform"], row["enabled"], row["updated_at"]),
         )

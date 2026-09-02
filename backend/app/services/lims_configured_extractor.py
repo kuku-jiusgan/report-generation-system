@@ -39,10 +39,13 @@ def _matches(pattern: str, text: str) -> bool:
         return pattern.lower() in text.lower()
 
 
-def _capture(value: Any, pattern: str) -> Any:
+def _capture(value: Any, pattern: str, field_code: str = "") -> Any:
     if not pattern or value in (None, ""):
         return value
-    match = re.search(pattern, str(value), re.IGNORECASE | re.DOTALL)
+    try:
+        match = re.search(pattern, str(value), re.IGNORECASE | re.DOTALL)
+    except re.error as error:
+        raise ValueError(f"字段 {field_code} 的 valuePattern 正则无效：{pattern}（{error}）") from error
     if not match:
         return None
     return match.group(1) if match.groups() else match.group(0)
@@ -77,7 +80,15 @@ def _transform(value: Any, field: dict[str, Any], rule: dict[str, Any]) -> Any:
     else:
         value = text
     validation = str(field.get("validationRegex") or "")
-    return value if not validation or re.fullmatch(validation, str(value)) else None
+    if validation:
+        try:
+            matched = re.fullmatch(validation, str(value))
+        except re.error as error:
+            raise ValueError(
+                f"字段 {field.get('fieldCode') or ''} 的 validationRegex 正则无效：{validation}（{error}）") from error
+        if not matched:
+            return None
+    return value
 
 
 def _table_values(instance: dict[str, Any], rule: dict[str, Any]) -> list[Any]:
@@ -152,9 +163,11 @@ def _write(payload: dict[str, Any], field: dict[str, Any], value: Any) -> None:
         collection = payload.setdefault(parts[0], [])
         key = parts[-1]
         values = value if isinstance(value, list) else [value]
-        while len(collection) < len(values):
-            collection.append({})
         for index, item_value in enumerate(values):
+            if item_value in (None, ""):
+                continue
+            while index >= len(collection):
+                collection.append({})
             if isinstance(collection[index], dict):
                 collection[index][key] = item_value
         return
@@ -181,10 +194,17 @@ def apply_configured_extraction(
         for rule in candidates:
             extracted = _extract(instance, payload, rule)
             values = extracted if isinstance(extracted, list) else [extracted]
-            transformed = [_transform(_capture(value, str(rule.get("valuePattern") or "")), field, rule)
+            transformed = [_transform(_capture(value, str(rule.get("valuePattern") or ""), field.get("fieldCode", "")),
+                                       field, rule)
                            for value in values]
-            transformed = [value for value in transformed if value not in (None, "")]
-            if transformed:
-                _write(payload, field, transformed if field.get("cardinality") == "MANY" else transformed[0])
+            if field.get("cardinality") == "MANY":
+                if any(value not in (None, "") for value in transformed):
+                    # 保留行位置：空值不回填，避免后续行整体前移错位
+                    _write(payload, field, transformed)
+                    break
+                continue
+            available = next((value for value in transformed if value not in (None, "")), None)
+            if available is not None:
+                _write(payload, field, available)
                 break
     return payload

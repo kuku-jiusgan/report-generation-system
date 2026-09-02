@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from app.admin_api import create_admin_router
-from app.auth import AuthManager
-from app.config import Settings
-from app.database import Database
-from app.services.rule_admin import RuleAdminRepository
+from backend.app.admin_api import create_admin_router
+from backend.app.auth import AuthManager
+from backend.app.config import Settings
+from backend.app.database import Database
+from backend.app.services.rule_admin import RuleAdminRepository
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
