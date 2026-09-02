@@ -5,12 +5,14 @@ import shutil
 import time
 import uuid
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import jwt
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from lxml import etree
 
 from .config import Settings
 from .auth import AuthManager
@@ -350,8 +352,24 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         if not active:
             raise HTTPException(409, "没有活动模板版本")
         table = item.get("tableRule") or {}
-        table_no = str(table.get("tableNo") or f"GROUP:{group_code}")
+        table_no = str(table.get("tableNo") or next((str(row.get("tableNo") or "") for row in repository.list_mappings()
+                                                     if str(row.get("standardFieldCode") or "").startswith(f"{group_code}.") and row.get("tableNo")), f"GROUP:{group_code}"))
         table = {**table, "tableNo": table_no}
+        if not int(table.get("physicalTableIndex") or 0):
+            tags = [str(row.get("controlTag") or "") for row in repository.list_mappings()
+                    if str(row.get("standardFieldCode") or "").startswith(f"{group_code}.") and row.get("controlTag")]
+            if tags:
+                try:
+                    with zipfile.ZipFile(ensure_draft_template()) as archive:
+                        root = etree.fromstring(archive.read("word/document.xml"))
+                    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+                    tables = root.xpath("./w:body/w:tbl", namespaces=ns)
+                    for index, target in enumerate(tables, start=1):
+                        if any(target.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces=ns, tag=tag) for tag in tags):
+                            table["physicalTableIndex"] = index
+                            break
+                except (OSError, KeyError, etree.XMLSyntaxError) as error:
+                    logger.warning("模板表格自动识别失败 group=%s error=%s", group_code, error)
         # 标准编组的目录属性只读，模板版本仅保存布局配置。
         item = {"chapterId": item.get("chapterId"), "standardGroupCode": group_code,
                 "tableNo": table_no, "title": item.get("title", ""),
