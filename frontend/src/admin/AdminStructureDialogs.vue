@@ -24,17 +24,7 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
 
   <el-dialog v-model="blockOpen" :title="block?.standardGroupCode ? '配置模板布局' : (block?.id ? '编辑内容块' : '新增内容块')" width="760px">
     <el-form v-if="block" label-position="top">
-      <template v-if="block.standardGroupCode">
-        <el-alert title="标准编组信息来自系统标准字段目录，当前弹窗只配置本模板版本的 Word 填充方式。" type="info" :closable="false" />
-        <div class="readonly-grid">
-          <div><span>标准编组</span><strong>{{ block.title }} ({{ block.standardGroupCode }})</strong></div>
-          <div><span>所属章节</span><strong>{{ block.chapterId }}</strong></div>
-          <div><span>数据集合路径</span><strong>{{ block.sourcePath || '未配置' }}</strong></div>
-          <div><span>默认分组键</span><strong>{{ block.repeatKey || '未配置' }}</strong></div>
-        </div>
-        <div class="field-list"><span>编组字段</span><el-tag v-for="field in block.standardFields || []" :key="field.fieldCode" size="small">{{ field.label }} ({{ field.fieldCode }})</el-tag></div>
-      </template>
-      <div v-else class="form-inline">
+      <div v-if="!block.standardGroupCode" class="form-inline">
         <el-form-item label="内容块名称"><el-input v-model="block.title" placeholder="例如：对照品表格" /></el-form-item>
         <el-form-item label="内容块类型"><el-select v-model="block.kind"><el-option v-for="item in blockKindOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
       </div>
