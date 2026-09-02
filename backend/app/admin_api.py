@@ -157,8 +157,9 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                 items = [item for item in mappings if item.get("standardFieldCode") in codes
                          and (item.get("chapterId") == chapter_id or not item.get("chapterId"))]
                 configured = configured_blocks.get(group["groupCode"], {})
+                configured_table_no = configured.get("tableNo") or f"GROUP:{group['groupCode']}"
                 table = next((rule for rule in table_rules
-                              if rule.get("tableNo") == configured.get("tableNo")
+                              if rule.get("tableNo") == configured_table_no
                               and rule.get("groupKey") == group["groupCode"]), None)
                 block_kind = configured.get("kind") or "MAPPED_FIELD"
                 blocks_by_chapter.setdefault(chapter_id, []).append({
