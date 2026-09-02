@@ -510,7 +510,6 @@ onMounted(() => {
         :saving="saving"
         :standard-fields="standardFields"
         :calculation-field-options="calculationFieldOptions"
-        @save-chapter="saveChapterFromInspector"
         @edit-block="editBlock"
         @start-block-drag="startBlockDrag"
         @finish-drag="finishDrag"

@@ -6,7 +6,6 @@ import StandardFieldPicker from '../StandardFieldPicker.vue'
 import { blockTone, sourceTagType } from './designer-formatters'
 
 const emit = defineEmits<{
-  saveChapter: []
   editBlock: [block?: DesignerBlock]
   startBlockDrag: [event: DragEvent, block: DesignerBlock]
   finishDrag: []
@@ -78,7 +77,6 @@ const mergeRuleOptions = [
   { value: 'VERTICAL_BY_VALUE', label: '相同值纵向合并' },
 ]
 
-const saveChapterFromInspector = () => emit('saveChapter')
 const editBlock = (block?: DesignerBlock) => emit('editBlock', block)
 const startBlockDrag = (event: DragEvent, block: DesignerBlock) => emit('startBlockDrag', event, block)
 const finishDrag = () => emit('finishDrag')
@@ -112,43 +110,6 @@ const saveMapping = () => emit('saveMapping')
           </div>
         </div>
         <div class="inspector-scroll">
-          <el-form
-            v-if="selectedChapter"
-            label-position="top"
-            class="inspector-form"
-            ><div class="inspector-subhead">
-              <strong>章节属性</strong>
-            </div>
-            <div class="form-inline">
-              <el-form-item label="章节编号"
-                ><el-input v-model="selectedChapter.code" /></el-form-item
-              ><el-form-item label="页码提示"
-                ><el-input-number
-                  v-model="selectedChapter.pageHint"
-                  :min="1"
-                  controls-position="right"
-              /></el-form-item>
-            </div>
-            <el-form-item label="章节名称"
-              ><el-input v-model="selectedChapter.title" /></el-form-item
-            ><el-form-item label="排序号"
-              ><el-input-number
-                v-model="selectedChapter.orderNo"
-                :min="0"
-                controls-position="right"
-            /></el-form-item>
-            <div class="chapter-save-row">
-              <el-checkbox v-model="selectedChapter.enabled"
-                >启用章节</el-checkbox
-              ><el-button
-                type="primary"
-                plain
-                :loading="saving"
-                @click="saveChapterFromInspector"
-                >保存章节属性</el-button
-              >
-            </div></el-form
-          >
           <div v-if="selectedChapter" class="inspector-subhead fields-head">
             <div>
               <strong>本章节内容块与字段配置</strong>
