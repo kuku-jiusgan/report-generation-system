@@ -350,7 +350,8 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         if not active:
             raise HTTPException(409, "没有活动模板版本")
         table = item.get("tableRule") or {}
-        table_no = str(table.get("tableNo") or "")
+        table_no = str(table.get("tableNo") or f"GROUP:{group_code}")
+        table = {**table, "tableNo": table_no}
         # 标准编组的目录属性只读，模板版本仅保存布局配置。
         item = {"chapterId": item.get("chapterId"), "standardGroupCode": group_code,
                 "tableNo": table_no, "title": item.get("title", ""),
@@ -358,7 +359,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                 "enabled": item.get("enabled", True), "tableRule": table}
         try:
             result = repository.save_template_block(active["versionId"], item)
-            if table and table_no:
+            if table:
                 repository.upsert_table_rule({**table, "tableNo": table_no, "groupKey": group_code})
             repository.save_active_workspace()
             return result
