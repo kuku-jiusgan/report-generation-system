@@ -19,10 +19,10 @@ from .auth import AuthManager
 from .onlyoffice_callback import assert_document_server_url, callback_status, verified_callback_payload
 from .services.rule_admin import RuleAdminRepository
 from .services.system_field_groups import list_system_field_groups
-from .services.lims_normalizer import merge_instances
 from .services.template_compiler import compile_template
 from .services.docx_language import ensure_simplified_chinese
 from .admin_routes.rule_catalog import register_rule_catalog_routes
+from .admin_routes.data_sources import register_data_source_routes
 from .admin_api_metadata import CHAPTER_TITLES, SECTION_TITLES, chapter_key
 
 
@@ -565,6 +565,8 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         return {"error": 0}
 
     register_rule_catalog_routes(router, repository)
+    register_data_source_routes(router, repository)
+    register_data_source_routes(router, repository)
 
     @router.get("/data-sources")
     def list_data_sources() -> list[dict[str, Any]]:
