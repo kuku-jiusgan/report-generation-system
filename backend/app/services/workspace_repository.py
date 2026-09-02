@@ -128,6 +128,13 @@ class WorkspaceRepositoryMixin:
                     "INSERT INTO admin_mapping_chapters(mapping_id,chapter_id) VALUES(%s,%s)",
                     (item["id"], item["chapterId"]),
                 )
+            # 版本快照中的映射同时保存了内容块归属；恢复版本时必须还原该关系，
+            # 否则设计器会把已绑定字段显示为未配置。
+            if item.get("blockId") and int(item["blockId"]) > 0:
+                connection.execute(
+                    "INSERT INTO admin_mapping_blocks(mapping_id,block_id,order_no) VALUES(%s,%s,%s)",
+                    (item["id"], item["blockId"], item.get("orderNo", 0)),
+                )
 
     @staticmethod
     def _restore_content_blocks(connection: Any, blocks: list[dict[str, Any]]) -> None:

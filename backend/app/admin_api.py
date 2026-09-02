@@ -150,7 +150,10 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         for chapter_id, groups in groups_by_chapter.items():
             for index, group in enumerate(groups):
                 codes = {field["fieldCode"] for field in group.get("fields", [])}
-                items = [item for item in mappings if item.get("standardFieldCode") in codes and item.get("chapterId") == chapter_id]
+                # 标准编组是系统目录定义的虚拟块；字段绑定应以标准字段编码为唯一归属，
+                # 不因版本恢复时章节关系表缺失而显示为“未绑定”。
+                items = [item for item in mappings if item.get("standardFieldCode") in codes
+                         and (item.get("chapterId") == chapter_id or not item.get("chapterId"))]
                 configured = configured_blocks.get(group["groupCode"], {})
                 table = next((rule for rule in table_rules
                               if rule.get("tableNo") == configured.get("tableNo")
