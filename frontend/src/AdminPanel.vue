@@ -70,6 +70,7 @@ const advancedOpen = ref(false);
 const saving = ref(false);
 const bindingMappingId = ref<number>();
 const unbindingWord = ref(false);
+const detectingTable = ref(false);
 const {
   ready: wordReady,
   loading: onlyOfficeLoading,
@@ -86,6 +87,30 @@ const {
   open: openOnlyOffice,
   close: closeOnlyOffice,
 } = useAdminWordEditor(handleWordTag);
+
+async function detectCurrentTable() {
+  if (!wordReady.value || !hasConnector()) {
+    ElMessage.warning('Word 编辑器尚未连接，请先打开模板编辑器')
+    return
+  }
+  detectingTable.value = true
+  try {
+    const result = await execWord('GetCurrentTableIndex', [], 4000) as unknown
+    const index = typeof result === 'number' ? result : Number((result as { index?: number })?.index)
+    if (!Number.isInteger(index) || index < 1) {
+      ElMessage.warning('未识别到当前表格，请将光标放在目标表格内')
+      return
+    }
+    await ElMessageBox.confirm(`识别到当前表格为第 ${index} 张，确认写入布局配置吗？`, '确认表格', { type: 'info' })
+    if (blockDraft.value?.tableRule) blockDraft.value.tableRule.physicalTableIndex = index
+    ElMessage.success(`已确认第 ${index} 张表格`)
+  } catch (error) {
+    if (String(error).includes('cancel')) return
+    ElMessage.error('当前 OnlyOffice 版本不支持自动识别表格，请手动填写序号')
+  } finally {
+    detectingTable.value = false
+  }
+}
 const {
   draggingBlockId,
   dragOverBlockId,
@@ -552,6 +577,7 @@ onMounted(() => {
       :saving="saving"
       @save-chapter="saveChapter"
       @save-block="saveBlock"
+      @detect-table="detectCurrentTable"
     />
     <AdminSourceDialogs
       v-model:source-open="sourceDialog"

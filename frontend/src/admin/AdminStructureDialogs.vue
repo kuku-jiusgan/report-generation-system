@@ -2,7 +2,7 @@
 import type { ContentBlockKind, DesignerBlock, DesignerChapter } from '../admin-api'
 
 defineProps<{ blockKindOptions: Array<{ value: ContentBlockKind; label: string }>; saving: boolean }>()
-defineEmits<{ saveChapter: []; saveBlock: [] }>()
+defineEmits<{ saveChapter: []; saveBlock: []; detectTable: [] }>()
 const chapterOpen = defineModel<boolean>('chapterOpen', { required: true })
 const blockOpen = defineModel<boolean>('blockOpen', { required: true })
 const chapter = defineModel<Partial<DesignerChapter>>('chapter', { required: true })
@@ -50,7 +50,7 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
           <div class="form-inline">
             <el-form-item label="Word 正文第几张表格">
               <el-input-number v-model="block.tableRule.physicalTableIndex" :min="0" />
-              <small class="dialog-hint">0 表示未配置：编译时会跳过这张表并给出警告。</small>
+              <el-button class="detect-table-button" size="small" @click="$emit('detectTable')">从当前光标识别</el-button>
             </el-form-item>
             <el-form-item label="填充方式">
               <el-select v-model="block.tableRule.mode">
