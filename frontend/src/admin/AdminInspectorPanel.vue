@@ -163,8 +163,7 @@ const saveMapping = () => emit('saveMapping')
                   :aria-label="block.standardGroupCode ? '配置模板布局' : '编辑内容块'"
                   :title="block.standardGroupCode ? '配置模板布局' : '编辑内容块'"
                   @click="editBlock(block)"
-                >{{ block.standardGroupCode ? '配置模板布局' : '' }}
-                </el-button><el-button
+                /><el-button
                   v-if="block.id > 0"
                   text
                   type="danger"
