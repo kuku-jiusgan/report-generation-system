@@ -47,6 +47,7 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
     resolve: () => void; reject: (reason: Error) => void; timer: number; acknowledged: boolean
   }>()
   const pendingSelects = new Map<number, number>()
+  const pendingTableDetects = new Map<number, { resolve: (index: number) => void; reject: (reason: Error) => void; timer: number }>()
   let editor: Editor | undefined
   let connector: Connector | undefined
   let pluginWindow: Window | null = null
@@ -198,6 +199,13 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
       if (message.type === 'select-error') ElMessage.warning(result?.message || 'Word 中没有找到该字段')
     } else if (message.type === 'unbind-result' || message.type === 'unbind-error') {
       if (message.data) settleUnbind(message.type, message.data)
+    } else if (message.type === 'table-detect-result' || message.type === 'table-detect-error') {
+      const result = message.data as { nonce?: number; index?: number; message?: string }
+      const pending = pendingTableDetects.get(Number(result?.nonce || 0))
+      if (!pending) return
+      window.clearTimeout(pending.timer); pendingTableDetects.delete(Number(result.nonce))
+      if (message.type === 'table-detect-error') pending.reject(new Error(result.message || '未识别到当前表格'))
+      else pending.resolve(Number(result.index || 0))
     }
   }
 
@@ -260,6 +268,21 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
       window.clearTimeout(timer)
       pendingUnbinds.delete(nonce)
       reject(new Error('Word 插件尚未建立双向连接'))
+    })
+  }
+
+  function requestTableDetection() {
+    const nonce = Date.now()
+    return new Promise<number>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        pendingTableDetects.delete(nonce)
+        reject(new Error('Word 未返回当前表格'))
+      }, 5000)
+      pendingTableDetects.set(nonce, { resolve, reject, timer })
+      if (!sendPluginCommand({ type: 'detect-table', nonce })) {
+        window.clearTimeout(timer); pendingTableDetects.delete(nonce)
+        reject(new Error('Word 插件尚未建立双向连接'))
+      }
     })
   }
 
@@ -341,6 +364,8 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
     pendingUnbinds.clear()
     pendingSelects.forEach((timer) => window.clearTimeout(timer))
     pendingSelects.clear()
+    pendingTableDetects.forEach((pending) => { window.clearTimeout(pending.timer); pending.reject(new Error('Word 编辑器已关闭')) })
+    pendingTableDetects.clear()
     editor = undefined
     ready.value = false
   }
@@ -353,6 +378,6 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
 
   return {
     ready, loading, error, linkState, controls, pluginReady, hasConnector,
-    exec, refreshControls, requestBind, requestUnbind, locate, open, close,
+    exec, refreshControls, requestBind, requestUnbind, requestTableDetection, locate, open, close,
   }
 }

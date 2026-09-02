@@ -83,20 +83,20 @@ const {
   refreshControls: refreshWordControls,
   requestBind: requestWordBind,
   requestUnbind: requestPluginUnbind,
+  requestTableDetection,
   locate: locateInWord,
   open: openOnlyOffice,
   close: closeOnlyOffice,
 } = useAdminWordEditor(handleWordTag);
 
 async function detectCurrentTable() {
-  if (!wordReady.value || !hasConnector()) {
+  if (!wordReady.value || !pluginReady.value) {
     ElMessage.warning('Word 编辑器尚未连接，请先打开模板编辑器')
     return
   }
   detectingTable.value = true
   try {
-    const result = await execWord('GetCurrentTableIndex', [], 4000) as unknown
-    const index = typeof result === 'number' ? result : Number((result as { index?: number })?.index)
+    const index = await requestTableDetection()
     if (!Number.isInteger(index) || index < 1) {
       ElMessage.warning('未识别到当前表格，请将光标放在目标表格内')
       return

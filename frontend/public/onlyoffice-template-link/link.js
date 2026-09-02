@@ -106,6 +106,14 @@
     if (command.type === 'select') selectControl(command, command.id)
     else if (command.type === 'bind') bindSelection(command)
     else if (command.type === 'unbind') unbindSelection(command)
+    else if (command.type === 'detect-table') detectTable(command)
+  }
+
+  function detectTable(command) {
+    window.Asc.plugin.executeMethod('GetCurrentTableIndex', [], function (result) {
+      var index = typeof result === 'number' ? result : Number(result && result.index)
+      send(index > 0 ? 'table-detect-result' : 'table-detect-error', { nonce: command.nonce, index: index })
+    })
   }
 
   window.addEventListener('message', function (event) {
@@ -120,7 +128,7 @@
       hostPort.start()
       window.top.postMessage({
         source: 'report-template-link', type: 'bridge-ready',
-        data: { protocolVersion: 3, capabilities: ['select', 'bind', 'unbind'], channelId: channelId }
+        data: { protocolVersion: 3, capabilities: ['select', 'bind', 'unbind', 'detect-table'], channelId: channelId }
       }, '*', [channel.port2])
     } catch (_) { /* Direct window messaging remains as a compatibility fallback. */ }
   }
