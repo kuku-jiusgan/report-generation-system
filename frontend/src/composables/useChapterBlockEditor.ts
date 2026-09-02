@@ -115,8 +115,9 @@ export function useChapterBlockEditor(options: EditorOptions) {
   async function saveBlock() {
     if (!blockDraft.value?.standardGroupCode && !blockDraft.value?.title?.trim()) return ElMessage.warning('内容块名称不能为空')
     const layout = blockDraft.value.tableRule
-    if (blockDraft.value.standardGroupCode && layout?.mode !== 'STATIC' && !(layout?.physicalTableIndex || blockDraft.value.tableNo)) {
-      return ElMessage.warning('自动填充模式必须设置 Word 表格序号')
+    if (blockDraft.value.standardGroupCode && layout?.mode !== 'STATIC' && !layout?.physicalTableIndex) {
+      const hasAnchor = (blockDraft.value.mappings || []).some((item) => item.controlTag)
+      if (!hasAnchor) return ElMessage.warning('请先绑定该编组的字段，系统才能自动定位目标表格')
     }
     if (blockDraft.value.standardGroupCode && layout?.mode === 'ROW_REPEAT' && !layout.dataRowStart) {
       return ElMessage.warning('按行向下扩展必须设置原型数据行')

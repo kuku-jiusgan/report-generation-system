@@ -22,6 +22,23 @@ class TableLayoutRules:
         """语义表号对应的 Word 正文表格序号；0 表示设计器里没有配置。"""
         return int(self.rule(table_no).get("physicalTableIndex") or 0)
 
+    @staticmethod
+    def anchored_index(document: Any, table_no: str, mappings: list[dict[str, Any]]) -> int:
+        explicit = 0
+        try:
+            explicit = int(next((item for item in mappings if item.get("tableNo") == table_no), {}).get("physicalTableIndex") or 0)
+        except (TypeError, ValueError):
+            explicit = 0
+        if explicit > 0:
+            return explicit
+        tags = [str(item.get("controlTag") or "") for item in mappings
+                if item.get("tableNo") == table_no and item.get("controlTag")]
+        tables = document.xpath(".//w:tbl", namespaces={"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"})
+        for index, table in enumerate(tables, start=1):
+            if any(table.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces={"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}, tag=tag) for tag in tags):
+                return index
+        return 0
+
     def preserved_row_labels(self, table_no: str) -> tuple[str, ...]:
         labels = self.rule(table_no).get("preservedRowLabels") or []
         return tuple(str(label) for label in labels if str(label).strip())

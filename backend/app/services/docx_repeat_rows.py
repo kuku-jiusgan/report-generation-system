@@ -132,7 +132,8 @@ def _is_matrix(table_no: str, group: list[dict[str, Any]], layout: TableLayoutRu
 
 
 def _fill_matrix_block(document: etree._Element, table_no: str, records: list[dict[str, Any]],
-                       empty_behavior: str, layout: TableLayoutRules, warn: Warn) -> None:
+                       empty_behavior: str, layout: TableLayoutRules, warn: Warn,
+                       mappings: list[dict[str, Any]]) -> None:
     if not records and empty_behavior == "HIDE":
         bookmark = document.xpath(
             f".//w:bookmarkStart[@w:name='repeat_{table_no.lower()}_row']", namespaces=NS
@@ -147,7 +148,8 @@ def _fill_matrix_block(document: etree._Element, table_no: str, records: list[di
              "该表按矩阵填充，但表格规则里没有可用的矩阵版式；已保留 Word 模板中的原有内容，"
              "请在模板设计器的表格布局中补充矩阵版式。")
         return
-    fill_matrix_tables(document, table_no, records, matrix_layout, layout.physical_index(table_no))
+    fill_matrix_tables(document, table_no, records, matrix_layout,
+                       layout.anchored_index(document, table_no, mappings))
 
 
 def _reset_prototype_row(prototype: etree._Element, group_tags: set[str]) -> None:
@@ -349,7 +351,7 @@ def fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], p
                                empty_behavior, report_data, values, layout, warn)
             continue
         if _is_matrix(table_no, group, layout, warn):
-            _fill_matrix_block(document, table_no, records, empty_behavior, layout, warn)
+            _fill_matrix_block(document, table_no, records, empty_behavior, layout, warn, group)
             continue
         _fill_row_repeat_table(document, table_no, group, mappings, records, source,
                                empty_behavior, report_data, values, layout, warn)

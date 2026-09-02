@@ -64,14 +64,23 @@ def _wrap_paragraph(paragraph: etree._Element, tag: str, alias: str) -> str:
     return "created"
 
 
-def _physical_table_number(layout: TableLayoutRules, table_no: str) -> int | None:
+def _physical_table_number(layout: TableLayoutRules, table_no: str,
+                           mapping: dict[str, Any] | None = None,
+                           all_tables: list[etree._Element] | None = None) -> int | None:
     """语义表号 → Word 正文表格序号，取自设计器里的"物理表格序号"配置。
 
     以前这里是一段写死的号码换算（T1-23 同号、T25-36 减一、T38→36），
     模板设计器完全看不到。现在只读配置：没配就返回 None，由调用方警告。
     """
     number = layout.physical_index(table_no)
-    return number if number > 0 else None
+    if number > 0:
+        return number
+    tag = str((mapping or {}).get("controlTag") or "")
+    if tag and all_tables:
+        for index, table in enumerate(all_tables, start=1):
+            if table.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces=NS, tag=tag):
+                return index
+    return None
 
 
 def _ensure_repeat_bookmark(document: etree._Element, tag: str, table_no: str) -> bool:
@@ -217,7 +226,7 @@ def compile_template(source: Path, output: Path, mappings: list[dict[str, Any]],
                 action = _wrap_cell(cell, tag, mapping["wordLabel"])
             elif body_match:
                 table_no, cell_number = body_match.group(1), int(body_match.group(2))
-                physical_number = _physical_table_number(layout, table_no)
+                physical_number = _physical_table_number(layout, table_no, mapping, all_tables)
                 if physical_number is None:
                     report["warnings"].append({"locationId": location, "code": "TABLE_NOT_IN_TEMPLATE",
                                                "message": f"{table_no} 没有配置物理表格序号，编译时跳过；请在模板设计器的表格布局里填写"})
@@ -247,7 +256,7 @@ def compile_template(source: Path, output: Path, mappings: list[dict[str, Any]],
                     rows[row_index].insert(0, bookmark)
             elif body_direct_match:
                 table_no = body_direct_match.group(1)
-                physical_number = _physical_table_number(layout, table_no)
+                physical_number = _physical_table_number(layout, table_no, mapping, all_tables)
                 if physical_number is None:
                     report["warnings"].append({"locationId": location, "code": "TABLE_NOT_IN_TEMPLATE",
                                                "message": f"{table_no} 没有配置物理表格序号，编译时跳过；请在模板设计器的表格布局里填写"})

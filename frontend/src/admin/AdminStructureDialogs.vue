@@ -50,7 +50,7 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
           <div class="form-inline">
             <el-form-item label="Word 正文第几张表格">
               <el-input-number v-model="block.tableRule.physicalTableIndex" :min="0" />
-              <el-button class="detect-table-button" size="small" @click="$emit('detectTable')">从当前光标识别</el-button>
+              <small class="dialog-hint">已绑定字段时自动按字段所在表格定位；填写序号仅用于未绑定字段的旧模板。</small>
             </el-form-item>
             <el-form-item label="填充方式">
               <el-select v-model="block.tableRule.mode">
