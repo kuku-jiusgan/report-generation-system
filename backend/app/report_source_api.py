@@ -38,7 +38,8 @@ def create_report_source_router(
             raise manual_edit_locked()
         data = replace_report_source(dict(item["resolved_data"]), source, request.source_type, settings.api_prefix)
         try:
-            output_name = render_report_word(item, data)
+            output_name = render_report_word(item, data, phase=f"更换数据源（{request.source_type}）",
+                                             actor=user["id"])
         except Exception as error:
             raise HTTPException(500, f"更换数据源后重新生成报告失败：{error}") from error
         updated = database.update_report(

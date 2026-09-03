@@ -154,6 +154,19 @@ def _apply_content_block_rules(snapshot: dict) -> list[dict]:
     )
 
 
+def _compile_failure_message(report: dict) -> str:
+    """把编译错误摊开写进异常，光说"N 个错误"排查时等于没说。"""
+    errors = report.get("errors", [])
+    details = "；".join(
+        f"{item.get('locationId') or item.get('controlTag') or item.get('code')}"
+        f"（{item.get('fieldCode') or item.get('code')}）：{item.get('message', '')}"
+        for item in errors[:5]
+    )
+    more = f"，另有 {len(errors) - 5} 个错误" if len(errors) > 5 else ""
+    return (f"运行时模板编译失败：{len(errors)} 个错误。{details}{more}。"
+            f"请在模板设计器中修正这些字段的 Word 位置，或停用不再使用的映射。")
+
+
 def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[str, str]]:
     active = rule_admin.active_runtime_template()
     if active:
@@ -177,7 +190,7 @@ def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[
             if not output.exists():
                 report = compile_template(candidate, output, mappings, snapshot["tableRules"])
                 if not report["valid"]:
-                    raise RuntimeError(f"运行时模板编译失败：{len(report['errors'])} 个错误")
+                    raise RuntimeError(_compile_failure_message(report))
             return output, mappings, snapshot["tableRules"], {
                 "template_id": str(active.get("templateId", "")) if active else "",
                 "template_name": str(active.get("templateName", "")) if active else "",
@@ -189,15 +202,38 @@ def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[
     output = settings.template_path.parent / "compiled" / "runtime-report-template.docx"
     report = compile_template(settings.template_path, output, mappings, snapshot["tableRules"])
     if not report["valid"]:
-        raise RuntimeError(f"运行时模板编译失败：{len(report['errors'])} 个错误")
+        raise RuntimeError(_compile_failure_message(report))
     return output, mappings, snapshot["tableRules"], {
         "template_version": "V1.0",
         "template_revision": hashlib.sha256(output.read_bytes()).hexdigest(),
     }
 
 
+def record_generation(report_id: str, data: dict, phase: str, actor: str = "",
+                      status: str = "SUCCESS", output_name: str = "", error: str = "") -> str:
+    """往报告生成历史落一条记录，快照里带上本次提取到的字段内容。
+
+    只有"真正生成"的动作才调用它：创建报告、载入 LIMS、更换数据源、重建与导出。
+    打开报告或打开编辑器时为补齐缺失文件而做的渲染不算一次生成，不记录。
+    """
+    generation_id = uuid.uuid4().hex
+    database.create_generation({
+        "id": generation_id, "report_id": report_id, "generated_by": actor or None,
+        "status": status, "output_name": output_name, "error_message": error,
+        "generation_snapshot": {"resolved_data": data,
+                                "field_sources": data.get("field_sources", {}),
+                                "original_values": data.get("original_values", {}),
+                                "warnings": data.get("warnings", [])},
+        "generation_context": {"phase": phase,
+                               "template_name": data.get("template_name", ""),
+                               "template_version": data.get("template_version", ""),
+                               "template_revision": data.get("template_revision", "")},
+    })
+    return generation_id
+
+
 def render_report_word(item: dict, data: dict, payload: dict | None = None,
-                       output_suffix: str = "") -> str:
+                       output_suffix: str = "", phase: str = "", actor: str = "") -> str:
     template, mappings, table_rules, template_meta = runtime_template_and_mappings()
     data.update(template_meta)
     output_name = (f"report-{item['id']}-{output_suffix}.docx" if output_suffix
@@ -224,8 +260,15 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
                     pending_codes.append(dependency)
     system_fields = [field for field in all_fields if field["fieldCode"] in required_codes]
     resolve_system_fields(system_fields, all_rules, active_payload, data)
-    build_mapped_docx(template, settings.reports_dir / output_name, mappings,
-                      active_payload, data, table_rules)
+    try:
+        build_mapped_docx(template, settings.reports_dir / output_name, mappings,
+                          active_payload, data, table_rules)
+    except Exception as error:
+        if phase:
+            record_generation(item["id"], data, phase, actor, "FAILED", error=str(error))
+        raise
+    if phase:
+        record_generation(item["id"], data, phase, actor, output_name=output_name)
     return output_name
 
 
@@ -341,6 +384,7 @@ def create_report(request: CreateReportRequest,
         }
     )
     database.create_version(report_id, data, "初始版本")
+    record_generation(report_id, data, "创建报告", user["id"])
     return report_response(item)
 
 
@@ -455,7 +499,7 @@ def generate_report(report_id: str, user: dict = Depends(auth.require("REPORT_GE
                                     "generation_snapshot": {"resolved_data": item["resolved_data"],
                                                             "field_sources": item["resolved_data"].get("field_sources", {}),
                                                             "original_values": item["resolved_data"].get("original_values", {})},
-                                    "generation_context": {"phase": "生成文档", "template_revision": item["resolved_data"].get("template_revision", "")}})
+                                    "generation_context": {"phase": "导出 Word", "template_revision": item["resolved_data"].get("template_revision", "")}})
         output_name = f"report-{report_id}-export-{generation_id[:12]}.docx"
         shutil.copy2(working_path, settings.reports_dir / output_name)
     except Exception as error:
@@ -500,7 +544,8 @@ def rebuild_report_word(report_id: str, user: dict = Depends(auth.require("REPOR
     item = required_owned_report(report_id, user)
     require_automatic_edit_allowed(item)
     try:
-        output_name = render_report_word(item, item["resolved_data"])
+        output_name = render_report_word(item, item["resolved_data"],
+                                         phase="重建 Word", actor=user["id"])
     except Exception as error:
         logger.exception("Word 重建失败 report_id=%s", report_id)
         raise HTTPException(500, f"Word 重建失败：{error}") from error
@@ -589,7 +634,8 @@ def apply_lims_instances_to_report(report_id: str, request: ApplyLimsRequest,
     }
     data["source_payloads"] = source_payloads
     try:
-        output_name = render_report_word(item, data, payload)
+        output_name = render_report_word(item, data, payload,
+                                         phase="载入 LIMS 实验记录", actor=user["id"])
     except Exception as error:
         raise HTTPException(500, f"LIMS 数据填充 Word 失败：{error}") from error
     updated = database.update_report(
