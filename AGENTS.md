@@ -68,4 +68,10 @@
 ```
 
 - 运行指定测试时同样使用 `.venv/bin/python -m pytest backend/tests/<test_file>.py`。
+- 【测试库隔离】测试**只能**连独立的 `report_generation_system_test` 库。`Settings` 里 mysql_* 有默认值，
+  测试构造 `Settings(data_dir=临时目录, ...)` 只覆盖文件路径，数据库会落到 `.env` 指向的生产库；
+  而 `clear_report_test_data()` 会无条件 `DELETE` reports / report_versions /
+  report_generation_history / change_history / source_documents 五张表，真实数据会被整张清空。
+  `backend/tests/conftest.py` 已在导入应用代码前改写 `REPORT_MYSQL_DATABASE` 并在库名仍是生产库时中止，
+  不得绕过该保护，也不得在测试里硬写生产库名。
 - 若出现依赖导入或二进制兼容错误，必须先确认命令使用的是项目 `.venv`，不得据此误判项目依赖缺失，也不得擅自修改全局 Anaconda 环境。
