@@ -27,23 +27,39 @@ def context_variables(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _format_context(value: Any, variable: dict[str, Any]) -> str:
+    """把一个标准字段的取值按上下文变量的取值方式拼成一段文字。
+
+    FIRST 取第一个有效值，COUNT_UNIQUE 取去重后的个数，JOIN_UNIQUE 去重后拼接；
+    suffix 加在每个取值后面（例如百分号），这样"1.4%、0.3%"不用在模板里硬拼。
+    """
     values = value if isinstance(value, list) else [value]
     normalized = [str(item).strip() for item in values if item not in (None, "")]
-    if variable.get("mode", "JOIN_UNIQUE") == "FIRST":
-        return normalized[0] if normalized else ""
+    mode = str(variable.get("mode") or "JOIN_UNIQUE")
+    if mode == "FIRST":
+        return f"{normalized[0]}{variable.get('suffix') or ''}" if normalized else ""
     unique = list(dict.fromkeys(normalized))
-    return str(variable.get("separator") or "、").join(unique)
+    if mode == "COUNT_UNIQUE":
+        return str(len(unique)) if unique else ""
+    suffix = str(variable.get("suffix") or "")
+    return str(variable.get("separator") or "、").join(f"{item}{suffix}" for item in unique)
 
 
-def render_ai_prompt(config: dict[str, Any], values: dict[str, Any]) -> tuple[str, dict[str, str]]:
+def resolve_context_values(config: dict[str, Any],
+                           values: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    """按上下文变量配置解析出占位符取值，并列出缺失的必填字段。"""
     resolved: dict[str, str] = {}
     missing: list[str] = []
     for variable in context_variables(config):
         code = str(variable["fieldCode"])
-        value = _format_context(values.get(code), variable) or str(variable.get("defaultValue") or "")
-        if not value and variable.get("required", True):
+        text = _format_context(values.get(code), variable) or str(variable.get("defaultValue") or "")
+        if not text and variable.get("required", True):
             missing.append(code)
-        resolved[code] = value
+        resolved[code] = text
+    return resolved, missing
+
+
+def render_ai_prompt(config: dict[str, Any], values: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    resolved, missing = resolve_context_values(config, values)
     if missing:
         raise AiGenerationError(f"AI 上下文字段缺失：{', '.join(missing)}")
     prompt = str(config.get("promptTemplate") or "")

@@ -65,9 +65,8 @@ class RuntimeVersionRepositoryMixin:
     ) -> dict[str, Any]:
         with self.database.connect() as connection:
             # BEGIN IMMEDIATE 先拿写锁，避免并发发布读到相同 MAX(version_no)
-            connection.execute("BEGIN IMMEDIATE")
             version_no = connection.execute(
-                "SELECT COALESCE(MAX(version_no),0)+1 FROM admin_rule_versions"
+                "SELECT COALESCE(MAX(version_no),0)+1 FROM admin_rule_versions FOR UPDATE"
             ).fetchone()[0]
             if publish:
                 connection.execute("UPDATE admin_rule_versions SET status='ARCHIVED' WHERE status='PUBLISHED'")

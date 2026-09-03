@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, reactive, watch } from 'vue'
 import type { ContentBlockKind, DesignerBlock, DesignerChapter } from '../admin-api'
 
 defineProps<{ blockKindOptions: Array<{ value: ContentBlockKind; label: string }>; saving: boolean }>()
@@ -7,6 +8,30 @@ const chapterOpen = defineModel<boolean>('chapterOpen', { required: true })
 const blockOpen = defineModel<boolean>('blockOpen', { required: true })
 const chapter = defineModel<Partial<DesignerChapter>>('chapter', { required: true })
 const block = defineModel<Partial<DesignerBlock> | undefined>('block', { required: true })
+
+// 表格统一按"向下填充"处理：哪一列填哪个字段由 Word 里的控件绑定决定，不在这里重复声明。
+// 设了横向分组字段就额外向右扩列——一个分组占哪几列，取绑了该字段那一格的合并跨度。
+const groupDraft = reactive({ groupField: '', groupColumnWidth: 'EQUAL' })
+const groupMode = computed(() => block.value?.tableRule?.mode === 'ROW_REPEAT'
+  || (block.value?.tableRule?.mode === 'TABLE_REPEAT' && block.value?.tableRule?.innerMode === 'ROW_REPEAT'))
+const groupFields = computed(() => (block.value?.standardFields || [])
+  .filter((item) => item.enabled !== false)
+  .map((item) => ({ value: item.fieldPath || item.fieldCode, label: `${item.label} · ${item.fieldPath || item.fieldCode}` })))
+function loadGroup() {
+  let layout: any = {}
+  try { layout = block.value?.tableRule?.matrixLayout ? JSON.parse(block.value.tableRule.matrixLayout) : {} } catch { layout = {} }
+  groupDraft.groupField = String(layout.groupField || '')
+  groupDraft.groupColumnWidth = String(layout.groupColumnWidth || 'EQUAL')
+}
+function saveGroup() {
+  if (!block.value?.tableRule) return
+  block.value.tableRule.matrixLayout = groupDraft.groupField
+    ? JSON.stringify({ groupField: groupDraft.groupField, groupColumnWidth: groupDraft.groupColumnWidth }, null, 2)
+    : ''
+}
+watch(groupMode, (active) => { if (active) loadGroup() }, { immediate: true })
+watch(() => block.value?.standardGroupCode, () => { if (groupMode.value) loadGroup() })
+watch(groupDraft, saveGroup, { deep: true })
 </script>
 
 <template>
@@ -56,7 +81,7 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
               <el-select v-model="block.tableRule.mode">
                 <el-option label="不自动填充" value="STATIC" />
                 <el-option label="按行向下扩展" value="ROW_REPEAT" />
-                <el-option label="矩阵填充" value="MATRIX" />
+                <el-option label="转置矩阵：一条记录占一列" value="MATRIX" />
                 <el-option label="按分组复制整表" value="TABLE_REPEAT" />
               </el-select>
             </el-form-item>
@@ -77,17 +102,30 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
             <el-form-item label="表内填充方式">
               <el-select v-model="block.tableRule.innerMode">
                 <el-option label="按行重复" value="ROW_REPEAT" />
-                <el-option label="矩阵填充" value="MATRIX" />
+                <el-option label="转置矩阵：一条记录占一列" value="MATRIX" />
               </el-select>
             </el-form-item>
           </div>
           <el-form-item label="清除表内图片">
             <el-switch v-model="block.tableRule.clearEmbeddedObjects" active-text="生成时清除该表中的图片与嵌入对象" />
           </el-form-item>
-          <el-form-item v-if="block.tableRule.mode === 'MATRIX' || (block.tableRule.mode === 'TABLE_REPEAT' && block.tableRule.innerMode === 'MATRIX')" label="矩阵布局配置（JSON）">
-            <el-input v-model="block.tableRule.matrixLayout" type="textarea" :rows="6"
-              placeholder='{"rowFields":[{"row":1,"field":"solutionName"}],"rowLabels":[],"scalarCells":[]}' />
-            <small class="dialog-hint">行号与列号从 1 起算。留空时该表不会被填充，生成的报告里会保留 Word 原有内容并给出警告。</small>
+          <el-form-item v-if="block.tableRule.mode === 'ROW_REPEAT'" label="横向分组字段（可留空）">
+            <el-select v-model="groupDraft.groupField" filterable clearable placeholder="留空表示只向下填充">
+              <el-option v-for="item in groupFields" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+            <small class="dialog-hint">
+              留空就是普通的向下填充：一条记录一行，哪一列填哪个字段由 Word 里的控件绑定决定。
+              选了字段则在此基础上再向右扩：该字段在数据里有几个不同取值就扩几组，
+              一个分组占哪几列取自 Word 里绑定该字段那一格的合并跨度，子列标题和控件整块复制，不用另外声明。
+              非原型行里属于本编组的控件（例如 RSD 行）按分组各填一个值，组内取值必须唯一。
+            </small>
+          </el-form-item>
+          <el-form-item v-if="block.tableRule.mode === 'ROW_REPEAT' && groupDraft.groupField" label="多个分组时的子列宽度">
+            <el-select v-model="groupDraft.groupColumnWidth" style="width: 260px">
+              <el-option label="各子列等宽" value="EQUAL" />
+              <el-option label="按 Word 原型的列宽比例" value="PROTOTYPE" />
+            </el-select>
+            <small class="dialog-hint">扩列后保持表格总宽度不变。标题长的窄列在多分组时容易被挤成三行，选等宽即可。</small>
           </el-form-item>
         </template>
       </template>
@@ -104,6 +142,7 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
 .form-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .section-title { margin: 6px 0 10px; font-weight: 600; color: var(--el-text-color-primary); }
 .dialog-hint { display: block; line-height: 1.5; color: var(--el-text-color-secondary); }
+.matrix-structure-hint { margin-bottom: 8px; color: var(--el-text-color-secondary); line-height: 1.5; font-size: 12px; }
 .readonly-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:14px 0; }
 .readonly-grid div { background:var(--el-fill-color-light); padding:8px 10px; border-radius:4px; }
 .readonly-grid span, .field-list > span { display:block; color:var(--el-text-color-secondary); font-size:12px; margin-bottom:4px; }

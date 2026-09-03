@@ -20,7 +20,7 @@ class AuthenticationAndHistoryTest(unittest.TestCase):
             bootstrap_admin_username="rootadmin", bootstrap_admin_password="Admin@123456",
         )
         self.settings.ensure_directories()
-        self.database = Database(self.settings.database_path)
+        self.database = Database(self.settings)
         self.database.initialize()
         self.auth = AuthManager(self.database, self.settings)
         self.admin_id = self.auth.bootstrap()

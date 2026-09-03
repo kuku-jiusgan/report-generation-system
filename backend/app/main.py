@@ -1,7 +1,7 @@
 import hashlib
 import io
 import json
-import re
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -33,10 +33,14 @@ from .schemas import (
 )
 from .services.lims_normalizer import merge_instances
 from .services.lims_files import migrate_stored_lims_file_urls
+from .logging_config import configure_logging
+
+logger = logging.getLogger(__name__)
 from .services.mapped_docx_generator import build_mapped_docx
 from .services.system_field_resolver import resolve_system_fields
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
+from .services.template_block_rules import apply_template_block_rules
 from .services.excel_rule_defaults import ensure_excel_field_rules
 from .services.content_block_cleanup import remove_legacy_content_blocks
 from .services.excel_report_source import apply_excel_source, apply_pdf_source, build_source_document
@@ -76,6 +80,7 @@ def apply_report_lifecycle_migration() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.ensure_directories()
+    configure_logging(settings.data_dir)
     database.initialize()
     apply_report_lifecycle_migration()
     bootstrap_user_id = auth.bootstrap()
@@ -143,45 +148,10 @@ def required_owned_report(report_id: str, user: dict) -> dict:
 
 
 def _apply_content_block_rules(snapshot: dict) -> list[dict]:
-    blocks = {item["id"]: item for item in snapshot.get("contentBlocks", [])}
-    fields = {item["fieldCode"]: item for item in database.list_lims_fields(True)}
-    result: list[dict] = []
-    for source in snapshot.get("mappings", []):
-        mapping = dict(source)
-        field = fields.get(str(mapping.get("standardFieldCode") or ""))
-        if field:
-            mapping["standardFieldDataType"] = field.get("dataType", "string")
-            mapping["standardFieldOutputFormat"] = field.get("outputFormat", "")
-        block = blocks.get(mapping.get("blockId"))
-        if block:
-            mapping["contentBlockId"] = block["id"]
-            mapping["contentBlockKind"] = block.get("kind", "MAPPED_FIELD")
-            mapping["blockSourcePath"] = block.get("sourcePath", "")
-            mapping["blockDedupKey"] = block.get("dedupKey", "")
-            mapping["blockSortRule"] = block.get("sortRule", "")
-            mapping["blockEmptyBehavior"] = block.get("emptyBehavior", "KEEP")
-            mapping["blockMergeRule"] = block.get("mergeRule", "NONE")
-            mapping["prototypeLocation"] = block.get("prototypeLocation", "")
-            if block.get("kind") in {"REPEATING_TABLE", "MATRIX"}:
-                mapping["repeatType"] = "ROW"
-                mapping["repeatKey"] = block.get("repeatKey", "")
-                mapping["tableNo"] = block.get("tableNo", "") or mapping.get("tableNo", "")
-        result.append(mapping)
-    return result
-
-
-def _apply_group_repeat_rules(mappings: list[dict]) -> list[dict]:
-    """Treat array source paths as table-row mappings without designer settings."""
-    result = []
-    for source in mappings:
-        mapping = dict(source)
-        source_path = str(mapping.get("sourcePath") or "")
-        match = re.match(r"^\$\.([A-Za-z0-9_]+)\[\*\](?:\.|$)", source_path)
-        if match and mapping.get("repeatType") in {None, "", "NONE"}:
-            mapping["repeatType"] = "ROW"
-            mapping["repeatKey"] = match.group(1)
-        result.append(mapping)
-    return result
+    """字段映射叠加模板设计器的内容块配置；编组没配内容块就保持原样。"""
+    return apply_template_block_rules(
+        snapshot, list_system_field_groups(database), database.list_lims_fields(True),
+    )
 
 
 def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[str, str]]:
@@ -194,7 +164,7 @@ def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[
     else:
         snapshot, published_template = rule_admin.active_runtime_rules()
         snapshot = {**snapshot, "tableRules": rule_admin.list_table_rules()}
-    mappings = _apply_group_repeat_rules(_apply_content_block_rules(snapshot))
+    mappings = _apply_content_block_rules(snapshot)
     if published_template:
         candidate = Path(published_template)
         if candidate.exists():
@@ -290,7 +260,12 @@ def batch_export_reports(payload: dict, user: dict = Depends(auth.require("REPOR
     used_names: set[str] = set()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
         for report_id in report_ids:
-            item, path = ensure_report_file(required_owned_report(report_id, user))
+            item = required_owned_report(report_id, user)
+            path = settings.reports_dir / f"report-{report_id}-working.docx"
+            if not path.exists():
+                output_name = render_report_word(item, item["resolved_data"])
+                item = database.update_report(report_id, output_name=output_name, status="EDITING") or item
+                path = settings.reports_dir / output_name
             base = "".join(value for value in item["title"] if value not in '\\/:*?"<>|').strip() or report_id
             name = f"{base}.docx"
             counter = 2
@@ -377,7 +352,11 @@ def get_report(report_id: str, user: dict = Depends(auth.require("REPORT_EDIT"))
 @app.delete(f"{settings.api_prefix}/reports/{{report_id}}")
 def delete_report(report_id: str, user: dict = Depends(auth.require("REPORT_EDIT"))) -> dict[str, bool]:
     item = required_owned_report(report_id, user)
-    output_names = database.delete_report(report_id)
+    try:
+        output_names = database.delete_report(report_id)
+    except Exception as error:
+        logger.exception("报告删除失败 report_id=%s", report_id)
+        raise HTTPException(500, f"删除报告失败：{error}") from error
     candidates = {
         str(item.get("output_name") or ""),
         f"report-{report_id}-working.docx",
@@ -446,22 +425,43 @@ def report_versions(report_id: str, user: dict = Depends(auth.require("REPORT_ED
 def create_report_version(report_id: str, note: str = "手工保存",
                           user: dict = Depends(auth.require("REPORT_EDIT"))) -> dict:
     item = required_owned_report(report_id, user)
-    return database.create_version(report_id, item["resolved_data"], note)
+    version = database.create_version(report_id, item["resolved_data"], note)
+    database.create_generation({
+        "id": uuid.uuid4().hex, "report_id": report_id, "version_id": version["id"],
+        "generated_by": user["id"], "status": "SUCCESS",
+        "generation_snapshot": {"resolved_data": item["resolved_data"],
+                                 "field_sources": item["resolved_data"].get("field_sources", {}),
+                                 "original_values": item["resolved_data"].get("original_values", {})},
+        "generation_context": {"phase": "版本保存", "note": note},
+    })
+    return version
 
 
 @app.post(f"{settings.api_prefix}/reports/{{report_id}}/generate", response_model=ReportTask)
 def generate_report(report_id: str, user: dict = Depends(auth.require("REPORT_GENERATE"))) -> ReportTask:
-    item = required_owned_report(report_id, user)
-    item, working_path = ensure_report_file(item)
-    version = database.create_version(report_id, item["resolved_data"], "导出 Word")
-    generation_id = uuid.uuid4().hex
-    database.create_generation({"id": generation_id, "report_id": report_id, "version_id": version["id"],
-                                "generated_by": user["id"], "status": "PROCESSING"})
     try:
+        logger.info("开始生成报告 report_id=%s user_id=%s", report_id, user.get("id"))
+        item = required_owned_report(report_id, user)
+        working_path = settings.reports_dir / f"report-{report_id}-working.docx"
+        if not working_path.exists():
+            output_name = render_report_word(item, item["resolved_data"])
+            item = database.update_report(report_id, output_name=output_name, status="EDITING") or item
+            working_path = settings.reports_dir / output_name
+        logger.info("报告工作文件已准备 report_id=%s path=%s", report_id, working_path)
+        version = database.create_version(report_id, item["resolved_data"], "报告生成")
+        generation_id = uuid.uuid4().hex
+        database.create_generation({"id": generation_id, "report_id": report_id, "version_id": version["id"],
+                                    "generated_by": user["id"], "status": "PROCESSING",
+                                    "generation_snapshot": {"resolved_data": item["resolved_data"],
+                                                            "field_sources": item["resolved_data"].get("field_sources", {}),
+                                                            "original_values": item["resolved_data"].get("original_values", {})},
+                                    "generation_context": {"phase": "生成文档", "template_revision": item["resolved_data"].get("template_revision", "")}})
         output_name = f"report-{report_id}-export-{generation_id[:12]}.docx"
         shutil.copy2(working_path, settings.reports_dir / output_name)
     except Exception as error:
-        database.update_generation(generation_id, status="FAILED", error_message=str(error))
+        logger.exception("报告生成失败 report_id=%s", report_id)
+        if "generation_id" in locals():
+            database.update_generation(generation_id, status="FAILED", error_message=str(error))
         raise HTTPException(500, f"导出 Word 失败：{error}") from error
     database.update_generation(generation_id, status="SUCCESS", output_name=output_name)
     return report_response(database.update_report(
@@ -471,7 +471,12 @@ def generate_report(report_id: str, user: dict = Depends(auth.require("REPORT_GE
 
 @app.get(f"{settings.api_prefix}/reports/{{report_id}}/pdf")
 def export_report_pdf(report_id: str, user: dict = Depends(auth.require("REPORT_DOWNLOAD"))) -> FileResponse:
-    item, source = ensure_report_file(required_owned_report(report_id, user))
+    item = required_owned_report(report_id, user)
+    source = settings.reports_dir / f"report-{report_id}-working.docx"
+    if not source.exists():
+        output_name = render_report_word(item, item["resolved_data"])
+        item = database.update_report(report_id, output_name=output_name, status="EDITING") or item
+        source = settings.reports_dir / output_name
     output = settings.reports_dir / f"report-{report_id}.pdf"
     with tempfile.TemporaryDirectory(prefix="report-pdf-") as directory:
         temporary = Path(directory)
@@ -497,6 +502,7 @@ def rebuild_report_word(report_id: str, user: dict = Depends(auth.require("REPOR
     try:
         output_name = render_report_word(item, item["resolved_data"])
     except Exception as error:
+        logger.exception("Word 重建失败 report_id=%s", report_id)
         raise HTTPException(500, f"Word 重建失败：{error}") from error
     return report_response(database.update_report(
         report_id, status="EDITING", output_name=output_name,

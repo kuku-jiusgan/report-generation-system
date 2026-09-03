@@ -3,8 +3,9 @@ import re
 from typing import Any
 
 from .calculation_engine import CalculationError, evaluate_formula
-from .ai_field_generator import AiGenerationError, generate_ai_text
+from .ai_field_generator import AiGenerationError, generate_ai_text, resolve_context_values
 from .excel_validation_payload import enrich_excel_payload
+from .payload_paths import PayloadPathError, set_payload_path
 
 
 logger = logging.getLogger(__name__)
@@ -29,26 +30,10 @@ def _read_path(source: Any, path: str) -> Any:
 
 
 def _write_path(target: dict[str, Any], path: str, value: Any) -> None:
-    parts = [part.replace("[*]", "") for part in path.strip().removeprefix("$").lstrip(".").split(".") if part]
-    if not parts:
-        return
-    if "[*]" in path:
-        if len(parts) != 2 or not isinstance(value, list):
-            return
-        collection = target.setdefault(parts[0], [])
-        if not isinstance(collection, list):
-            collection = []
-            target[parts[0]] = collection
-        while len(collection) < len(value):
-            collection.append({})
-        for index, item_value in enumerate(value):
-            if isinstance(collection[index], dict) and _available(item_value):
-                collection[index][parts[1]] = item_value
-        return
-    current = target
-    for part in parts[:-1]:
-        current = current.setdefault(part, {})
-    current[parts[-1]] = value
+    try:
+        set_payload_path(target, path, value)
+    except PayloadPathError as error:
+        logger.info("系统字段落位失败 path=%s reason=%s", path, error)
 
 
 def _available(value: Any) -> bool:
@@ -101,6 +86,11 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
         dependencies = [str(item) for item in config.get("dependencies", [])]
         template = str(config.get("textTemplate") or "")
         if template:
+            # 上下文变量和 AI 规则用同一套取值方式（FIRST / JOIN_UNIQUE / COUNT_UNIQUE
+            # 加后缀），成组字段才能拼成"1.4%、0.3%、0.5%"这样的文字。
+            if config.get("contextVariables") or config.get("inputFields"):
+                resolved, missing = resolve_context_values(config, values)
+                return None if missing else _template_value(template, resolved)
             return _template_value(template, values)
         return evaluate_formula(
             str(config.get("expression") or ""), dependencies, values,

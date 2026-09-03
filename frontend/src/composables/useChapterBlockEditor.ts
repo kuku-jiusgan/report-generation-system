@@ -98,23 +98,33 @@ export function useChapterBlockEditor(options: EditorOptions) {
     blockDialog.value = true
   }
 
+  // 横向分组要靠 Word 里那一格的合并跨度确定分组宽度，字段没绑就只能保留原样。
   function invalidMatrixLayout(draft: Partial<DesignerBlock>): string {
-    const matrixMode = draft.tableRule?.mode === 'MATRIX'
-      || (draft.tableRule?.mode === 'TABLE_REPEAT' && draft.tableRule?.innerMode === 'MATRIX')
-    if (!matrixMode) return ''
-    const layout = draft.tableRule?.matrixLayout?.trim()
-    if (!layout) return ''
+    const text = draft.tableRule?.matrixLayout?.trim()
+    if (!text) return ''
+    let layout: any
     try {
-      JSON.parse(layout)
-      return ''
+      layout = JSON.parse(text)
     } catch (error) {
-      return `矩阵版式不是合法 JSON：${(error as Error).message}`
+      return `表格布局不是合法 JSON：${(error as Error).message}`
     }
+    if (!layout.groupField) return ''
+    if (draft.tableRule?.mode !== 'ROW_REPEAT') return '横向分组字段只在“按行向下扩展”时生效'
+    const bound = (draft.mappings || []).some(
+      (item) => item.controlTag && String(item.sourcePath || '').endsWith(`.${layout.groupField}`),
+    )
+    if (!bound) return `横向分组字段 ${layout.groupField} 还没有绑定 Word 内容控件，请先把它绑到分组表头格`
+    return ''
   }
 
   async function saveBlock() {
     if (!blockDraft.value?.standardGroupCode && !blockDraft.value?.title?.trim()) return ElMessage.warning('内容块名称不能为空')
     const layout = blockDraft.value.tableRule
+    if (blockDraft.value.standardGroupCode && layout) {
+      const mappedTable = (blockDraft.value.mappings || []).find((item) => /^T\d+$/.test(String(item.tableNo || "")))?.tableNo
+      layout.tableNo = layout.tableNo || mappedTable || `GROUP:${blockDraft.value.standardGroupCode}`
+      if (layout.mode !== 'STATIC') blockDraft.value.kind = layout.mode === 'MATRIX' ? 'MATRIX' : 'REPEATING_TABLE'
+    }
     if (blockDraft.value.standardGroupCode && layout?.mode !== 'STATIC' && !layout?.physicalTableIndex) {
       const hasAnchor = (blockDraft.value.mappings || []).some((item) => item.controlTag)
       if (!hasAnchor) return ElMessage.warning('请先绑定该编组的字段，系统才能自动定位目标表格')

@@ -206,7 +206,14 @@ export async function updateReport(report: ReportTask) {
 }
 
 export async function generateReport(id: string) {
-  return (await http.post<ReportTask>(`/reports/${id}/generate`)).data
+  try {
+    return (await http.post<ReportTask>(`/reports/${id}/generate`)).data
+  } catch (error) {
+    const response = error as { response?: { data?: { detail?: string } } }
+    const detail = response.response?.data?.detail
+    if (typeof detail === 'string') throw new Error(detail)
+    throw error
+  }
 }
 
 export async function rebuildReport(id: string) {

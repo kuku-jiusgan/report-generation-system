@@ -45,7 +45,8 @@ class Database(
             return None
         item = dict(row)
         for field in json_fields:
-            item[field] = json.loads(item[field])
+            value = item.get(field)
+            item[field] = json.loads(value) if value else {}
         return item
 
     def create_source(self, item: dict[str, Any]) -> dict[str, Any]:

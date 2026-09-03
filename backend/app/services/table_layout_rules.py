@@ -7,8 +7,29 @@
 配置缺失时返回空值并由调用方给出可见警告，而不是猜一个规则继续跑。
 """
 
+import hashlib
 import json
+import re
 from typing import Any
+
+
+# Word 书签名最长 40 个字符，且只接受字母、数字和下划线。
+BOOKMARK_NAME_LIMIT = 40
+
+
+def repeat_bookmark_name(table_no: str) -> str:
+    """语义表号 → 原型行书签名。
+
+    表号可能是 `T13`，也可能是设计器按标准编组生成的 `GROUP:systemSuitability`；
+    冒号一类字符不能出现在 Word 书签名里，这里统一转成下划线。编译和填充必须
+    用同一个函数，否则填充时找不到编译阶段埋下的书签。
+    """
+    safe = re.sub(r"\W+", "_", str(table_no).lower(), flags=re.UNICODE).strip("_")
+    budget = BOOKMARK_NAME_LIMIT - len("repeat__row")
+    if len(safe) > budget:
+        digest = hashlib.sha256(str(table_no).encode("utf-8")).hexdigest()[:4]
+        safe = f"{safe[:budget - 5]}_{digest}"
+    return f"repeat_{safe}_row"
 
 
 class TableLayoutRules:
@@ -51,6 +72,21 @@ class TableLayoutRules:
 
     def is_table_repeat(self, table_no: str) -> bool:
         return str(self.rule(table_no).get("mode") or "") == "TABLE_REPEAT"
+
+    def data_row_start(self, table_no: str) -> int:
+        """原型数据行在 Word 表格里的行号；0 表示没配，退回书签定位。"""
+        try:
+            return max(0, int(self.rule(table_no).get("dataRowStart") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def group_field(self, table_no: str) -> str:
+        """横向分组字段（记录里的键）；空表示这张表只向下填充，不向右扩列。"""
+        return str((self.matrix_layout(table_no) or {}).get("groupField") or "").strip()
+
+    def equal_group_columns(self, table_no: str) -> bool:
+        """多个分组时子列等宽；否则按 Word 原型的列宽比例缩放。"""
+        return str((self.matrix_layout(table_no) or {}).get("groupColumnWidth") or "") == "EQUAL"
 
     def matrix_layout(self, table_no: str) -> dict[str, Any] | None:
         """矩阵版式配置；未配置或 JSON 非法时返回 None，由调用方警告。"""

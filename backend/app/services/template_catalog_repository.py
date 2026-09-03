@@ -156,9 +156,8 @@ class TemplateCatalogRepositoryMixin:
             snapshot, source_file = self.snapshot(), None
         timestamp, version_id = now_iso(), uuid.uuid4().hex
         with self.database.connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
             version_no = connection.execute(
-                "SELECT COALESCE(MAX(version_no),0)+1 FROM admin_template_versions WHERE template_id=%s", (template_id,),
+                "SELECT COALESCE(MAX(version_no),0)+1 FROM admin_template_versions WHERE template_id=%s FOR UPDATE", (template_id,),
             ).fetchone()[0]
             connection.execute(
                 """INSERT INTO admin_template_versions(id,template_id,version_no,status,note,snapshot,template_file,

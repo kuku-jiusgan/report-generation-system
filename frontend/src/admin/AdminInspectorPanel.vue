@@ -222,6 +222,14 @@ const saveMapping = () => emit('saveMapping')
                   size="small"
                   :type="standardFieldFor(mapping) ? 'success' : 'warning'"
                   >{{ standardFieldFor(mapping) ? "标准字段" : "待清理" }}</el-tag
+                ><el-tag
+                  v-if="mapping.controlTag && mapping.bound === false"
+                  size="small"
+                  type="danger"
+                  :title="`映射里记着控件 ${mapping.controlTag}，但模板文档里找不到它，生成时不会填充`"
+                  >控件已失效</el-tag
+                ><el-tag v-else-if="mapping.bound" size="small" type="info" :title="mapping.wordLocation"
+                  >{{ mapping.wordLocation }}</el-tag
                 ><span class="field-line-actions"
                   ><el-button
                     text

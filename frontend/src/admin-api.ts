@@ -81,10 +81,18 @@ export interface StandardFieldCatalog {
   total: number;
 }
 
+/** 编组的一层：分组主体之外的下一层，决定数组结构怎么生成 */
+export interface SystemFieldGroupLevel {
+  levelKey: string; label: string; kind: 'OBJECT' | 'ARRAY'; orderNo: number;
+}
+
 export interface SystemFieldGroup {
   groupCode: string; label: string; description: string; cardinality: 'ONE' | 'MANY';
   itemPath: string; itemKey: string; orderNo: number; enabled: boolean; fieldCount: number;
-  chapterIds: number[]; fields: Array<{ fieldCode: string; label: string; dataType: string; cardinality: string; fieldPath: string; enabled: boolean }>;
+  chapterIds: number[]; fields: Array<{ fieldCode: string; label: string; dataType: string; cardinality: string; fieldPath: string; jsonKey: string; levelKey: string; enabled: boolean }>;
+  levels: SystemFieldGroupLevel[];
+  /** 按当前层级配置生成的记录结构预览，取值用字段名占位 */
+  structurePreview?: Record<string, unknown>;
 }
 
 export interface LimsExtractionRule {
@@ -302,6 +310,7 @@ export interface GenerationHistoryItem {
   status: 'PROCESSING' | 'SUCCESS' | 'FAILED'; output_name?: string; error_message: string;
   generated_at: string; legacy: boolean; title: string; report_status: string;
   resolved_data: Record<string, unknown>; username?: string; display_name?: string; version_no?: number;
+  generation_snapshot?: Record<string, unknown>; generation_context?: Record<string, unknown>;
 }
 
 export interface GenerationHistoryPage {
@@ -466,6 +475,14 @@ export const adminApi = {
     (await http.delete<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/fields/${encodeURIComponent(fieldCode)}`)).data,
   reorderFieldGroup: async (groupCode: string, fieldCodes: string[]) =>
     (await http.put<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/fields/order`, { fieldCodes })).data,
+  groupStructure: async (groupCode: string) =>
+    (await http.get<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/structure`)).data,
+  saveGroupLevel: async (groupCode: string, data: Partial<SystemFieldGroupLevel> & { originalKey?: string }) =>
+    (await http.post<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/levels`, data)).data,
+  deleteGroupLevel: async (groupCode: string, levelKey: string) =>
+    (await http.delete<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/levels/${encodeURIComponent(levelKey)}`)).data,
+  moveGroupFieldLevel: async (groupCode: string, fieldCode: string, levelKey: string) =>
+    (await http.put<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/fields/${encodeURIComponent(fieldCode)}/level`, { levelKey })).data,
   assignGroupChapter: async (groupCode: string, chapterId: number) =>
     (await http.post<SystemFieldGroup>(`/field-groups/${encodeURIComponent(groupCode)}/chapters`, { chapterId })).data,
   createMapping: async (data: Partial<MappingRule>) =>

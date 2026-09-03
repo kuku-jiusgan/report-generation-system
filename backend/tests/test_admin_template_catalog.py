@@ -64,7 +64,7 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
         public_base_url="http://127.0.0.1:8010",
     )
     settings.ensure_directories()
-    database = Database(settings.database_path)
+    database = Database(settings)
     database.initialize()
     repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
     repository.seed()

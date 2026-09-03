@@ -56,6 +56,10 @@ class ReportRepositoryMixin:
                 "SELECT output_name FROM report_generation_history WHERE report_id=%s AND output_name IS NOT NULL",
                 (report_id,),
             ).fetchall()]
+            # 子表未必都配置 ON DELETE CASCADE，必须显式按外键依赖顺序清理。
+            connection.execute("DELETE FROM report_generation_history WHERE report_id=%s", (report_id,))
+            connection.execute("DELETE FROM change_history WHERE report_id=%s", (report_id,))
+            connection.execute("DELETE FROM report_versions WHERE report_id=%s", (report_id,))
             connection.execute("DELETE FROM reports WHERE id=%s", (report_id,))
         return outputs
 
@@ -94,9 +98,8 @@ class ReportRepositoryMixin:
         # BEGIN IMMEDIATE 先拿写锁：并发自动保存/手工保存同时读 MAX 会算出同一 version_no，
         # 触发 UNIQUE(report_id,version_no) 冲突导致保存 500
         with self.connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
             version_no = connection.execute(
-                "SELECT COALESCE(MAX(version_no),0)+1 FROM report_versions WHERE report_id=%s", (report_id,),
+                "SELECT COALESCE(MAX(version_no),0)+1 FROM report_versions WHERE report_id=%s FOR UPDATE", (report_id,),
             ).fetchone()[0]
             cursor = connection.execute(
                 "INSERT INTO report_versions(report_id,version_no,note,data,created_at) VALUES(%s,%s,%s,%s,%s)",
@@ -122,10 +125,12 @@ class ReportRepositoryMixin:
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO report_generation_history(id,report_id,version_id,generated_by,status,
-                   output_name,error_message,generated_at,legacy) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                   output_name,error_message,generated_at,legacy,generation_snapshot,generation_context)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (item["id"], item["report_id"], item.get("version_id"), item.get("generated_by"), item["status"],
                  item.get("output_name"), item.get("error_message", ""), item.get("generated_at", now_iso()),
-                 int(item.get("legacy", False))),
+                 int(item.get("legacy", False)), json.dumps(item.get("generation_snapshot", {}), ensure_ascii=False),
+                 json.dumps(item.get("generation_context", {}), ensure_ascii=False)),
             )
         return self.get_generation(item["id"])
 
@@ -142,7 +147,7 @@ class ReportRepositoryMixin:
     def get_generation(self, generation_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(self._generation_select() + " WHERE g.id=%s", (generation_id,)).fetchone()
-        return self._decode(row, ("resolved_data",))
+        return self._decode(row, ("resolved_data", "generation_snapshot", "generation_context"))
 
     @staticmethod
     def _generation_select() -> str:
@@ -200,4 +205,4 @@ class ReportRepositoryMixin:
                 (*params, page_size, (page - 1) * page_size),
             ).fetchall()
         return {"total": total, "page": page, "pageSize": page_size,
-                "items": [self._decode(row, ("resolved_data",)) for row in rows]}
+                "items": [self._decode(row, ("resolved_data", "generation_snapshot", "generation_context")) for row in rows]}

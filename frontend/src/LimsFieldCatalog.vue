@@ -12,6 +12,8 @@ import {
   type SystemFieldGroup,
 } from "./admin-api";
 import SystemAiRuleEditor from "./SystemAiRuleEditor.vue";
+import SystemContextVariables, { type ContextVariable } from "./SystemContextVariables.vue";
+import SystemGroupStructure from "./SystemGroupStructure.vue";
 import SystemFieldTree from "./SystemFieldTree.vue";
 import SystemFieldCatalogTree from "./SystemFieldCatalogTree.vue";
 import ExcelWorkbookLocation from "./ExcelWorkbookLocation.vue";
@@ -39,6 +41,11 @@ const search = ref("");
 const ruleDialog = ref(false);
 const ruleDraft = ref<Partial<CatalogRule>>();
 const ruleConfig = ref<Record<string, unknown>>({});
+// 计算规则的文本模板与 AI 提示词共用同一套上下文变量配置
+const calculatedVariables = computed<ContextVariable[]>({
+  get: () => Array.isArray(ruleConfig.value.contextVariables) ? ruleConfig.value.contextVariables as ContextVariable[] : [],
+  set: (value) => { ruleConfig.value.contextVariables = value },
+});
 const dataTypes = [
   { value: "string", label: "文本" }, { value: "decimal", label: "数值" },
   { value: "date", label: "日期" }, { value: "richText", label: "富文本" },
@@ -405,7 +412,8 @@ onMounted(() => loadFields());
         <section v-if="selectedGroup && !draft" class="definition-band">
           <div class="workspace-head"><div><span>字段编组</span><h1>{{ selectedGroup.label }}</h1></div><el-tag>{{ selectedGroup.groupCode }}</el-tag></div>
           <div class="form-grid two"><el-form-item label="编组名称"><el-input v-model="groupDraft.label" /></el-form-item><el-form-item label="数据关系"><el-select v-model="groupDraft.cardinality"><el-option label="单值" value="ONE" /><el-option label="数组/多行" value="MANY" /></el-select></el-form-item></div><el-button type="primary" @click="saveSelectedGroup">保存编组</el-button><el-button type="danger" plain @click="removeSelectedGroup">删除编组</el-button>
-          <div class="group-field-order"><div class="group-field-order-head"><span>字段顺序</span><small>调整后自动保存</small></div><div v-for="(field,index) in selectedGroup.fields" :key="field.fieldCode" class="group-field-order-row"><span class="group-field-order-index">{{ String(index + 1).padStart(2, '0') }}</span><b>{{ field.label }}</b><code>{{ field.fieldCode }}</code><div class="group-field-order-actions"><el-tooltip content="上移" placement="top"><el-button circle text size="small" :icon="ArrowUp" :disabled="index===0" aria-label="上移" @click="moveGroupField(index,-1)" /></el-tooltip><el-tooltip content="下移" placement="top"><el-button circle text size="small" :icon="ArrowDown" :disabled="index===selectedGroup.fields.length-1" aria-label="下移" @click="moveGroupField(index,1)" /></el-tooltip></div></div><p v-if="!selectedGroup.fields.length" class="group-field-order-empty">当前编组暂无字段</p></div>
+          <SystemGroupStructure :group="selectedGroup" :error-text="errorText"
+            @saved="(group) => { const index = groups.findIndex((item) => item.groupCode === group.groupCode); if (index >= 0) groups[index] = group }" />
           <p class="form-help">当前编组包含 {{ selectedGroup.fields.length }} 个字段。点击左侧字段进入具体配置。</p>
         </section>
         <section v-else-if="selectedChapter && !draft" class="definition-band">
@@ -448,11 +456,24 @@ onMounted(() => loadFields());
           <section class="references-band">
             <div class="rules-head"><div><h2>模板引用</h2></div></div>
             <el-table v-if="references.length" :data="references" size="small">
-              <el-table-column label="模板" prop="templateName" min-width="240" />
-              <el-table-column label="模板字段" prop="wordLabel" min-width="180" />
-              <el-table-column label="字段编码" prop="fieldCode" min-width="180" />
-              <el-table-column label="位置" prop="locationId" min-width="220" />
-              <el-table-column label="表格" prop="tableNo" width="100" />
+              <el-table-column label="模板" prop="templateName" min-width="200" />
+              <el-table-column label="模板字段" prop="wordLabel" min-width="150" />
+              <el-table-column label="字段编码" prop="fieldCode" min-width="170" />
+              <el-table-column label="绑定状态" width="150">
+                <template #default="{ row }">
+                  <el-tag :type="row.bound ? 'success' : 'danger'" size="small" disable-transitions>
+                    {{ row.bindingState }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Word 中的位置" min-width="210">
+                <template #default="{ row }">
+                  <span v-if="row.bound">{{ row.wordLocation }}</span>
+                  <span v-else class="reference-missing">该字段实际上不会被填充，请在模板设计器中重新绑定或删除这条映射</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="内容控件" prop="controlTag" min-width="240" show-overflow-tooltip />
+              <el-table-column label="表格" prop="tableNo" width="90" />
             </el-table>
             <el-empty v-else description="当前字段暂未被模板字段引用" :image-size="55" />
           </section>
@@ -492,7 +513,11 @@ onMounted(() => loadFields());
         <template v-if="ruleDraft.sourceType === 'CALCULATED'">
           <el-form-item label="依赖系统字段"><el-select v-model="ruleConfig.dependencies" multiple filterable><el-option v-for="item in fields" :key="item.fieldCode" :label="`${item.label} · ${item.fieldCode}`" :value="item.fieldCode" /></el-select></el-form-item>
           <el-form-item label="计算表达式"><el-input v-model="ruleConfig.expression" placeholder="例如 {sample.weight} / {sample.volume}" /></el-form-item>
-          <el-form-item label="文本拼接模板"><el-input v-model="ruleConfig.textTemplate" placeholder="例如 {sample.name}（批号：{sample.batchNo}）" /><small class="form-help">计算表达式和文本拼接模板二选一。</small></el-form-item>
+          <el-form-item label="文本拼接模板"><el-input v-model="ruleConfig.textTemplate" type="textarea" :rows="4" placeholder="例如 {sample.name}（批号：{sample.batchNo}）" /><small class="form-help">计算表达式和文本拼接模板二选一。文本模板用 {系统字段编码} 引用下面的上下文变量。</small></el-form-item>
+          <el-form-item v-if="ruleConfig.textTemplate" label="上下文变量">
+            <SystemContextVariables v-model="calculatedVariables" :fields="fields" />
+            <small class="form-help">成组字段（一个字段多条取值）必须在这里声明取值方式，否则模板拿到的是整个列表。</small>
+          </el-form-item>
         </template>
         <template v-if="ruleDraft.sourceType === 'LIMS'">
         <el-form-item label="LIMS 解析方式"><el-select v-model="ruleConfig.extractionType"><el-option v-for="item in limsExtractionTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
@@ -535,4 +560,6 @@ onMounted(() => loadFields());
 .chapter-entry{min-width:0}.field-list .chapter-row{--indent:calc(var(--chapter-depth) * 16px);width:100%;height:34px;min-height:34px;padding:0 8px 0 calc(4px + var(--indent));display:grid;grid-template-columns:14px minmax(34px,auto) minmax(0,1fr) 24px;align-items:center;gap:6px;border:0;border-bottom:1px solid #f4f7fb;border-radius:0;background:transparent;color:#3d554d;text-align:left;cursor:pointer}.field-list .chapter-row:hover{background:#f1f6f4;border-color:#f4f7fb}.chapter-row.muted{opacity:.58}.chapter-row b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:600}.chapter-caret{display:block;color:#71827b;font-size:18px;line-height:1;transform:rotate(0deg);transition:transform 160ms ease-out}.chapter-caret.open{transform:rotate(90deg)}.chapter-code{color:#697a74;font:10px/1.2 Consolas,"SFMono-Regular",monospace}.chapter-count{color:#84928d;font-size:10px;text-align:right}.chapter-fields{margin:4px 0 8px;padding-left:calc(20px + var(--chapter-depth) * 16px);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 7px}.field-list .field-item{width:100%;min-width:0;min-height:44px;padding:6px var(--space-sm);display:grid;grid-template-columns:minmax(0,1fr) 8px;align-items:center;gap:6px;border:1px solid #e4e9e6;border-radius:4px;background:#fff;text-align:left;cursor:pointer}.field-list .field-item:hover{background:#f1f6f4;border-color:#b8cbc4}.field-list .field-item.selected{background:#e5f0ed;border-color:#4f8ee8}.unmapped-fields{margin-top:14px;padding-top:6px;border-top:1px solid #dde4e1}.field-list .unmapped-fields h2{margin-top:4px}.field-list .el-empty{padding:28px 0}
 .preview-actions{display:flex;align-items:center;gap:8px}.preview-instance-select{width:360px}.preview-option{display:grid;gap:2px;line-height:1.25}.preview-option b{max-width:310px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#31463f;font-size:12px;font-weight:500}.preview-option small{color:#71817b;font-size:10px}@media(max-width:1200px){.preview-actions{width:100%;align-items:stretch}.preview-instance-select{min-width:0;flex:1}.preview-head{align-items:stretch;flex-direction:column}}
 @media(prefers-reduced-motion:reduce){.chapter-caret{transition:none}}
-.group-field-order{margin-top:18px;padding:14px 16px;border:1px solid #e1e8e5;border-radius:8px;background:#f8fafb}.group-field-order-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#30483f;font-size:12px;font-weight:650}.group-field-order-head small{color:#81908a;font-size:10px;font-weight:400}.group-field-order-row{min-height:38px;display:grid;grid-template-columns:34px minmax(120px,1fr) minmax(120px,1fr) auto;align-items:center;gap:10px;padding:5px 4px;border-top:1px solid #e8eeeb}.group-field-order-index{color:#7d9188;font:11px/1 Consolas,monospace}.group-field-order-row b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2d443b;font-size:12px;font-weight:550}.group-field-order-row code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#778a83;font:10px/1.3 Consolas,monospace}.group-field-order-actions{display:flex;gap:2px}.group-field-order-actions .el-button{width:28px;height:28px;margin:0;color:#477265}.group-field-order-actions .el-button:not(.is-disabled):hover{color:#2167e8;background:#e8f0ff}.group-field-order-empty{margin:10px 0 2px;color:#8a9993;font-size:11px;text-align:center}@media(max-width:700px){.group-field-order-row{grid-template-columns:28px minmax(0,1fr) auto}.group-field-order-row code{display:none}}.group-index{max-height:220px;overflow:auto;margin-bottom:12px}.group-index h1{margin:0 0 8px;font-size:13px}.group-index .el-menu{border-right:0}.group-index .el-menu-item{height:36px;line-height:36px;padding:0 10px!important;display:flex;justify-content:space-between}</style>
+.group-field-order{margin-top:18px;padding:14px 16px;border:1px solid #e1e8e5;border-radius:8px;background:#f8fafb}.group-field-order-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#30483f;font-size:12px;font-weight:650}.group-field-order-head small{color:#81908a;font-size:10px;font-weight:400}.group-field-order-row{min-height:38px;display:grid;grid-template-columns:34px minmax(120px,1fr) minmax(120px,1fr) auto;align-items:center;gap:10px;padding:5px 4px;border-top:1px solid #e8eeeb}.group-field-order-index{color:#7d9188;font:11px/1 Consolas,monospace}.group-field-order-row b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2d443b;font-size:12px;font-weight:550}.group-field-order-row code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#778a83;font:10px/1.3 Consolas,monospace}.group-field-order-actions{display:flex;gap:2px}.group-field-order-actions .el-button{width:28px;height:28px;margin:0;color:#477265}.group-field-order-actions .el-button:not(.is-disabled):hover{color:#2167e8;background:#e8f0ff}.group-field-order-empty{margin:10px 0 2px;color:#8a9993;font-size:11px;text-align:center}@media(max-width:700px){.group-field-order-row{grid-template-columns:28px minmax(0,1fr) auto}.group-field-order-row code{display:none}}.group-index{max-height:220px;overflow:auto;margin-bottom:12px}.group-index h1{margin:0 0 8px;font-size:13px}.group-index .el-menu{border-right:0}.group-index .el-menu-item{height:36px;line-height:36px;padding:0 10px!important;display:flex;justify-content:space-between}
+
+.references-band{margin-top:20px;padding:0 20px 18px;background:#fff;border:1px solid #d7dfdb}.references-band .rules-head{padding:18px 0 12px;border-bottom:1px solid #e2e7e4}.reference-missing{color:#c45656;font-size:11px;line-height:1.5}</style>

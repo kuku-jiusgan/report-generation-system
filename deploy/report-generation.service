@@ -14,7 +14,7 @@ WorkingDirectory=/home/zoutengda/report-generation-system
 EnvironmentFile=/home/zoutengda/report-generation-system/.env
 Environment=PYTHONPATH=/home/zoutengda/report-generation-system/backend
 ExecStartPre=+/usr/bin/docker compose --env-file /home/zoutengda/report-generation-system/.env -f /home/zoutengda/report-generation-system/docker-compose.onlyoffice.yml up -d
-ExecStart=/home/zoutengda/report-generation-system/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8010 --app-dir /home/zoutengda/report-generation-system/backend
+ExecStart=/home/zoutengda/report-generation-system/.venv/bin/python -m uvicorn app.main:app --reload --reload-dir /home/zoutengda/report-generation-system/backend/app --host 0.0.0.0 --port 8010 --app-dir /home/zoutengda/report-generation-system/backend
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

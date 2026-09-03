@@ -34,6 +34,11 @@ export interface MappingRule {
   updatedAt: string;
   chapterId?: number;
   blockId?: number;
+  /** 控件是否真的存在于模板文档中，由后端扫描文档得出，不是根据 locationId 推断的 */
+  bound?: boolean;
+  /** 控件在 Word 里的真实位置，例如“正文第 13 张表 第 3 行第 2 格” */
+  wordLocation?: string;
+  bindingState?: string;
 }
 
 export interface TableRule {
@@ -56,7 +61,7 @@ export interface TableRule {
   preservedRowLabels: string[];
   /** 生成时清除该表内的图片与嵌入对象 */
   clearEmbeddedObjects: boolean;
-  /** 矩阵表版式（JSON 文本）：rowFields / rowLabels / scalarCells */
+  /** 矩阵表版式（JSON 文本）：columnGroups / detailRows / summaryRows / conclusionRow */
   matrixLayout: string;
   enabled: boolean;
   notes: string;
@@ -77,7 +82,7 @@ export interface DesignerBlock {
   chapterId: number;
   title: string;
   standardGroupCode?: string;
-  standardFields?: Array<{ fieldCode: string; label: string; enabled: boolean }>;
+  standardFields?: Array<{ fieldCode: string; label: string; fieldPath?: string; enabled: boolean }>;
   kind: ContentBlockKind;
   tableNo: string;
   sourcePath: string;

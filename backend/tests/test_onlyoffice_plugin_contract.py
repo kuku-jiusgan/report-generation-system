@@ -42,7 +42,7 @@ def test_binding_does_not_remove_the_previous_control_before_commit() -> None:
 def test_command_relay_returns_only_newer_commands(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path / "data", template_path=tmp_path / "template.docx")
     settings.ensure_directories()
-    database = Database(settings.database_path)
+    database = Database(settings)
     database.initialize()
     router = create_onlyoffice_bridge_router(settings, AuthManager(database, settings))
     submit = next(route.endpoint for route in router.routes if route.path.endswith("/{channel_id}") and "POST" in route.methods)

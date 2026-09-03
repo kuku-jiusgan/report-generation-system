@@ -1,6 +1,6 @@
 """表格布局规则必须完全来自设计器配置，后端不得再内置表号特例。"""
 
-import sqlite3
+import re
 import tempfile
 import unittest
 import zipfile
@@ -8,10 +8,8 @@ from pathlib import Path
 
 from lxml import etree
 
-from backend.app.database import Database
-from backend.app.database_designer_migrations import SEED_MATRIX_LAYOUT
 from backend.app.services.mapped_docx_generator import build_mapped_docx
-from backend.app.services.table_layout_rules import TableLayoutRules
+from backend.app.services.table_layout_rules import TableLayoutRules, repeat_bookmark_name
 from backend.app.services.template_compiler import compile_template
 
 
@@ -159,32 +157,19 @@ class CompileAuditTest(unittest.TestCase):
             self.assertIn("MATRIX_LAYOUT_MISSING", codes)
 
 
-class MigrationSeedTest(unittest.TestCase):
-    def test_existing_table_rules_get_visible_layout_values(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "seed.db"
-            database = Database(path)
-            database.initialize()
-            with database.connect() as connection:
-                connection.execute(
-                    "INSERT INTO admin_table_rules(table_no,section_code,mode,updated_at) "
-                    "VALUES('T20','7.4.linearity','MATRIX','now')"
-                )
-                connection.execute("DELETE FROM app_migrations")
-            Database(path).initialize()
-
-            with sqlite3.connect(path) as connection:
-                connection.row_factory = sqlite3.Row
-                row = dict(connection.execute(
-                    "SELECT * FROM admin_table_rules WHERE table_no='T20'"
-                ).fetchone())
-
-            self.assertEqual(20, row["physical_table_index"])
-            self.assertTrue(row["clear_embedded_objects"])
-            self.assertIn("结论", row["preserved_row_labels"])
-            layout = TableLayoutRules([{"tableNo": "T20", "matrixLayout": row["matrix_layout"]}])
-            self.assertEqual(SEED_MATRIX_LAYOUT, layout.matrix_layout("T20"))
-
-
 if __name__ == "__main__":
     unittest.main()
+
+
+class BookmarkNameTest(unittest.TestCase):
+    def test_group_table_number_becomes_a_valid_word_bookmark(self) -> None:
+        name = repeat_bookmark_name("GROUP:systemSuitability")
+        self.assertEqual("repeat_group_systemsuitability_row", name)
+        self.assertTrue(re.fullmatch(r"[A-Za-z][0-9A-Za-z_]*", name))
+        self.assertLessEqual(len(name), 40)
+
+    def test_long_table_numbers_stay_within_the_word_limit_and_stay_distinct(self) -> None:
+        first = repeat_bookmark_name("GROUP:" + "a" * 60)
+        second = repeat_bookmark_name("GROUP:" + "a" * 61)
+        self.assertLessEqual(len(first), 40)
+        self.assertNotEqual(first, second)

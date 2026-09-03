@@ -77,7 +77,7 @@ def build_env(tmp_path: Path, secret: str = SECRET):
     )
     settings.ensure_directories()
     state = {"revision": "r1"}
-    database = Database(settings.database_path)
+    database = Database(settings)
     database.initialize()
     database.create_report({
         "id": REPORT_ID, "title": "测试报告", "status": "EDITING",

@@ -65,7 +65,7 @@ def ensure_system_suitability_defaults(database: Database) -> None:
                     {"label": "峰面积", "field": "peakArea"},
                 ],
             }],
-            "dataRows": {"start": 3, "end": 8, "labelField": "solutionName", "sortField": "sequence"},
+            "detailRows": {"start": 3, "end": 8, "labelField": "solutionName", "sortField": "sequence"},
             "summaryRows": [{
                 "row": 9, "label": "RSD（n=6，%）",
                 "fields": ["retentionTimeRsd", "peakAreaRsd"],

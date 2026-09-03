@@ -97,3 +97,74 @@ def test_excel_many_fields_keep_record_indexes_aligned() -> None:
         {"impurityName": "杂质D", "peakArea": 10},
         {"impurityName": "杂质A2", "peakArea": 20},
     ]
+
+
+GROUP_FIELDS = [
+    {"fieldCode": "systemSuitability.impurityName",
+     "legacyJsonPath": "$.systemSuitability[*].impurityName", "enabled": True},
+    {"fieldCode": "systemSuitability.solutionName",
+     "legacyJsonPath": "$.systemSuitability[*].solutionName", "enabled": True},
+    {"fieldCode": "systemSuitability.peakAreaRsd",
+     "legacyJsonPath": "$.systemSuitability[*].peakAreaRsd", "enabled": True},
+    {"fieldCode": "systemSuitability.conclusion",
+     "legacyJsonPath": "$.systemSuitabilityConclusion", "enabled": True},
+]
+
+CONCLUSION_TEMPLATE = ("{systemSuitability.solutionName}针溶液中，"
+                       "{systemSuitability.impurityName}峰面积RSD分别为"
+                       "{systemSuitability.peakAreaRsd}。")
+
+
+def _suitability_payload(impurities: list[str]) -> dict:
+    return {"systemSuitability": [
+        {"impurityName": name, "solutionName": f"溶液{index}",
+         "peakAreaRsd": {"杂质A": "1.4", "杂质B": "0.3"}[name]}
+        for name in impurities for index in range(1, 4)
+    ]}
+
+
+def test_calculated_text_template_joins_grouped_fields_by_context_variables() -> None:
+    """成组字段要靠上下文变量的取值方式拼句：去重拼接加后缀、去重计数。"""
+    payload = _suitability_payload(["杂质A", "杂质B"])
+    rules = [rule("systemSuitability.conclusion", "CALCULATED", 30, {
+        "textTemplate": CONCLUSION_TEMPLATE,
+        "contextVariables": [
+            {"fieldCode": "systemSuitability.solutionName", "mode": "COUNT_UNIQUE", "required": True},
+            {"fieldCode": "systemSuitability.impurityName", "mode": "JOIN_UNIQUE",
+             "separator": "、", "required": True},
+            {"fieldCode": "systemSuitability.peakAreaRsd", "mode": "JOIN_UNIQUE",
+             "separator": "、", "suffix": "%", "required": True},
+        ],
+    }, 1)]
+
+    resolve_system_fields(GROUP_FIELDS, rules, payload, {"source_payloads": {}})
+
+    assert payload["systemSuitabilityConclusion"] == "3针溶液中，杂质A、杂质B峰面积RSD分别为1.4%、0.3%。"
+
+
+def test_calculated_text_template_collapses_identical_values() -> None:
+    """所有分组取值相同时，去重拼接自然收敛成一个值。"""
+    payload = _suitability_payload(["杂质A"])
+    rules = [rule("systemSuitability.conclusion", "CALCULATED", 30, {
+        "textTemplate": "峰面积RSD均为{systemSuitability.peakAreaRsd}",
+        "contextVariables": [{"fieldCode": "systemSuitability.peakAreaRsd",
+                              "mode": "JOIN_UNIQUE", "separator": "、", "suffix": "%",
+                              "required": True}],
+    }, 1)]
+
+    resolve_system_fields(GROUP_FIELDS, rules, payload, {"source_payloads": {}})
+
+    assert payload["systemSuitabilityConclusion"] == "峰面积RSD均为1.4%"
+
+
+def test_calculated_text_template_waits_for_missing_context() -> None:
+    rules = [rule("systemSuitability.conclusion", "CALCULATED", 30, {
+        "textTemplate": CONCLUSION_TEMPLATE,
+        "contextVariables": [{"fieldCode": "systemSuitability.impurityName",
+                              "mode": "JOIN_UNIQUE", "required": True}],
+    }, 1)]
+    payload: dict = {}
+
+    resolve_system_fields(GROUP_FIELDS, rules, payload, {"source_payloads": {}})
+
+    assert "systemSuitabilityConclusion" not in payload

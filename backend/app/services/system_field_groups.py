@@ -1,6 +1,9 @@
 from typing import Any
 
 from ..database import Database, now_iso
+from .system_field_group_levels import (
+    ensure_group_levels, field_path_for, json_path_for, list_group_levels,
+)
 
 
 GROUP_LABELS = {
@@ -55,19 +58,28 @@ def ensure_system_field_groups(database: Database) -> None:
 
 def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
     ensure_system_field_groups(database)
+    ensure_group_levels(database)
     with database.connect() as connection:
         groups = [dict(row) for row in connection.execute("SELECT * FROM system_field_groups ORDER BY order_no,group_code")]
         fields = [dict(row) for row in connection.execute(
-            """SELECT gf.*,f.label,f.data_type,f.cardinality AS field_cardinality,f.enabled
+            """SELECT gf.*,f.label,f.data_type,f.cardinality AS field_cardinality,f.enabled,f.json_key
                FROM system_field_group_fields gf JOIN lims_field_catalog f ON f.field_code=gf.field_code
                ORDER BY gf.group_code,gf.order_no,gf.field_code"""
         )]
         links = connection.execute("SELECT group_code,chapter_id FROM system_field_group_chapters").fetchall()
+    levels = list_group_levels(database)
+    # 字段路径由层级配置推导，不读库里那份旧的 field_path，避免两处打架
+    kinds = {(code, level["levelKey"]): level["kind"]
+             for code, items in levels.items() for level in items}
     by_group: dict[str, list[dict[str, Any]]] = {}
     for field in fields:
-        by_group.setdefault(field["group_code"], []).append({
+        code, level_key = field["group_code"], str(field.get("level_key") or "")
+        json_key = str(field.get("json_key") or "").strip() or str(field["field_code"]).rsplit(".", 1)[-1]
+        by_group.setdefault(code, []).append({
             "fieldCode": field["field_code"], "label": field["label"], "dataType": field["data_type"],
-            "cardinality": field["field_cardinality"], "fieldPath": field["field_path"], "enabled": bool(field["enabled"]),
+            "cardinality": field["field_cardinality"], "enabled": bool(field["enabled"]),
+            "jsonKey": json_key, "levelKey": level_key,
+            "fieldPath": field_path_for(level_key, kinds.get((code, level_key), ""), json_key),
         })
     chapters: dict[str, list[int]] = {}
     for link in links:
@@ -77,7 +89,27 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
         "cardinality": row["cardinality"], "itemPath": row["item_path"], "itemKey": row["item_key"],
         "orderNo": row["order_no"], "enabled": bool(row["enabled"]), "fieldCount": len(by_group.get(row["group_code"], [])),
         "fields": by_group.get(row["group_code"], []), "chapterIds": chapters.get(row["group_code"], []),
+        "levels": levels.get(row["group_code"], []),
     } for row in groups]
+
+
+def sync_group_field_paths(database: Database, group_code: str) -> None:
+    """层级或字段归属变动后，把推导出的路径写回编组和字段目录，提取规则跟着走。"""
+    group = next((item for item in list_system_field_groups(database)
+                  if item["groupCode"] == group_code), None)
+    if not group:
+        return
+    with database.connect() as connection:
+        for field in group["fields"]:
+            connection.execute(
+                "UPDATE system_field_group_fields SET field_path=%s WHERE group_code=%s AND field_code=%s",
+                (field["fieldPath"], group_code, field["fieldCode"]),
+            )
+            connection.execute(
+                "UPDATE lims_field_catalog SET legacy_json_path=%s,updated_at=%s WHERE field_code=%s",
+                (json_path_for(group["itemPath"], group["cardinality"], field["fieldPath"]),
+                 now_iso(), field["fieldCode"]),
+            )
 
 
 def save_system_field_group(database: Database, item: dict[str, Any], original_code: str = "") -> dict[str, Any]:
@@ -108,6 +140,7 @@ def delete_system_field_group(database: Database, group_code: str) -> bool:
         ).fetchone()
         if not exists:
             return False
+        connection.execute("DELETE FROM system_field_group_levels WHERE group_code=%s", (group_code,))
         connection.execute("DELETE FROM system_field_group_fields WHERE group_code=%s", (group_code,))
         connection.execute("DELETE FROM system_field_group_chapters WHERE group_code=%s", (group_code,))
         connection.execute("DELETE FROM system_field_groups WHERE group_code=%s", (group_code,))

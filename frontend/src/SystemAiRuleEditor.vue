@@ -1,13 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Delete } from '@element-plus/icons-vue'
 import { adminApi, type StandardField, type StandardFieldPreview } from './admin-api'
+import SystemContextVariables, { type ContextVariable } from './SystemContextVariables.vue'
 
-type Variable = {
-  fieldCode: string; required: boolean; mode: 'FIRST' | 'JOIN_UNIQUE';
-  separator: string; defaultValue: string; previewValue?: string
-}
+type Variable = ContextVariable
 
 const props = defineProps<{ fields: StandardField[] }>()
 const config = defineModel<Record<string, any>>({ required: true })
@@ -32,14 +29,6 @@ const preview = computed(() => {
   return result
 })
 
-function addVariable() {
-  variables.value = [...variables.value, {
-    fieldCode: '', required: true, mode: 'FIRST', separator: '、', defaultValue: '', previewValue: '',
-  }]
-}
-function removeVariable(index: number) {
-  variables.value = variables.value.filter((_, current) => current !== index)
-}
 function insertVariable(code: string) {
   if (!code) return
   const prompt = String(config.value.promptTemplate || '')
@@ -66,7 +55,11 @@ async function fieldPreviewValue(variable: Variable) {
   const values = raw.filter((value) => value !== null && value !== undefined && String(value).trim())
   if (values.length) {
     const unique = Array.from(new Set(values.map(String)))
-    return variable.mode === 'FIRST' ? unique[0] : unique.join(variable.separator || '、')
+    if (variable.mode === 'COUNT_UNIQUE') return String(unique.length)
+    const suffix = variable.suffix || ''
+    return variable.mode === 'FIRST'
+      ? `${unique[0]}${suffix}`
+      : unique.map((item) => `${item}${suffix}`).join(variable.separator || '、')
   }
   const rules = await adminApi.systemFieldRules(variable.fieldCode)
   return String(rules.find((rule) => rule.sourceType === 'FIXED' && rule.enabled)?.config?.value || variable.defaultValue || '')
@@ -98,7 +91,6 @@ onMounted(loadRecentRecords)
 
 <template>
   <section class="ai-rule-editor">
-    <div class="ai-editor-head"><b>上下文变量</b><el-button plain :icon="Plus" @click="addVariable">添加变量</el-button></div>
     <div class="record-importer">
       <el-select v-model="selectedInstanceIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择最近导入的实验记录" :loading="recordsLoading">
         <el-option v-for="item in recordOptions" :key="item.instanceId" :value="item.instanceId" :label="`${item.experimentTitle || item.projectName || '未命名实验'} · ${item.instanceId}`" />
@@ -106,17 +98,7 @@ onMounted(loadRecentRecords)
       <el-button :loading="recordsLoading" @click="loadRecentRecords">刷新</el-button>
       <el-button type="primary" :loading="recordsLoading" @click="importSelectedRecords">导入字段值</el-button>
     </div>
-    <div v-for="(item, index) in variables" :key="index" class="variable-row">
-      <el-select v-model="item.fieldCode" filterable placeholder="选择系统字段">
-        <el-option v-for="field in props.fields" :key="field.fieldCode" :label="`${field.label} · ${field.fieldCode}`" :value="field.fieldCode" />
-      </el-select>
-      <el-select v-model="item.mode"><el-option label="取第一个值" value="FIRST" /><el-option label="列表去重拼接" value="JOIN_UNIQUE" /></el-select>
-      <el-input v-if="item.mode === 'JOIN_UNIQUE'" v-model="item.separator" placeholder="连接符" />
-      <el-input v-model="item.defaultValue" placeholder="缺失默认值" />
-      <el-checkbox v-model="item.required">必填</el-checkbox>
-      <el-button link type="primary" @click="insertVariable(item.fieldCode)">插入</el-button>
-      <el-button link type="danger" :icon="Delete" @click="removeVariable(index)" />
-    </div>
+    <SystemContextVariables v-model="variables" :fields="props.fields" insert-label="插入" @insert="insertVariable" />
     <el-form-item label="提示词模板"><el-input v-model="config.promptTemplate" type="textarea" :rows="7" placeholder="使用 {{系统字段编码}} 引用上下文" /></el-form-item>
     <p class="referenced-fields">已引用：{{ referenced.join('、') || '暂无' }}</p>
     <el-form-item label="预览用变量值（可选）">

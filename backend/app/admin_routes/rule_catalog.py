@@ -6,9 +6,11 @@ from fastapi import APIRouter, HTTPException
 
 from ..services.rule_admin import RuleAdminRepository
 from ..services.calculation_engine import CalculationError, validate_calculation
+from ..services.docx_control_index import control_locations, describe_binding
 from ..services.ai_field_generator import AiGenerationError, generate_ai_text, render_ai_prompt
 from ..services.ai_service_config import load_ai_service_config, save_ai_service_config
-from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, delete_system_field_group, list_system_field_groups, remove_field_from_group, reorder_group_fields, save_system_field_group
+from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, delete_system_field_group, list_system_field_groups, remove_field_from_group, reorder_group_fields, save_system_field_group, sync_group_field_paths
+from ..services.system_field_group_levels import delete_group_level, move_field_to_level, save_group_level, structure_preview
 
 
 CHAPTER_FIELD_PREFIXES = {
@@ -50,7 +52,7 @@ def _template_references(repository: RuleAdminRepository, field_code: str) -> li
     with repository.database.connect() as connection:
         versions = connection.execute(
             """SELECT t.name AS template_name,t.code AS template_code,
-                      v.snapshot,v.version_no,v.status
+                      v.snapshot,v.version_no,v.status,v.template_file
                  FROM admin_template_versions v
                  JOIN admin_templates t ON t.id=v.template_id
                 WHERE v.status IN ('DRAFT','PUBLISHED')
@@ -65,12 +67,16 @@ def _template_references(repository: RuleAdminRepository, field_code: str) -> li
         template_name = str(version["template_name"])
         template_code = str(version["template_code"] or "")
         display_name = f"{template_name} · {template_code}" if template_code else template_name
+        # 绑定状态以模板文档为准：locationId 是按控件标签拼出来的，控件被删掉后
+        # 映射行还在，只看映射会把早已失效的引用显示成"已绑定"。
+        locations = control_locations(version["template_file"])
         for item in snapshot.get("mappings", []):
             if item.get("standardFieldCode") != field_code or not _is_real_template_reference(item):
                 continue
             references.append({
                 **item, "templateName": display_name,
                 "templateCode": template_code, "versionNo": version["version_no"],
+                **describe_binding(locations, str(item.get("controlTag") or "")),
             })
     return references
 
@@ -275,6 +281,42 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
             return reorder_group_fields(repository.database, group_code, codes)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
+
+    def _group(group_code: str) -> dict[str, Any]:
+        group = next((item for item in list_system_field_groups(repository.database)
+                      if item["groupCode"] == group_code), None)
+        if not group:
+            raise HTTPException(404, "编组不存在")
+        return {**group, "structurePreview": structure_preview(group["levels"], group["fields"])}
+
+    @router.get("/field-groups/{group_code}/structure")
+    def group_structure(group_code: str) -> dict[str, Any]:
+        """编组当前的层级配置，以及按它生成的记录结构预览。"""
+        return _group(group_code)
+
+    @router.post("/field-groups/{group_code}/levels")
+    def save_group_structure_level(group_code: str, item: dict[str, Any]) -> dict[str, Any]:
+        try:
+            save_group_level(repository.database, group_code, item, str(item.get("originalKey") or ""))
+            sync_group_field_paths(repository.database, group_code)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        return _group(group_code)
+
+    @router.delete("/field-groups/{group_code}/levels/{level_key}")
+    def delete_group_structure_level(group_code: str, level_key: str) -> dict[str, Any]:
+        delete_group_level(repository.database, group_code, level_key)
+        sync_group_field_paths(repository.database, group_code)
+        return _group(group_code)
+
+    @router.put("/field-groups/{group_code}/fields/{field_code}/level")
+    def move_group_field_level(group_code: str, field_code: str, item: dict[str, Any]) -> dict[str, Any]:
+        try:
+            move_field_to_level(repository.database, group_code, field_code, str(item.get("levelKey") or ""))
+            sync_group_field_paths(repository.database, group_code)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        return _group(group_code)
 
     @router.post("/field-groups/{group_code}/chapters")
     def assign_group_chapter(group_code: str, item: dict[str, Any]) -> dict[str, Any]:

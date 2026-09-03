@@ -3,7 +3,7 @@ import re
 import zipfile
 
 from .docx_language import write_docx_parts_atomic
-from .table_layout_rules import TableLayoutRules
+from .table_layout_rules import TableLayoutRules, repeat_bookmark_name
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -84,7 +84,7 @@ def _physical_table_number(layout: TableLayoutRules, table_no: str,
 
 
 def _ensure_repeat_bookmark(document: etree._Element, tag: str, table_no: str) -> bool:
-    bookmark_name = f"repeat_{table_no.lower()}_row"
+    bookmark_name = repeat_bookmark_name(table_no)
     if document.xpath(f".//w:bookmarkStart[@w:name='{bookmark_name}']", namespaces=NS):
         return False
     controls = document.xpath(
@@ -248,7 +248,7 @@ def compile_template(source: Path, output: Path, mappings: list[dict[str, Any]],
                 if cell_number < 1 or cell_number > len(cells):
                     raise IndexError(f"数据行只有 {len(cells)} 个物理单元格")
                 action = _wrap_cell(cells[cell_number - 1], tag, mapping["wordLabel"])
-                bookmark_name = f"repeat_{table_no.lower()}_row"
+                bookmark_name = repeat_bookmark_name(table_no)
                 if not rows[row_index].xpath(f"./w:bookmarkStart[@w:name='{bookmark_name}']", namespaces=NS):
                     bookmark = etree.Element(W + "bookmarkStart")
                     bookmark.set(W + "id", str(2000 + index))

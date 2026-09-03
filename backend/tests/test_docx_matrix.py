@@ -1,6 +1,19 @@
+"""转置矩阵表：一条记录占一列。横向分组的用例见 test_docx_group_columns.py。"""
+
 from lxml import etree
 
-from backend.app.services.docx_matrix import fill_matrix_tables as _fill_matrix_table
+from backend.app.services.docx_matrix import fill_matrix_tables
+
+
+WARNINGS: list[tuple[str, str, str]] = []
+
+
+def _warn(code: str, table_no: str, message: str) -> None:
+    WARNINGS.append((code, table_no, message))
+
+
+def _fill_matrix_table(document, table_no, records, layout) -> None:
+    fill_matrix_tables(document, table_no, records, layout, _warn)
 
 LINEARITY_LAYOUT = {
     "rowFields": [
@@ -72,36 +85,3 @@ def test_linearity_matrix_clones_one_table_per_five_points() -> None:
     assert len(tables) == 2
     assert "".join(tables[0].xpath("./w:tr[1]/w:tc[2]//w:t/text()", namespaces=NS)) == "C1"
     assert "".join(tables[1].xpath("./w:tr[1]/w:tc[2]//w:t/text()", namespaces=NS)) == "C1"
-
-
-def test_system_suitability_matrix_fills_horizontal_values_rsd_and_conclusion() -> None:
-    document = _matrix_document(row_count=10)
-    layout = {
-        "headerRows": 2,
-        "columnGroups": [{
-            "headerField": "impurityName",
-            "columns": [{"label": "保留时间（min）", "field": "retentionTime", "decimalPlaces": 3},
-                        {"label": "峰面积", "field": "peakArea"}],
-        }],
-        "dataRows": {"start": 3, "end": 8, "labelField": "solutionName", "sortField": "sequence"},
-        "summaryRows": [{"row": 9, "label": "RSD（n=6，%）",
-                         "fields": ["retentionTimeRsd", "peakAreaRsd"]}],
-        "conclusionRow": {"row": 10, "label": "结论", "field": "conclusion", "template": "{recordCount}针系统适用性溶液中，{impurityNames}保留时间RSD均为{retentionTimeRsds}%。"},
-    }
-    records = [
-        {"impurityName": "杂质A", "solutionName": "系统适用性溶液-1", "sequence": 1, "retentionTime": 4.21, "peakArea": 100,
-         "retentionTimeRsd": "0.1", "peakAreaRsd": "1.4"},
-        {"impurityName": "杂质B", "solutionName": "系统适用性溶液-1", "sequence": 1, "retentionTime": 5.358, "peakArea": 200,
-         "retentionTimeRsd": "0.1", "peakAreaRsd": "0.3"},
-    ]
-    _fill_matrix_table(document, "T20", records, layout)
-
-    assert _cell_text(document, 0, 1) == "杂质A"
-    assert _cell_text(document, 0, 2) == "杂质B"
-    assert _cell_text(document, 2, 0) == "系统适用性溶液-1"
-    assert _cell_text(document, 2, 1) == "4.210"
-    assert _cell_text(document, 2, 4) == "200"
-    assert _cell_text(document, 8, 1) == "0.1"
-    assert _cell_text(document, 8, 4) == "0.3"
-    assert _cell_text(document, 9, 0) == "结论"
-    assert _cell_text(document, 9, 1) == "1针系统适用性溶液中，杂质A、杂质B保留时间RSD均为0.1%。"

@@ -20,3 +20,5 @@ templates/drafts/
 .env
 *.log
 data/backups/
+data/logs/
+data/runtime/

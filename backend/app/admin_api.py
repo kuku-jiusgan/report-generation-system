@@ -15,9 +15,11 @@ from fastapi.responses import FileResponse
 from lxml import etree
 
 from .config import Settings
+from .database import now_iso
 from .auth import AuthManager
 from .onlyoffice_callback import assert_document_server_url, callback_status, verified_callback_payload
 from .services.rule_admin import RuleAdminRepository
+from .services.docx_control_index import control_locations, describe_binding
 from .services.system_field_groups import list_system_field_groups
 from .services.docx_language import ensure_simplified_chinese
 from .admin_routes.rule_catalog import register_rule_catalog_routes
@@ -101,6 +103,12 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
 
     def designer_payload() -> dict[str, Any]:
         mappings = repository.list_mappings()
+        # 绑定状态以草稿文档为准：控件在 ONLYOFFICE 里被删掉后映射行还在，
+        # 只看映射会把早已失效的绑定显示成正常的。
+        workspace = repository.active_workspace()
+        locations = control_locations(workspace.get("templateFile") if workspace else None)
+        mappings = [{**item, **describe_binding(locations, str(item.get("controlTag") or ""))}
+                    for item in mappings]
         standard_groups = list_system_field_groups(repository.database)
         chapter_rows = repository.list_template_chapters()
         table_rules = repository.list_table_rules()
@@ -325,9 +333,15 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         active = repository.active_workspace()
         if not active:
             raise HTTPException(409, "没有活动模板版本")
-        table = item.get("tableRule") or {}
+        table = dict(item.get("tableRule") or {})
+        # 标准编组的布局必须从嵌套 tableRule 统一落库；拒绝仅保存内容块而丢失表格规则。
+        if table.get("mode") in {"MATRIX", "TABLE_REPEAT", "ROW_REPEAT"}:
+            table["mode"] = str(table["mode"])
+            if table["mode"] == "MATRIX" and not str(table.get("matrixLayout") or "").strip():
+                raise HTTPException(422, "矩阵填充必须配置矩阵布局")
         table_no = str(table.get("tableNo") or next((str(row.get("tableNo") or "") for row in repository.list_mappings()
-                                                     if str(row.get("standardFieldCode") or "").startswith(f"{group_code}.") and row.get("tableNo")), f"GROUP:{group_code}"))
+                                                     if str(row.get("standardFieldCode") or "").startswith(f"{group_code}.")
+                                                     and str(row.get("tableNo") or "").startswith("T")), f"GROUP:{group_code}"))
         table = {**table, "tableNo": table_no}
         if not int(table.get("physicalTableIndex") or 0):
             tags = [str(row.get("controlTag") or "") for row in repository.list_mappings()
@@ -350,9 +364,17 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                 "kind": item.get("kind", "MAPPED_FIELD"), "orderNo": item.get("orderNo", 0),
                 "enabled": item.get("enabled", True), "tableRule": table}
         try:
+            if table.get("mode") in {"MATRIX", "TABLE_REPEAT"}:
+                with repository.database.connect() as connection:
+                    connection.execute(
+                        "UPDATE admin_mapping_rules SET table_no=%s,repeat_type='ROW',repeat_key=%s,updated_at=%s "
+                        "WHERE standard_field_code LIKE %s",
+                        (table_no, table.get("recordKey", ""), now_iso(), f"{group_code}.%"),
+                    )
             result = repository.save_template_block(active["versionId"], item)
             if table:
-                repository.upsert_table_rule({**table, "tableNo": table_no, "groupKey": group_code})
+                saved_rule = repository.upsert_table_rule({**table, "tableNo": table_no, "groupKey": group_code})
+                result["tableRule"] = saved_rule
             repository.save_active_workspace()
             return result
         except (KeyError, ValueError) as error:

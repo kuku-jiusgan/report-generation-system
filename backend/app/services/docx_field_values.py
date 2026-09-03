@@ -60,13 +60,20 @@ def repeat_source(path: str) -> tuple[str, str] | None:
 
 
 def record_value(record: Any, field_path: str) -> Any:
+    """按相对路径取值；路径里的 `[*]` 表示进入记录内的明细数组，返回该层的取值列表。"""
     current = record
     if not field_path:
         return current
     for part in field_path.split("."):
-        if not isinstance(current, dict):
+        key, many = (part[:-3], True) if part.endswith("[*]") else (part, False)
+        if isinstance(current, list):
+            current = [item.get(key) if isinstance(item, dict) else None for item in current]
+        elif isinstance(current, dict):
+            current = current.get(key)
+        else:
             return None
-        current = current.get(part)
+        if many and not isinstance(current, list):
+            return None
     return current
 
 

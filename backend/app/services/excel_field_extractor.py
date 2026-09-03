@@ -5,34 +5,7 @@ from typing import Any
 from .excel_rule_engine import ExcelRuleError, WorkbookValues
 from .excel_chart_extractor import ExcelChartError, extract_residual_chart_values
 from .excel_validation_payload import enrich_excel_payload
-
-
-def _set_path(payload: dict[str, Any], path: str, value: Any) -> None:
-    raw_parts = [part for part in path.removeprefix("$").lstrip(".").split(".") if part]
-    is_many = any("[*]" in part for part in raw_parts)
-    parts = [part.replace("[*]", "") for part in raw_parts]
-    if not parts:
-        raise ExcelRuleError("Excel 规则缺少标准 JSON 路径")
-    if is_many and len(parts) >= 2:
-        collection = payload.setdefault(parts[0], [])
-        if not isinstance(collection, list):
-            collection = []
-            payload[parts[0]] = collection
-        while len(collection) < len(value) if isinstance(value, list) else 0:
-            collection.append({})
-        field_name = parts[-1]
-        for index, item in enumerate(value if isinstance(value, list) else []):
-            if not isinstance(collection[index], dict):
-                collection[index] = {}
-            if isinstance(item, dict):
-                collection[index].update(item)
-            else:
-                collection[index][field_name] = item
-        return
-    current = payload
-    for part in parts[:-1]:
-        current = current.setdefault(part, {})
-    current[parts[-1]] = value
+from .payload_paths import PayloadPathError, path_depth, set_payload_path
 
 
 def _cell(reader: WorkbookValues, config: dict[str, Any]) -> Any:
@@ -142,7 +115,11 @@ def _path_values(payload: dict[str, Any], path: str) -> list[Any]:
     current: Any = payload
     for part in parts:
         if isinstance(current, list):
-            current = [item.get(part) if isinstance(item, dict) else None for item in current]
+            collected: list[Any] = []
+            for item in current:
+                value = item.get(part) if isinstance(item, dict) else None
+                collected.extend(value) if isinstance(value, list) else collected.append(value)
+            current = collected
         elif isinstance(current, dict):
             current = current.get(part)
         else:
@@ -180,6 +157,7 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
         if rule.get("enabled", True) and rule.get("sourceType") == "EXCEL":
             rules_by_field.setdefault(str(rule["fieldCode"]), []).append(rule)
     generated: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    pending: list[tuple[str, str, Any]] = []
     for field_code, candidates in rules_by_field.items():
         field = fields_by_code.get(field_code)
         if not field:
@@ -199,19 +177,22 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
                 continue
             value = _normalize_cardinality(value, field, field_code, reader.warnings)
             if value not in (None, "", []):
-                _set_path(payload, str(config.get("sourcePath") or field.get("legacyJsonPath") or field_code), value)
+                pending.append((field_code, str(config.get("sourcePath") or field.get("legacyJsonPath")
+                                                or field_code), value))
                 break
-    for field_code, field, config in generated:
+    # 分层编组里明细层要按外层数组切分，必须等分组层先把外层建好，所以按数组层数排序写入
+    for field_code, target, value in sorted(pending, key=lambda item: path_depth(item[1])):
         try:
-            value = _generated_sequences(payload, fields_by_code, config)
-            _set_path(payload, str(config.get("sourcePath") or field.get("legacyJsonPath") or field_code), value)
-        except (ExcelRuleError, KeyError, TypeError, ValueError) as error:
+            set_payload_path(payload, target, value)
+        except PayloadPathError as error:
+            reader.warnings.append(f"字段 {field_code} 落位失败：{error}")
+    for field_code, field, config in generated:
+        target = str(config.get("sourcePath") or field.get("legacyJsonPath") or field_code)
+        try:
+            set_payload_path(payload, target, _generated_sequences(payload, fields_by_code, config))
+        except (ExcelRuleError, PayloadPathError, KeyError, TypeError, ValueError) as error:
             reader.warnings.append(f"字段 {field_code} 序号生成失败：{error}")
     enrich_excel_payload(payload)
-    conclusion = payload.get("systemSuitabilityConclusion")
-    records = payload.get("systemSuitability")
-    if conclusion not in (None, "") and isinstance(records, list) and records:
-        records[0]["conclusion"] = conclusion
     payload["_meta"] = {"format": "CONFIGURED_FIELD_RULES", "warnings": reader.warnings,
                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     return payload
