@@ -357,9 +357,13 @@ def ensure_excel_field_rules(database: Any) -> None:
     first_sync = not database.migration_applied(EXCEL_LAYOUT_MIGRATION)
     if first_sync:
         _sync_excel_field_paths(database)
-    for field_code, source_path in EXCEL_FIELD_PATHS.items():
-        if not database.get_lims_field(field_code):
+    for field_code, default_path in EXCEL_FIELD_PATHS.items():
+        field = database.get_lims_field(field_code)
+        if not field:
             continue
+        # 字段目录里的 JSON 路径由编组层级推导，是权威值；这里的常量只在字段目录没有路径时兜底。
+        # 否则编组改成分层结构后，每次启动都会照常量再建一条一级路径的规则，把结构撑坏。
+        source_path = str(field.get("legacyJsonPath") or "") or default_path
         excel_rules = [rule for rule in database.list_system_field_rules(field_code)
                        if rule.get("sourceType") == "EXCEL"]
         existing: list[dict[str, Any]] = []
