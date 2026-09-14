@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
@@ -22,7 +22,6 @@ from .auth import AuthManager, create_auth_router
 from .management_api import create_management_router
 from .lims_api import create_lims_router
 from .schemas import (
-    ApplyLimsRequest,
     ChangeEvent,
     CreateReportRequest,
     FieldBinding,
@@ -31,18 +30,12 @@ from .schemas import (
     SourceDocument,
     UpdateReportRequest,
 )
-from .services.lims_normalizer import merge_instances
-from .services.lims_files import migrate_stored_lims_file_urls
-from .logging_config import configure_logging
-
 logger = logging.getLogger(__name__)
 from .services.mapped_docx_generator import build_mapped_docx
 from .services.system_field_resolver import resolve_system_fields
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
 from .services.template_block_rules import apply_template_block_rules
-from .services.excel_rule_defaults import ensure_excel_field_rules
-from .services.content_block_cleanup import remove_legacy_content_blocks
 from .services.excel_report_source import apply_excel_source, apply_pdf_source, build_source_document
 from .services.rule_admin import RuleAdminRepository
 from .services.template_compiler import compile_template
@@ -51,6 +44,7 @@ from .report_utils import (
     binding_label, default_report_data, flatten_values, manual_edit_locked, resolved_report_title,
 )
 from .report_word_api import create_report_word_router
+from .report_lims_api import create_report_lims_router
 from .report_source_api import create_report_source_router
 from .onlyoffice_bridge_api import create_onlyoffice_bridge_router
 
@@ -59,40 +53,10 @@ settings = get_settings()
 database = Database(settings)
 rule_admin = RuleAdminRepository(database, settings.data_dir.parent / "mapping" / "template-mapping.json")
 auth = AuthManager(database, settings)
-REPORT_LIFECYCLE_MIGRATION = "2026_report_lifecycle_reset_v1"
-
-
-def apply_report_lifecycle_migration() -> None:
-    if database.migration_applied(REPORT_LIFECYCLE_MIGRATION):
-        return
-    database.clear_report_test_data()
-    for directory in (settings.reports_dir, settings.uploads_dir):
-        for path in directory.iterdir():
-            if path.name == ".gitkeep":
-                continue
-            if path.is_dir():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-    database.mark_migration_applied(REPORT_LIFECYCLE_MIGRATION)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    settings.ensure_directories()
-    configure_logging(settings.data_dir)
-    database.initialize()
-    apply_report_lifecycle_migration()
-    bootstrap_user_id = auth.bootstrap()
-    if bootstrap_user_id:
-        database.backfill_report_ownership(bootstrap_user_id)
-    rule_admin.seed()
-    remove_legacy_content_blocks(database)
-    ensure_excel_field_rules(database)
-    # 文件地址迁移只需执行一次，避免每次启动扫描全部实验和报告数据。
-    if not database.migration_applied("LIMS_FILE_URLS_MYSQL_V1"):
-        migrate_stored_lims_file_urls(database, settings.lims_file_base_url)
-        database.mark_migration_applied("LIMS_FILE_URLS_MYSQL_V1")
     yield
 
 
@@ -199,11 +163,21 @@ def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[
                 "template_version": f"V{active['versionNo']}" if active else "V1.0",
                 "template_revision": revision,
             }
+    # 走到这里说明模板库里没有可用的已发布版本。以前会静默拿基座模板顶上，
+    # 生成出来的报告外观相近却不是用户配的那套模板，很难一眼看出来——直接拦住。
+    workspace = rule_admin.active_workspace()
+    if workspace:
+        raise RuntimeError(
+            f"当前模板「{workspace.get('templateName') or ''}」的 V{workspace.get('versionNo')} 版本还是"
+            f"{'草稿' if workspace.get('versionStatus') == 'DRAFT' else workspace.get('versionStatus')}状态，"
+            f"运行时只使用已发布版本。请在模板设计器中发布该版本后再生成报告。"
+        )
     output = settings.template_path.parent / "compiled" / "runtime-report-template.docx"
     report = compile_template(settings.template_path, output, mappings, snapshot["tableRules"])
     if not report["valid"]:
         raise RuntimeError(_compile_failure_message(report))
     return output, mappings, snapshot["tableRules"], {
+        "template_name": "系统基座模板",
         "template_version": "V1.0",
         "template_revision": hashlib.sha256(output.read_bytes()).hexdigest(),
     }
@@ -239,16 +213,26 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
     output_name = (f"report-{item['id']}-{output_suffix}.docx" if output_suffix
                    else f"report-{item['id']}-working.docx")
     source_payloads = data.get("source_payloads", {})
-    active_payload = dict(payload or source_payloads.get("LIMS") or {})
+    active_payload = payload or next(
+        (source_payloads.get(name) for name in ("EXCEL", "LIMS", "PDF")
+         if isinstance(source_payloads.get(name), dict)), {}
+    )
     apply_group_contracts(active_payload, list_system_field_groups(database))
+    if not payload:
+        for source_name in ("EXCEL", "LIMS", "PDF"):
+            if source_payloads.get(source_name) is active_payload:
+                data.setdefault("source_payloads", {})[source_name] = active_payload
+                break
     bound_codes = {str(mapping.get("standardFieldCode") or "") for mapping in mappings}
     all_fields = database.list_lims_fields()
     all_rules = database.list_system_field_rules()
     rules_by_field = {}
     for rule in all_rules:
         rules_by_field.setdefault(str(rule.get("fieldCode") or ""), []).append(rule)
-    required_codes = set(bound_codes)
-    pending_codes = list(bound_codes)
+    # 字段解析面向整个标准字段目录；模板绑定字段只决定 Word 渲染内容。
+    # 这样生成历史可以完整记录本次源数据实际解析出的字段，而不遗漏未绑定字段。
+    required_codes = {str(field.get("fieldCode") or "") for field in all_fields}
+    pending_codes = list(required_codes)
     while pending_codes:
         code = pending_codes.pop()
         for rule in rules_by_field.get(code, []):
@@ -280,6 +264,12 @@ def require_automatic_edit_allowed(item: dict) -> None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "storage": "local", "database": "mysql"}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    # 浏览器会自动请求 favicon；没有图标时返回 204，避免把无关 404 混入排障日志。
+    return Response(status_code=204)
 
 
 @app.get(f"{settings.api_prefix}/reports", response_model=list[ReportTask])
@@ -355,37 +345,53 @@ def download_generation(generation_id: str,
 @app.post(f"{settings.api_prefix}/reports", response_model=ReportTask)
 def create_report(request: CreateReportRequest,
                   user: dict = Depends(auth.require("REPORT_CREATE"))) -> ReportTask:
-    source = required_source(request.source_document_id) if request.source_document_id else None
-    excel_source = required_source(request.excel_document_id) if request.excel_document_id else None
-    if excel_source and excel_source.get("source_type") != "EXCEL":
-        raise HTTPException(422, "Excel 数据源类型无效")
-    data = request.data.model_dump() if request.data else default_report_data()
-    *_, template_meta = runtime_template_and_mappings()
-    data.update(template_meta)
-    if source:
-        apply_pdf_source(data, source)
-    if excel_source:
-        apply_excel_source(data, excel_source, settings.api_prefix)
-    if not data["project_name"] and data["sample"]:
-        data["project_name"] = f"{data['sample']}分析报告"
-    report_id = uuid.uuid4().hex
-    timestamp = now_iso()
-    item = database.create_report(
-        {
-            "id": report_id,
-            "title": resolved_report_title(request.title, data),
-            "status": "DATA_REVIEW",
-            "source_document_id": request.source_document_id,
-            "resolved_data": data,
-            "created_at": timestamp,
-            "updated_at": timestamp,
-            "created_by": user["id"],
-            "updated_by": user["id"],
-        }
-    )
-    database.create_version(report_id, data, "初始版本")
-    record_generation(report_id, data, "创建报告", user["id"])
-    return report_response(item)
+    report_id = ""
+    try:
+        source = required_source(request.source_document_id) if request.source_document_id else None
+        excel_source = required_source(request.excel_document_id) if request.excel_document_id else None
+        if excel_source and excel_source.get("source_type") != "EXCEL":
+            raise HTTPException(422, "Excel 数据源类型无效")
+        data = request.data.model_dump() if request.data else default_report_data()
+        *_, template_meta = runtime_template_and_mappings()
+        data.update(template_meta)
+        if source:
+            apply_pdf_source(data, source)
+        if excel_source:
+            apply_excel_source(data, excel_source, settings.api_prefix)
+        for source_name in ("EXCEL", "LIMS", "PDF"):
+            source_payload = data.get("source_payloads", {}).get(source_name)
+            if isinstance(source_payload, dict):
+                apply_group_contracts(source_payload, list_system_field_groups(database))
+        if not data["project_name"] and data["sample"]:
+            data["project_name"] = f"{data['sample']}分析报告"
+        report_id = uuid.uuid4().hex
+        timestamp = now_iso()
+        item = database.create_report(
+            {
+                "id": report_id,
+                "title": resolved_report_title(request.title, data),
+                "status": "DATA_REVIEW",
+                "source_document_id": request.source_document_id,
+                "resolved_data": data,
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "created_by": user["id"],
+                "updated_by": user["id"],
+            }
+        )
+        database.create_version(report_id, data, "初始版本")
+        record_generation(report_id, data, "创建报告", user["id"])
+        return report_response(item)
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("报告创建失败 user_id=%s", user.get("id"))
+        if report_id:
+            try:
+                database.delete_report(report_id)
+            except Exception:
+                logger.exception("清理失败的报告草稿失败 report_id=%s", report_id)
+        raise HTTPException(500, f"创建报告失败：{error}") from error
 
 
 @app.get(f"{settings.api_prefix}/reports/{{report_id}}", response_model=ReportTask)
@@ -486,11 +492,13 @@ def generate_report(report_id: str, user: dict = Depends(auth.require("REPORT_GE
     try:
         logger.info("开始生成报告 report_id=%s user_id=%s", report_id, user.get("id"))
         item = required_owned_report(report_id, user)
-        working_path = settings.reports_dir / f"report-{report_id}-working.docx"
-        if not working_path.exists():
-            output_name = render_report_word(item, item["resolved_data"])
-            item = database.update_report(report_id, output_name=output_name, status="EDITING") or item
-            working_path = settings.reports_dir / output_name
+        # 每次正式生成都重新按当前标准字段目录和提取规则解析，避免复用旧工作文件。
+        output_name = render_report_word(item, item["resolved_data"])
+        item = database.update_report(
+            report_id, output_name=output_name, status="EDITING",
+            resolved_data=item["resolved_data"], updated_by=user["id"],
+        ) or item
+        working_path = settings.reports_dir / output_name
         logger.info("报告工作文件已准备 report_id=%s path=%s", report_id, working_path)
         version = database.create_version(report_id, item["resolved_data"], "报告生成")
         generation_id = uuid.uuid4().hex
@@ -557,96 +565,6 @@ def rebuild_report_word(report_id: str, user: dict = Depends(auth.require("REPOR
     ))
 
 
-@app.post(f"{settings.api_prefix}/reports/{{report_id}}/apply-lims-legacy", response_model=ReportTask,
-          include_in_schema=False)
-def apply_lims_to_report(report_id: str, request: ApplyLimsRequest) -> ReportTask:
-    raise HTTPException(410, "旧版 LIMS 接口已停用")
-
-
-@app.post(f"{settings.api_prefix}/reports/{{report_id}}/apply-lims", response_model=ReportTask)
-def apply_lims_instances_to_report(report_id: str, request: ApplyLimsRequest,
-                                   user: dict = Depends(auth.require("REPORT_EDIT"))) -> ReportTask:
-    item = required_owned_report(report_id, user)
-    if item.get("word_edit_locked") and not request.force:
-        raise manual_edit_locked()
-    imported = database.get_lims_import(request.import_id)
-    if not imported:
-        raise HTTPException(404, "LIMS 导入记录不存在")
-    try:
-        instances = []
-        for instance_id in request.instance_ids:
-            payload = database.get_lims_normalized_payload(request.import_id, instance_id)
-            if payload is None:
-                raise KeyError(instance_id)
-            instances.append(payload)
-        recognition = merge_instances(instances, request.conflict_resolutions, normalized=True)
-        if recognition["unresolvedConflictCount"]:
-            raise HTTPException(409, {
-                "message": "存在未处理的 LIMS 数据冲突",
-                "conflicts": recognition["conflicts"],
-            })
-        payload = recognition["payload"]
-        apply_group_contracts(payload, list_system_field_groups(database))
-    except KeyError as error:
-        raise HTTPException(404, f"LIMS 实验记录不存在：{error.args[0]}") from error
-    except HTTPException:
-        raise
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
-    except Exception as error:
-        raise HTTPException(422, f"LIMS 数据读取失败：{error}") from error
-
-    data = dict(item["resolved_data"])
-    sample = payload.get("samples", [{}])[0] if payload.get("samples") else {}
-    first_instance = instances[0]
-    author = first_instance.get("createdBy", "")
-    values = {
-        "report_no": payload.get("document", {}).get("code") or "+".join(request.instance_ids),
-        "project_name": payload.get("project", {}).get("name") or first_instance.get("title", ""),
-        "sample": sample.get("sampleName", ""),
-        "customer": sample.get("clientName", ""),
-        "author": author or "",
-        "template_version": payload.get("document", {}).get("version") or data.get("template_version", "V1.0"),
-    }
-    sources = dict(data.get("field_sources", {}))
-    originals = dict(data.get("original_values", {}))
-    for code, value in values.items():
-        if value in (None, ""):
-            continue
-        old_value = str(data.get(code) or "")
-        value = str(value)
-        data[code] = value
-        sources[code] = {"type": "LIMS", "record_id": sample.get("sourceRecordId") or request.instance_ids[0]}
-        originals[code] = value
-        if old_value != value:
-            database.add_change(
-                report_id, code, old_value, value, user["display_name"], "载入 LIMS 数据"
-            )
-    data["field_sources"] = sources
-    data["original_values"] = originals
-    source_payloads = dict(data.get("source_payloads", {}))
-    source_payloads["LIMS"] = payload
-    source_payloads["LIMS_RECOGNITION"] = {
-        "recognizedCounts": recognition["recognizedCounts"],
-        "duplicateCount": recognition["duplicateCount"],
-        "unmatched": recognition["unmatched"],
-        "instances": payload["instances"],
-    }
-    data["source_payloads"] = source_payloads
-    try:
-        output_name = render_report_word(item, data, payload,
-                                         phase="载入 LIMS 实验记录", actor=user["id"])
-    except Exception as error:
-        raise HTTPException(500, f"LIMS 数据填充 Word 失败：{error}") from error
-    updated = database.update_report(
-        report_id, title=resolved_report_title(item.get("title"), data), resolved_data=data,
-        status="EDITING", output_name=output_name, updated_by=user["id"],
-        word_edit_locked=0, word_edited_at=None,
-    )
-    database.create_version(report_id, data, f"载入 LIMS 实验记录 {', '.join(request.instance_ids)}")
-    return report_response(updated)
-
-
 app.include_router(create_report_word_router(
     database, settings, auth, rule_admin, required_report, required_owned_report,
     runtime_template_and_mappings, render_report_word, require_automatic_edit_allowed,
@@ -654,6 +572,9 @@ app.include_router(create_report_word_router(
 ))
 app.include_router(create_report_source_router(database, settings, auth, required_owned_report,
                                                report_response, render_report_word))
+app.include_router(create_report_lims_router(
+    database, settings, auth, required_owned_report, report_response, render_report_word,
+))
 
 frontend_dist = settings.data_dir.parent / "frontend" / "dist"
 if frontend_dist.exists():

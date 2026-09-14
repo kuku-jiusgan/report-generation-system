@@ -17,10 +17,12 @@ from lxml import etree
 from .config import Settings
 from .database import now_iso
 from .auth import AuthManager
-from .onlyoffice_callback import assert_document_server_url, callback_status, verified_callback_payload
+from .onlyoffice_callback import (
+    assert_document_server_url, callback_status, is_current_document_key, verified_callback_payload,
+)
 from .services.rule_admin import RuleAdminRepository
 from .services.docx_control_index import control_locations, describe_binding
-from .services.system_field_groups import list_system_field_groups
+from .services.designer_blocks import designer_blocks
 from .services.docx_language import ensure_simplified_chinese
 from .admin_routes.rule_catalog import register_rule_catalog_routes
 from .admin_routes.data_sources import register_data_source_routes
@@ -85,22 +87,6 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         repository.set_version_document_key(version_id, None)
         return target
 
-    def block_kind(items: list[dict[str, Any]], table: dict[str, Any] | None) -> str:
-        sources = {item.get("sourceType") for item in items}
-        if sources == {"FIXED"}:
-            return "FIXED"
-        if table and table.get("mode") == "TABLE_REPEAT":
-            return "TABLE_REPEAT"
-        if table and table.get("mode") == "MATRIX":
-            return "MATRIX"
-        if table or any(item.get("repeatType") not in {"", "NONE"} for item in items):
-            return "REPEATING_TABLE"
-        if "AI" in sources:
-            return "AI_NARRATIVE"
-        if "CALCULATED" in sources:
-            return "CALCULATED"
-        return "MAPPED_FIELD"
-
     def designer_payload() -> dict[str, Any]:
         mappings = repository.list_mappings()
         # 绑定状态以草稿文档为准：控件在 ONLYOFFICE 里被删掉后映射行还在，
@@ -109,55 +95,19 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         locations = control_locations(workspace.get("templateFile") if workspace else None)
         mappings = [{**item, **describe_binding(locations, str(item.get("controlTag") or ""))}
                     for item in mappings]
-        standard_groups = list_system_field_groups(repository.database)
+        standard_catalog = repository.standard_field_catalog()
+        standard_groups = standard_catalog["groups"]
         chapter_rows = repository.list_template_chapters()
         table_rules = repository.list_table_rules()
         active = repository.active_workspace()
         configured_blocks = {
             row["standardGroupCode"]: row for row in repository.list_template_blocks(active["versionId"])
         } if active else {}
-        # 内容块由系统标准编组装配。历史 admin_content_blocks 不属于模板设计器的
-        # 当前结构，不能在绑定字段后抢占标准编组展示位置。
-        blocks_by_chapter: dict[int, list[dict[str, Any]]] = {}
-        groups_by_chapter: dict[int, list[dict[str, Any]]] = {}
-        for group in standard_groups:
-            for chapter_id in group.get("chapterIds", []):
-                groups_by_chapter.setdefault(int(chapter_id), []).append(group)
-        # 系统标准编组是设计器的内容块来源；不依赖已删除的历史内容块记录。
-        for chapter_id, groups in groups_by_chapter.items():
-            for index, group in enumerate(groups):
-                codes = {field["fieldCode"] for field in group.get("fields", [])}
-                # 标准编组是系统目录定义的虚拟块；字段绑定应以标准字段编码为唯一归属，
-                # 不因版本恢复时章节关系表缺失而显示为“未绑定”。
-                items = [item for item in mappings if item.get("standardFieldCode") in codes
-                         and (item.get("chapterId") == chapter_id or not item.get("chapterId"))]
-                configured = configured_blocks.get(group["groupCode"], {})
-                configured_table_no = configured.get("tableNo") or f"GROUP:{group['groupCode']}"
-                table = next((rule for rule in table_rules
-                              if rule.get("tableNo") == configured_table_no), None)
-                if table is None:
-                    table = next((rule for rule in table_rules
-                                  if rule.get("groupKey") == group["groupCode"]), None)
-                if table is None and configured:
-                    table = next((rule for rule in table_rules
-                                  if rule.get("sectionCode") == configured.get("sectionCode")
-                                  and rule.get("tableNo")), None)
-                block_kind = configured.get("kind") or "MAPPED_FIELD"
-                blocks_by_chapter.setdefault(chapter_id, []).append({
-                    "id": -(chapter_id * 1000 + index + 1), "chapterId": chapter_id,
-                    "title": configured.get("title") or group["label"], "kind": block_kind,
-                    "tableNo": configured.get("tableNo", ""),
-                    "standardGroupCode": group["groupCode"], "standardFields": group.get("fields", []),
-                    "orderNo": configured.get("orderNo", index), "sourcePath": configured.get("sourcePath") or group.get("itemPath", ""),
-                    "repeatKey": configured.get("repeatKey") or group.get("itemKey", ""),
-                    "prototypeLocation": configured.get("prototypeLocation", ""),
-                    "dedupKey": configured.get("dedupKey", ""), "sortRule": configured.get("sortRule", ""),
-                    "emptyBehavior": configured.get("emptyBehavior", "KEEP"), "mergeRule": configured.get("mergeRule", "NONE"),
-                    "enabled": configured.get("enabled", group.get("enabled", True)), "mappingIds": [item["id"] for item in items],
-                    "controlTags": [item.get("controlTag") for item in items if item.get("controlTag")],
-                    "sources": sorted({item.get("sourceType") for item in items if item.get("sourceType")} ),
-                    "status": "READY" if configured else "UNCONFIGURED", "mappings": items, "tableRule": table,
-                })
+        # 历史 admin_content_blocks 不属于当前设计器结构。系统字段目录中的直属字段与
+        # 标准编组统一装配为虚拟块，字段归属只取后端目录元数据。
+        blocks_by_chapter, groups_by_chapter = designer_blocks(
+            standard_catalog["chapters"], standard_groups, mappings, configured_blocks, table_rules,
+        )
         nodes = {row["id"]: {**row, "blocks": blocks_by_chapter.get(row["id"], []),
                               "standardGroups": groups_by_chapter.get(row["id"], []), "children": []} for row in chapter_rows}
         roots: list[dict[str, Any]] = []
@@ -504,7 +454,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                     "autostart": ["asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"],
                     "pluginsData": [
                         f"{settings.onlyoffice_url}/sdkjs-plugins/"
-                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=18"
+                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=20"
                     ],
                 },
             },
@@ -564,9 +514,11 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         if not workspace or workspace["versionId"] != version_id:
             logger.warning("ONLYOFFICE 模板回调版本已失效，拒绝保存 version_id=%s", version_id)
             return {"error": 1}
-        if issued_key and callback_key != issued_key:
-            # 文档被编辑后，OnlyOffice 可能为回调生成新的 key；版本校验仍保证不会跨版本写入。
-            logger.info("ONLYOFFICE 模板回调 key 已轮换 version_id=%s", version_id)
+        if not is_current_document_key(issued_key, callback_key):
+            # 一个版本可能被多个设计器会话同时打开。旧会话的自动保存不能覆盖
+            # 当前会话刚写入的草稿，否则已创建的内容控件会在页面刷新后消失。
+            logger.warning("ONLYOFFICE 模板回调 key 已过期，拒绝保存 version_id=%s", version_id)
+            return {"error": 1}
         if not payload.get("url"):
             raise HTTPException(400, "ONLYOFFICE 回调缺少文件地址")
         try:

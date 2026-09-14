@@ -1,4 +1,3 @@
-from copy import deepcopy
 from typing import Any
 
 
@@ -20,7 +19,6 @@ LOQ_FIELDS = {
     "field6": "field_019",
     "field7": "field_020",
 }
-VALIDATION_RESULT_KEYS = ("lod", "loq")
 LINEARITY_FIELDS = {
     "solutionName": "field_021", "field2": "field_022", "peakArea": "field_023",
     "regressionEquation": "field_024", "correlationCoefficient": "field_025",
@@ -72,13 +70,3 @@ def enrich_excel_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if isinstance(record, dict) and index == 0:
                 record["conclusion"] = payload["systemSuitabilityConclusion"]
     return payload
-
-
-def merge_excel_validation_results(target: dict[str, Any], excel_payload: dict[str, Any]) -> dict[str, Any]:
-    merged = deepcopy(target)
-    enriched = enrich_excel_payload(deepcopy(excel_payload))
-    for key in VALIDATION_RESULT_KEYS:
-        value = enriched.get(key)
-        if isinstance(value, list) and value:
-            merged[key] = value
-    return merged

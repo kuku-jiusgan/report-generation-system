@@ -82,7 +82,14 @@ export interface DesignerBlock {
   chapterId: number;
   title: string;
   standardGroupCode?: string;
-  standardFields?: Array<{ fieldCode: string; label: string; fieldPath?: string; enabled: boolean }>;
+  standardFields?: Array<{
+    fieldCode: string;
+    label: string;
+    fieldPath?: string;
+    jsonKey?: string;
+    legacyJsonPath?: string;
+    enabled: boolean;
+  }>;
   kind: ContentBlockKind;
   tableNo: string;
   sourcePath: string;

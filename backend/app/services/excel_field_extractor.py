@@ -36,16 +36,20 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
         if mode.startswith("LINEAR_"):
             value = _linear_statistic(reader, config, repeat_index, mode)
             if config.get("broadcastRepeat"):
-                values.extend([value] * int(config.get("valueCount", 1)))
+                x_row = int(config.get("xRow", 1)) + repeat_index * int(config.get("rowStep", 0))
+                y_row = int(config.get("yRow", 1)) + repeat_index * int(config.get("rowStep", 0))
+                count = _horizontal_count(reader, config, x_row, int(config.get("startColumn", 1)), y_row)
+                values.extend([value] * count)
             else:
                 values.append(value)
             continue
         if mode == "HORIZONTAL_CELL":
             row = row_start + repeat_index * int(config.get("rowStep", 0))
             start = int(config.get("startColumn", 1))
+            count = _horizontal_count(reader, config, row, start)
             values.extend(reader.read(str(config.get("sheet") or ""), row, start + offset,
                                       bool(config.get("required")))
-                          for offset in range(int(config.get("valueCount", 1))))
+                          for offset in range(count))
             continue
         for row_index, row in enumerate(range(row_start, row_end + 1)):
             if mode == "INDEX":
@@ -73,9 +77,9 @@ def _linear_statistic(reader: WorkbookValues, config: dict[str, Any], repeat_ind
     sheet = str(config.get("sheet") or "")
     row_step = int(config.get("rowStep", 0))
     column = int(config.get("startColumn", 1))
-    count = int(config.get("valueCount", 5))
     x_row = int(config.get("xRow", 1)) + repeat_index * row_step
     y_row = int(config.get("yRow", 1)) + repeat_index * row_step
+    count = _horizontal_count(reader, config, x_row, column, y_row)
     pairs = [(reader.read(sheet, x_row, column + offset), reader.read(sheet, y_row, column + offset))
              for offset in range(count)]
     numeric = [(float(x), float(y)) for x, y in pairs if x not in (None, "") and y not in (None, "")]
@@ -98,6 +102,35 @@ def _linear_statistic(reader: WorkbookValues, config: dict[str, Any], repeat_ind
         return round(1 - residual / total, 6) if total else 1.0
     center = ys[len(ys) // 2]
     return round(abs(intercept) / center * 100, 2) if center else None
+
+
+def _horizontal_count(reader: WorkbookValues, config: dict[str, Any], row: int,
+                      start_column: int, paired_row: int | None = None) -> int:
+    mode = str(config.get("valueCountMode") or "CONFIGURED")
+    if mode == "CONFIGURED":
+        try:
+            count = int(config["valueCount"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ExcelRuleError("横向 Excel 规则必须配置 valueCount 或使用 UNTIL_BLANK") from error
+        if count < 1 or count > int(config.get("maxValueCount", 1000)):
+            raise ExcelRuleError("横向 Excel 规则的 valueCount 超出允许范围")
+        return count
+    if mode != "UNTIL_BLANK":
+        raise ExcelRuleError("横向 Excel 规则的 valueCountMode 只能是 CONFIGURED 或 UNTIL_BLANK")
+    try:
+        maximum = int(config.get("maxValueCount", 1000))
+    except (TypeError, ValueError) as error:
+        raise ExcelRuleError("横向 Excel 规则的 maxValueCount 必须是正整数") from error
+    if maximum < 1 or maximum > 10000:
+        raise ExcelRuleError("横向 Excel 规则的 maxValueCount 必须在 1 到 10000 之间")
+    count = 0
+    for offset in range(maximum):
+        value = reader.read(str(config.get("sheet") or ""), row, start_column + offset)
+        paired = reader.read(str(config.get("sheet") or ""), paired_row, start_column + offset) if paired_row else value
+        if value in (None, "") and paired in (None, ""):
+            break
+        count += 1
+    return count
 
 
 def _normalize_cardinality(value: Any, field: dict[str, Any], field_code: str,

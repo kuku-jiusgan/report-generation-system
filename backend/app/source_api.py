@@ -12,6 +12,8 @@ from .database import Database, now_iso
 from .schemas import SourceDocument
 from .services.pdf_extractor import extract_pdf
 from .services.excel_field_extractor import extract_excel_fields
+from .services.system_field_group_assembler import apply_group_contracts
+from .services.system_field_groups import list_system_field_groups
 
 
 def create_source_router(
@@ -78,12 +80,15 @@ def create_source_router(
                     settings.uploads_dir / item["stored_name"], database.list_lims_fields(True),
                     database.list_system_field_rules(),
                 )
+                # Excel 解析结果在落库前即固定为标准字段目录结构，报告创建阶段只复制该结果。
+                apply_group_contracts(payload, list_system_field_groups(database))
                 meta = payload.get("_meta", {})
                 updated = database.update_source_payload(
                     source_id, payload, list(meta.get("warnings", [])), str(meta.get("sha256", "")),
                 )
                 return source_response(updated)
-            fields = extract_pdf(settings.uploads_dir / item["stored_name"], source_id)
+            fields = extract_pdf(settings.uploads_dir / item["stored_name"], source_id,
+                                 database.list_lims_fields(True), database.list_system_field_rules())
         except Exception as error:
             kind = "Excel" if item.get("source_type") == "EXCEL" else "PDF"
             raise HTTPException(422, f"{kind} 解析失败：{error}") from error

@@ -45,4 +45,35 @@ def isolated_test_database() -> None:
                 f"CREATE DATABASE IF NOT EXISTS `{settings.mysql_database}` "
                 f"CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
             )
+            cursor.execute(f"SHOW TABLES FROM `{PRODUCTION_DATABASE}`")
+            tables = [row[0] for row in cursor.fetchall()]
+            for table in tables:
+                cursor.execute(
+                    f"CREATE TABLE IF NOT EXISTS `{settings.mysql_database}`.`{table}` "
+                    f"LIKE `{PRODUCTION_DATABASE}`.`{table}`"
+                )
         connection.commit()
+
+
+@pytest.fixture(autouse=True)
+def clean_test_database() -> None:
+    """Keep tests isolated while retaining the production schema shape."""
+    from backend.app.config import get_settings
+
+    settings = get_settings()
+    connection = pymysql.connect(
+        host=settings.mysql_host, port=settings.mysql_port,
+        user=settings.mysql_user, password=settings.mysql_password,
+        database=settings.mysql_database, charset="utf8mb4", autocommit=False,
+    )
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+            cursor.execute("SHOW TABLES")
+            tables = [row[0] for row in cursor.fetchall()]
+            for table in tables:
+                cursor.execute(f"DELETE FROM `{table}`")
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+        connection.commit()
+    finally:
+        connection.close()

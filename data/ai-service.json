@@ -1,6 +1,8 @@
 {
   "baseUrl": "https://api.deepseek.com",
   "apiKey": "sk-5429ff452f5748ea98c9eb9103682ef0",
-  "model": "deepseek-v4-flash",
-  "timeout": 60.0
+  "model": "deepseek-flash",
+  "timeout": 60.0,
+  "maxTokens": 800,
+  "thinkingEnabled": false
 }

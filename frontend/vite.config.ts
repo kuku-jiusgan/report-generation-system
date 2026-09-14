@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { resolve } from 'node:path'
 
 const devApiUrl = process.env.REPORT_DEV_API_URL || 'http://127.0.0.1:8010'
 
@@ -11,10 +10,6 @@ export default defineConfig({
     // 阈值略高于该稳定第三方包，避免将其误报为业务代码膨胀。
     chunkSizeWarningLimit: 1024,
     rollupOptions: {
-      input: {
-        report: resolve(__dirname, 'index.html'),
-        admin: resolve(__dirname, 'admin/index.html'),
-      },
       output: {
         manualChunks: {
           'vue-vendor': ['vue'],

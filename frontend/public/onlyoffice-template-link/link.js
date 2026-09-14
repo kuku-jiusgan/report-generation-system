@@ -31,10 +31,27 @@
     }).catch(function () {})
   }
 
-  function readControls() {
+  function readControls(onRead) {
     window.Asc.plugin.executeMethod('GetAllContentControls', [], function (result) {
       controls = Array.isArray(result) ? result : []
       send('controls', controls)
+      if (onRead) onRead(controls)
+    })
+  }
+
+  function waitForControl(tag, onReady, onTimeout, attempt) {
+    readControls(function (items) {
+      if (items.some(function (item) { return itemTag(item) === tag })) {
+        onReady()
+        return
+      }
+      if (attempt >= 20) {
+        onTimeout()
+        return
+      }
+      window.setTimeout(function () {
+        waitForControl(tag, onReady, onTimeout, attempt + 1)
+      }, 150)
     })
   }
 
@@ -193,11 +210,15 @@
             finish('bind-error', { nonce: command.nonce, message: 'Word 未能为当前选区创建内容控件，请重新选择文字后再试' })
             return
           }
-          function complete() {
-            readControls()
+          // Only report success after Word confirms that the new control is
+          // visible through GetAllContentControls. This keeps the host's
+          // force-save request behind the editor mutation instead of racing it.
+          waitForControl(command.tag, function () {
+            trace('plugin-bind-controls-read', command)
             finish('bind-result', { nonce: command.nonce, control: created, selectedText: text, existing: false })
-          }
-          complete()
+          }, function () {
+            finish('bind-error', { nonce: command.nonce, message: 'Word 已创建控件，但控件列表尚未同步，请稍后重试' })
+          }, 0)
         })
       })
     })

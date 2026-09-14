@@ -6,12 +6,12 @@ from zipfile import ZipFile
 from lxml import etree
 
 from backend.app.config import get_settings
-from backend.app.database import Database
 from backend.app.services.mapped_docx_generator import build_mapped_docx
 from backend.app.services.rule_admin import RuleAdminRepository
 from backend.app.services.template_compiler import compile_template
 from backend.app.services.docx_repeat_rows import fill_repeat_rows
 from backend.app.services.table_layout_rules import TableLayoutRules
+from backend.tests.database_helpers import make_test_database
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +20,7 @@ NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 class ContentBlockRegressionTest(unittest.TestCase):
     def repository(self, directory: str) -> RuleAdminRepository:
-        database = Database(Path(directory) / "rules.db")
+        database = make_test_database(Path(directory))
         database.initialize()
         repository = RuleAdminRepository(database, ROOT / "mapping" / "template-mapping.json")
         repository.seed()

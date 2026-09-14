@@ -85,3 +85,37 @@ def test_linearity_matrix_clones_one_table_per_five_points() -> None:
     assert len(tables) == 2
     assert "".join(tables[0].xpath("./w:tr[1]/w:tc[2]//w:t/text()", namespaces=NS)) == "C1"
     assert "".join(tables[1].xpath("./w:tr[1]/w:tc[2]//w:t/text()", namespaces=NS)) == "C1"
+
+
+def test_horizontal_matrix_expands_configured_rows_and_preserves_fixed_rows() -> None:
+    document = _matrix_document(row_count=10)
+    records = [{
+        "solutionName": f"C{index}", "field2": index * 2, "peakArea": index * 100,
+        "regressionEquation": "y = 2x", "correlationCoefficient": 0.99,
+    } for index in range(1, 8)]
+    layout = {
+        "rowFields": [
+            {"row": 1, "field": "solutionName"},
+            {"row": 2, "field": "field2"},
+            {"row": 3, "field": "peakArea"},
+        ],
+        "scalarCells": [
+            {"row": 4, "column": 2, "field": "regressionEquation"},
+            {"row": 6, "column": 2, "field": "correlationCoefficient"},
+        ],
+        "columnPolicy": {
+            "mode": "DATA_LENGTH", "minColumns": 5,
+            "overflow": "HORIZONTAL", "widthMode": "PROTOTYPE",
+        },
+    }
+
+    _fill_matrix_table(document, "T20", records, layout)
+
+    tables = document.xpath(".//w:tbl", namespaces=NS)
+    assert len(tables) == 1
+    assert [_cell_text(document, 0, index) for index in range(1, 8)] == [f"C{index}" for index in range(1, 8)]
+    assert [_cell_text(document, 1, index) for index in range(1, 8)] == [str(index * 2) for index in range(1, 8)]
+    assert [_cell_text(document, 2, index) for index in range(1, 8)] == [str(index * 100) for index in range(1, 8)]
+    assert _cell_text(document, 3, 1) == "y = 2x"
+    assert len(document.xpath(".//w:tbl/w:tr[1]/w:tc", namespaces=NS)) == 8
+    assert _cell_text(document, 5, 1) == "0.99"

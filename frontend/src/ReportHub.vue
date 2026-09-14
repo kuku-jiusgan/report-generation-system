@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
-  Clock, Delete, Document, Download, EditPen, Expand, Files, Fold, Plus, Refresh,
-  Search, SwitchButton, UploadFilled, View,
+  Clock, Delete, Download, EditPen, Plus, Refresh, Search, UploadFilled, View,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import {
@@ -18,7 +17,8 @@ import type { AuthUser } from './auth-api'
 import ReportGenerationProgress from './ReportGenerationProgress.vue'
 
 const props = defineProps<{ sessionUser: AuthUser }>()
-const emit = defineEmits<{ open: [id: string]; logout: [] }>()
+const emit = defineEmits<{ open: [id: string] }>()
+const can = (permission: string) => props.sessionUser.permissions.includes(permission)
 const reports = ref<ReportTask[]>([])
 const generations = ref<ReportGeneration[]>([])
 const loading = ref(false)
@@ -45,9 +45,6 @@ const replaceFile = ref<File>()
 const replaceFiles = ref<UploadFile[]>([])
 const createConflictResolutions = reactive<Record<string, string>>({})
 const selected = ref<ReportTask[]>([])
-const sidebarHovered = ref(false)
-const sidebarPinned = ref(false)
-const sidebarExpanded = computed(() => sidebarHovered.value || sidebarPinned.value)
 const filters = reactive<{ query: string; status: string; dates: [Date, Date] | [] }>({
   query: '', status: '', dates: [],
 })
@@ -427,26 +424,8 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="report-hub-shell" :class="{ 'sidebar-expanded': sidebarExpanded }">
-    <aside class="hub-sidebar" @mouseenter="sidebarHovered = true" @mouseleave="sidebarHovered = false">
-      <div class="hub-sidebar-compact">
-        <div class="hub-compact-brand"><Document /></div>
-        <nav><button class="active" title="报告管理大厅"><Files /></button><button disabled title="报告编辑工作台"><EditPen /></button></nav>
-        <button class="hub-collapse-button" type="button" title="固定展开菜单" aria-label="固定展开菜单" @click.stop="sidebarPinned = true"><Expand /></button>
-        <span class="hub-compact-avatar">{{ props.sessionUser.displayName.slice(0, 1) }}</span>
-      </div>
-      <div class="hub-sidebar-wide">
-        <div class="hub-brand"><span><Document /></span><div><strong>智检报告系统</strong><small>REPORT OPERATIONS</small></div></div>
-        <nav>
-          <button class="active"><Files /><span><strong>报告管理大厅</strong><small>检索、监控与导出</small></span></button>
-          <button disabled><EditPen /><span><strong>报告编辑工作台</strong><small>选择报告后进入</small></span></button>
-        </nav>
-        <button class="hub-collapse-button wide" type="button" :title="sidebarPinned ? '取消固定并收起' : '收起菜单'" aria-label="收起菜单" @click.stop="sidebarPinned = false; sidebarHovered = false"><Fold /><span>收起菜单</span></button>
-        <div class="hub-user"><span>{{ props.sessionUser.displayName.slice(0, 1) }}</span><div><strong>{{ props.sessionUser.displayName }}</strong><small>{{ props.sessionUser.username }}</small></div><el-button text :icon="SwitchButton" title="退出" @click="$emit('logout')" /></div>
-      </div>
-    </aside>
-    <main class="hub-main">
-      <header class="hub-header"><div><p>REPORT MANAGEMENT</p><h1>报告管理大厅</h1><span>统一管理报告任务、数据源与合规记录</span></div><el-button class="hub-create-button" type="primary" size="large" :icon="Plus" :loading="actionId === 'new'" @click="createNew">发起新报告生成</el-button></header>
+  <main class="hub-main">
+      <header class="hub-header"><div><p>REPORT MANAGEMENT</p><h1>报告管理大厅</h1><span>统一管理报告任务、数据源与合规记录</span></div><el-button v-if="can('REPORT_CREATE')" class="hub-create-button" type="primary" size="large" :icon="Plus" :loading="actionId === 'new'" @click="createNew">发起新报告生成</el-button></header>
       <ReportGenerationProgress v-bind="generationProgress" />
       <section class="hub-stats">
         <article><span>全部报告</span><b>{{ stats.total }}</b></article>
@@ -463,7 +442,7 @@ onMounted(load)
           <el-date-picker v-model="filters.dates" type="datetimerange" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" />
           <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
         </div>
-        <div v-if="selected.length" class="hub-batch"><strong>已选择 {{ selected.length }} 份报告</strong><el-button type="primary" plain :icon="Download" :loading="actionId === 'batch'" @click="batchDownload">批量导出 Word</el-button><el-button type="danger" plain :icon="Delete" @click="batchRemove">批量删除</el-button></div>
+        <div v-if="selected.length" class="hub-batch"><strong>已选择 {{ selected.length }} 份报告</strong><el-button v-if="can('REPORT_DOWNLOAD')" type="primary" plain :icon="Download" :loading="actionId === 'batch'" @click="batchDownload">批量导出 Word</el-button><el-button type="danger" plain :icon="Delete" @click="batchRemove">批量删除</el-button></div>
         <el-table v-loading="loading" :data="filtered" row-key="id" height="calc(100vh - 330px)" @selection-change="selected = $event" @row-dblclick="emit('open', $event.id)">
           <el-table-column type="selection" width="44" />
           <el-table-column prop="title" label="报告名称" min-width="220"><template #default="{ row }"><button class="hub-report-link" @click="emit('open', row.id)">{{ row.title }}</button><small>{{ row.resolved_data.report_no || '暂无报告编号' }}</small></template></el-table-column>
@@ -474,10 +453,10 @@ onMounted(load)
           <el-table-column label="操作" width="210" fixed="right" align="center" header-align="center" label-class-name="hub-operation-header"><template #default="{ row }"><div class="hub-actions">
             <el-button link type="primary" :icon="EditPen" @click="emit('open', row.id)">编辑/复核</el-button>
             <el-dropdown trigger="click"><el-button link :loading="actionId === row.id">更多操作</el-button><template #dropdown><el-dropdown-menu>
-              <el-dropdown-item :icon="Refresh" @click="regenerate(row)">重新生成</el-dropdown-item>
+              <el-dropdown-item v-if="can('REPORT_GENERATE')" :icon="Refresh" @click="regenerate(row)">重新生成</el-dropdown-item>
               <el-dropdown-item :icon="UploadFilled" @click="openReplaceSource(row)">更换数据源</el-dropdown-item>
-              <el-dropdown-item :icon="Download" @click="downloadWord(row)">导出 Word</el-dropdown-item>
-              <el-dropdown-item :icon="View" @click="downloadPdf(row)">导出 PDF</el-dropdown-item>
+              <el-dropdown-item v-if="can('REPORT_GENERATE') && can('REPORT_DOWNLOAD')" :icon="Download" @click="downloadWord(row)">导出 Word</el-dropdown-item>
+              <el-dropdown-item v-if="can('REPORT_DOWNLOAD')" :icon="View" @click="downloadPdf(row)">导出 PDF</el-dropdown-item>
               <el-dropdown-item :icon="Clock" @click="showAudit(row)">查看 Audit Trail</el-dropdown-item>
               <el-dropdown-item divided :icon="Delete" @click="remove(row)">删除</el-dropdown-item>
             </el-dropdown-menu></template></el-dropdown>
@@ -485,7 +464,7 @@ onMounted(load)
         </el-table>
         <div class="hub-table-footer">显示 {{ filtered.length }} / {{ reports.length }} 份报告</div>
       </section>
-    </main>
+
     <el-dialog v-model="createVisible" title="发起新报告生成" width="980px" class="create-report-dialog" :close-on-click-modal="false">
       <el-steps :active="createRecognition ? 2 : createImport ? 1 : 0" finish-status="success" align-center>
         <el-step title="查询项目" />
@@ -576,5 +555,5 @@ onMounted(load)
       <el-timeline v-if="auditEvents.length"><el-timeline-item v-for="item in auditEvents" :key="item.id" :timestamp="new Date(item.created_at).toLocaleString('zh-CN')"><strong>{{ item.operator }} · {{ item.reason }}</strong><p>{{ item.field_code }}：{{ item.old_value || '空' }} → {{ item.new_value || '空' }}</p></el-timeline-item></el-timeline>
       <el-empty v-else description="暂无字段修改记录" />
     </el-drawer>
-  </div>
+  </main>
 </template>

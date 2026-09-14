@@ -41,6 +41,21 @@ def test_extracts_detection_limit_result_columns() -> None:
     ]
 
 
+def test_excel_source_metadata_is_recorded_when_applied() -> None:
+    from backend.app.services.excel_report_source import apply_excel_source
+
+    data = {}
+    apply_excel_source(data, {"id": "source-1", "file_name": "input.xlsx", "payload": {
+        "custom": {"uncategorized.field_007": ["杂质D"]},
+        "_meta": {"sha256": "abc123"},
+    }}, "/api/v1")
+
+    assert data["original_values"]["uncategorized.field_007"] == ["杂质D"]
+    assert data["field_sources"]["uncategorized.field_007"] == {
+        "type": "EXCEL", "record_id": "abc123", "sourcePath": "uncategorized.field_007",
+    }
+
+
 def test_detection_limit_rules_read_one_row_per_impurity() -> None:
     for code, column in zip(FIELD_CODES, range(3, 10), strict=True):
         config = _rule_config(code, EXCEL_FIELD_PATHS[code])
@@ -143,6 +158,42 @@ def test_extracts_horizontal_linearity_results_and_statistics() -> None:
          "interceptRatio": 0.64, "predictedPeakArea": 76208, "residual": 1904},
     ]
     assert len(payload["linearity"]) == 10
+
+
+def test_horizontal_linearity_rules_read_all_configured_nonblank_columns() -> None:
+    workbook = Workbook()
+    workbook.active.title = "首页"
+    workbook["首页"]["B8"] = 1
+    linearity = workbook.create_sheet("线性")
+    values = {
+        2: [f"C{index}" for index in range(1, 8)],
+        3: [index * 2.5 for index in range(1, 8)],
+        4: [index * 100 for index in range(1, 8)],
+    }
+    for row, row_values in values.items():
+        for column, value in enumerate(row_values, 3):
+            linearity.cell(row, column, value)
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "seven-level-linearity.xlsx"
+        workbook.save(path)
+        codes = [
+            "uncategorized.field_021", "uncategorized.field_022", "uncategorized.field_023",
+        ]
+        fields = [
+            {"fieldCode": code, "cardinality": "MANY", "legacyJsonPath": EXCEL_FIELD_PATHS[code]}
+            for code in codes
+        ]
+        rules = [
+            {"id": index, "fieldCode": code, "sourceType": "EXCEL", "priority": 50,
+             "enabled": True, "config": _rule_config(code, EXCEL_FIELD_PATHS[code])}
+            for index, code in enumerate(codes, 1)
+        ]
+        payload = extract_excel_fields(path, fields, rules)
+
+    assert [record["solutionName"] for record in payload["linearity"]] == [f"C{index}" for index in range(1, 8)]
+    assert [record["field2"] for record in payload["linearity"]] == [index * 2.5 for index in range(1, 8)]
+    assert [record["peakArea"] for record in payload["linearity"]] == [index * 100 for index in range(1, 8)]
 
 
 def test_extracts_residual_charts_as_embedded_png_values() -> None:

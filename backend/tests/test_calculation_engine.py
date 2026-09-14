@@ -3,7 +3,6 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from backend.app.database import Database
 from backend.app.services.calculation_engine import (
     CalculationError,
     evaluate_formula,
@@ -12,6 +11,7 @@ from backend.app.services.calculation_engine import (
 )
 from backend.app.services.docx_field_values import row_calculated_values as _row_calculated_values
 from backend.app.services.rule_admin import RuleAdminRepository
+from backend.tests.database_helpers import make_test_database
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -94,7 +94,7 @@ class CalculationEngineTest(unittest.TestCase):
 
 class CalculationDependencyTest(unittest.TestCase):
     def repository(self, directory: str) -> RuleAdminRepository:
-        database = Database(Path(directory) / "rules.db")
+        database = make_test_database(Path(directory))
         database.initialize()
         repository = RuleAdminRepository(database, ROOT / "mapping" / "template-mapping.json")
         repository.seed()

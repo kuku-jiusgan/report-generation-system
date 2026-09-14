@@ -247,7 +247,7 @@ const saveMapping = () => emit('saveMapping')
                       <el-form-item label="空值处理"><el-select v-model="mappingDraft.fillRule"><el-option v-for="item in fillRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
                       <el-form-item label="冲突/合并行为"><el-select v-model="mappingDraft.mergeRule"><el-option v-for="item in mergeRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
                     </div>
-                    <div class="switches"><el-checkbox v-model="mappingDraft.required">生成前必须有值</el-checkbox><el-checkbox v-model="mappingDraft.enabled">启用</el-checkbox></div>
+                    <div class="switches"><el-checkbox v-model="mappingDraft.enabled">启用</el-checkbox></div>
                     <div class="word-binding-actions">
                       <el-button type="primary" plain :icon="Link" :loading="bindingMappingId === mapping.id" @click="bindCurrentWordPosition(mapping)">绑定当前 Word 位置</el-button>
                       <el-button plain :icon="Unlock" :loading="unbindingWord" @click="unbindCurrentWordPosition">解除当前绑定</el-button>
@@ -270,7 +270,7 @@ const saveMapping = () => emit('saveMapping')
                           <el-form-item label="空值处理"><el-select v-model="mappingDraft.fillRule"><el-option v-for="item in fillRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
                           <el-form-item label="冲突/合并行为"><el-select v-model="mappingDraft.mergeRule"><el-option v-for="item in mergeRuleOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
                         </div>
-                        <div class="switches"><el-checkbox v-model="mappingDraft.required">生成前必须有值</el-checkbox><el-checkbox v-model="mappingDraft.enabled">启用</el-checkbox></div>
+                        <div class="switches"><el-checkbox v-model="mappingDraft.enabled">启用</el-checkbox></div>
                         <div class="word-binding-actions">
                           <el-button type="primary" plain :icon="Link" :loading="mappingDraft.id !== undefined && bindingMappingId === mappingDraft.id" @click="mappingDraft.id ? bindCurrentWordPosition(mappingDraft as MappingRule) : $emit('saveMapping')">{{ mappingDraft.id ? '绑定当前 Word 位置' : '保存后绑定 Word 位置' }}</el-button>
                         </div>
@@ -287,7 +287,7 @@ const saveMapping = () => emit('saveMapping')
           </div>
           </template>
           <div v-if="selectedChapter && !displayBlocks.length" class="inspector-empty">
-            <Files /><strong>本章节暂无系统标准编组</strong>
+            <Files /><strong>本章节暂无字段或标准编组</strong>
           </div>
         </div>
       </aside>

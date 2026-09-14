@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { changePassword, currentUser, login, logout, type AuthUser } from './auth-api'
 import zbriLogo from './assets/zbri-logo.png'
 
-const props = defineProps<{ title: string; subtitle: string; requiredPermission: string; portal: 'report' | 'admin' }>()
+const props = defineProps<{ title: string; requiredPermissionGroups: string[][] }>()
 const user = ref<AuthUser>()
 const loading = ref(true)
 const submitting = ref(false)
@@ -15,18 +15,15 @@ const currentPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
 const formError = ref('')
-const denied = computed(() => user.value && !user.value.permissions.includes(props.requiredPermission))
-const portalCopy = computed(() => props.portal === 'admin' ? {
-  name: '后台管理系统',
-  heading: '让规则、权限与报告历史\n始终清晰可控',
-  description: '统一管理报告模板、LIMS 标准字段、系统用户与生成记录，为报告生产提供稳定可信的配置基础。',
-  promise: '统一配置 · 分级授权 · 全程留痕',
-} : {
+const denied = computed(() => user.value && !props.requiredPermissionGroups.some(
+  (group) => group.every((permission) => user.value?.permissions.includes(permission)),
+))
+const portalCopy = {
   name: '报告生成工作台',
-  heading: '让每一份实验报告\n都有数据可循',
-  description: '从 LIMS 数据识别、标准字段映射到 Word 报告生成，构建准确、规范、可追溯的报告生产流程。',
-  promise: '标准提取 · 证据可追溯 · 版本可回溯',
-})
+  heading: '报告生产与系统管理\n现在都在一个入口',
+  description: '从 LIMS 数据识别、标准字段映射到模板和权限管理，构建准确、规范、可追溯的报告生产流程。',
+  promise: '统一入口 · 分级授权 · 全程留痕',
+}
 
 function errorText(error: unknown) {
   const value = error as {
@@ -44,7 +41,7 @@ function errorText(error: unknown) {
 
 async function loadSession() {
   loading.value = true
-  try { user.value = await currentUser(props.portal) } catch { user.value = undefined }
+  try { user.value = await currentUser() } catch { user.value = undefined }
   finally { loading.value = false }
 }
 
@@ -53,7 +50,7 @@ async function handleLogin() {
   submitting.value = true
   formError.value = ''
   try {
-    user.value = await login(username.value.trim(), password.value, props.portal)
+    user.value = await login(username.value.trim(), password.value)
     password.value = ''
   } catch (error) { formError.value = errorText(error) }
   finally { submitting.value = false }
@@ -67,7 +64,7 @@ async function handlePasswordChange() {
   }
   submitting.value = true
   try {
-    user.value = await changePassword(currentPassword.value, newPassword.value, props.portal)
+    user.value = await changePassword(currentPassword.value, newPassword.value)
     currentPassword.value = ''; newPassword.value = ''; confirmPassword.value = ''
     ElMessage.success('密码已修改')
   } catch (error) { formError.value = errorText(error) }
@@ -75,7 +72,7 @@ async function handlePasswordChange() {
 }
 
 async function handleLogout() {
-  await logout(props.portal).catch(() => undefined)
+  await logout().catch(() => undefined)
   user.value = undefined
   formError.value = ''
 }

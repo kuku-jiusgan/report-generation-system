@@ -10,7 +10,10 @@ from typing import Any, Callable
 
 from lxml import etree
 
-from .docx_table_cells import NS, set_cell_text
+from .docx_table_cells import (
+    NS, cell_width, grid_after, grid_span, set_cell_text, set_cell_width,
+    stretch_merged_row, sync_table_grid,
+)
 from .table_layout_rules import repeat_bookmark_name
 
 
@@ -69,10 +72,122 @@ def _fill_table(table: etree._Element, records: list[dict[str, Any]],
     _fill_scalar_cells(rows, layout, records[0])
 
 
+def _column_policy(layout: dict[str, Any]) -> dict[str, Any] | None:
+    policy = layout.get("columnPolicy")
+    if policy is None:
+        return None
+    if not isinstance(policy, dict):
+        raise ValueError("矩阵横向扩展的 columnPolicy 必须是 JSON 对象")
+    if str(policy.get("mode") or "DATA_LENGTH") != "DATA_LENGTH":
+        raise ValueError("矩阵横向扩展的 mode 只能是 DATA_LENGTH")
+    if str(policy.get("overflow") or "") != "HORIZONTAL":
+        raise ValueError("矩阵横向扩展的 overflow 只能是 HORIZONTAL")
+    if not _layout_entries(layout, "rowFields"):
+        raise ValueError("启用矩阵横向扩展时，rowFields 不能为空")
+    return policy
+
+
+def _horizontal_count(table: etree._Element, records: list[dict[str, Any]],
+                      policy: dict[str, Any]) -> int:
+    first_row = table.xpath("./w:tr[1]", namespaces=NS)
+    prototype = max(0, len(first_row[0].xpath("./w:tc", namespaces=NS)) - 1) if first_row else 0
+    try:
+        minimum = max(1, int(policy.get("minColumns", prototype or 1)))
+    except (TypeError, ValueError):
+        raise ValueError("矩阵横向扩展的 minColumns 必须是正整数")
+    return max(prototype, minimum, len(records))
+
+
+def _horizontal_widths(table: etree._Element, target: int, policy: dict[str, Any]) -> list[int]:
+    rows = table.xpath("./w:tr", namespaces=NS)
+    if not rows:
+        return []
+    data_cells = rows[0].xpath("./w:tc", namespaces=NS)[1:]
+    prototype = [cell_width(cell) for cell in data_cells] or [1]
+    try:
+        width_mode = str(policy.get("widthMode") or "PROTOTYPE")
+        if width_mode == "PRESERVE_TOTAL":
+            total = sum(prototype)
+            base, remainder = divmod(total, target)
+            return [max(1, base + (1 if index < remainder else 0)) for index in range(target)]
+        if width_mode != "PROTOTYPE":
+            raise ValueError("矩阵横向扩展的 widthMode 只能是 PROTOTYPE 或 PRESERVE_TOTAL")
+    except (TypeError, ValueError) as error:
+        if isinstance(error, ValueError):
+            raise
+        raise ValueError("矩阵横向扩展的 widthMode 配置无效") from error
+    return [prototype[index % len(prototype)] for index in range(target)]
+
+
+def _expand_row(row: etree._Element, target: int, widths: list[int]) -> None:
+    cells = row.xpath("./w:tc", namespaces=NS)
+    if len(cells) < 2:
+        return
+    data_cells = cells[1:]
+    while len(data_cells) < target:
+        clone = copy.deepcopy(data_cells[-1])
+        for bookmark in clone.xpath(".//w:bookmarkStart | .//w:bookmarkEnd", namespaces=NS):
+            bookmark.getparent().remove(bookmark)
+        row.append(clone)
+        data_cells.append(clone)
+    for cell, width in zip(data_cells[:target], widths):
+        set_cell_width(cell, width)
+    for cell in data_cells[target:]:
+        row.remove(cell)
+
+
+def _sync_horizontal_grid(table: etree._Element, rows: list[etree._Element],
+                          target: int, widths: list[int]) -> None:
+    grid = table.find("{" + NS["w"] + "}tblGrid")
+    original = []
+    if grid is not None:
+        for column in grid:
+            try:
+                original.append(max(1, int(column.get("{" + NS["w"] + "}w") or 1)))
+            except (TypeError, ValueError):
+                original.append(1)
+    leading = original[:1] or [cell_width(rows[0].xpath("./w:tc", namespaces=NS)[0])]
+    trailing = original[1 + max(0, len(rows[0].xpath("./w:tc", namespaces=NS)) - 1):] if original else []
+    sync_table_grid(table, leading + widths + trailing)
+    total = len(leading) + len(widths) + len(trailing)
+    for row in rows:
+        used = sum(grid_span(cell) for cell in row.xpath("./w:tc", namespaces=NS)) + grid_after(row)
+        if used != total:
+            stretch_merged_row(row, total)
+
+
+def _fill_horizontal_table(table: etree._Element, records: list[dict[str, Any]],
+                           layout: dict[str, Any], policy: dict[str, Any]) -> None:
+    rows = table.xpath("./w:tr", namespaces=NS)
+    target = _horizontal_count(table, records, policy)
+    widths = _horizontal_widths(table, target, policy)
+    row_fields = _layout_entries(layout, "rowFields")
+    repeated_rows = {int(entry["row"]) - 1 for entry in row_fields}
+    for row_index, row in enumerate(rows):
+        if row_index in repeated_rows:
+            _expand_row(row, target, widths)
+        elif row.xpath("./w:tc", namespaces=NS):
+            # Fixed/statistical rows keep their cells and only absorb the new grid width.
+            continue
+    _sync_horizontal_grid(table, rows, target, widths)
+    for row_index in repeated_rows:
+        if row_index < len(rows):
+            for cell in rows[row_index].xpath("./w:tc", namespaces=NS)[1:]:
+                set_cell_text(cell, "")
+    if records:
+        _fill_row_fields(rows, layout, records)
+        _fill_row_labels(rows, layout)
+        _fill_scalar_cells(rows, layout, records[0])
+
+
 def fill_matrix_table(table: etree._Element, records: list[dict[str, Any]],
                       layout: dict[str, Any]) -> None:
     """Fill one already-resolved prototype table without cloning it."""
-    _fill_table(table, records, layout)
+    policy = _column_policy(layout)
+    if policy:
+        _fill_horizontal_table(table, records, layout, policy)
+    else:
+        _fill_table(table, records, layout)
 
 
 def fill_matrix_tables(document: etree._Element, table_no: str, records: list[dict[str, Any]],
@@ -90,6 +205,10 @@ def fill_matrix_tables(document: etree._Element, table_no: str, records: list[di
                  "Word 正文表格序号；请在模板设计器中补齐其中一项。")
             return
         table = tables[physical_index - 1]
+    policy = _column_policy(layout)
+    if policy:
+        _fill_horizontal_table(table, records, layout, policy)
+        return
     first_row_cells = table.xpath("./w:tr[1]/w:tc", namespaces=NS)
     group_size = max(1, len(first_row_cells) - 1)
     groups = [records[index:index + group_size] for index in range(0, len(records), group_size)] or [[]]

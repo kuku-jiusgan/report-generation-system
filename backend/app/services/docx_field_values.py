@@ -93,15 +93,14 @@ def payload_for_mapping(mapping: dict[str, Any], payload: dict[str, Any],
     return payload
 
 
-def mapping_source_path(mapping: dict[str, Any], report_data: dict[str, Any]) -> str:
-    field_sources = report_data.get("field_sources", {}) if isinstance(report_data, dict) else {}
-    source_meta = field_sources.get(str(mapping.get("standardFieldCode") or ""), {})
-    return str(source_meta.get("sourcePath") or mapping.get("sourcePath") or "")
+def mapping_source_path(mapping: dict[str, Any]) -> str:
+    """字段的取值路径。由标准字段目录解析后放在映射上，这里不再有第二个来源。"""
+    return str(mapping.get("sourcePath") or "")
 
 
 def source_mapping_value(mapping: dict[str, Any], payload: dict[str, Any],
                           report_data: dict[str, Any]) -> Any:
-    path = mapping_source_path(mapping, report_data)
+    path = mapping_source_path(mapping)
     source_payload = payload_for_mapping(mapping, payload, report_data)
     repeat = repeat_source(path)
     if repeat:
@@ -165,7 +164,7 @@ def row_calculated_values(
         if is_formula_calculation(mapping) or not mapping.get("fieldCode"):
             continue
         # 行内取值必须与行填充使用同一有效路径，否则字段被系统规则改道后行值错位
-        repeat = repeat_source(mapping_source_path(mapping, report_data))
+        repeat = repeat_source(mapping_source_path(mapping))
         values[str(mapping["fieldCode"])] = record_value(record, repeat[1]) if repeat else values.get(
             str(mapping["fieldCode"])
         )

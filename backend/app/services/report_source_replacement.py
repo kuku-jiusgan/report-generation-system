@@ -1,6 +1,6 @@
 from typing import Any
 
-from .excel_validation_payload import enrich_excel_payload, merge_excel_validation_results
+from .excel_validation_payload import enrich_excel_payload
 
 
 def replace_report_source(data: dict[str, Any], source: dict[str, Any], source_type: str,
@@ -9,7 +9,6 @@ def replace_report_source(data: dict[str, Any], source: dict[str, Any], source_t
     if source_type == "EXCEL":
         excel_payload = enrich_excel_payload(source.get("payload") or {})
         payloads["EXCEL"] = excel_payload
-        payloads["LIMS"] = merge_excel_validation_results(payloads.get("LIMS") or {}, excel_payload)
         payloads["EXCEL_DOCUMENT"] = {
             "id": source["id"], "fileName": source["file_name"],
             "sha256": source.get("sha256", ""),

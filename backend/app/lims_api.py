@@ -8,6 +8,8 @@ from .database import Database, now_iso
 from .schemas import QueryLimsRequest, RecognizeLimsRequest
 from .services.lims_normalizer import COLLECTION_ORDER, merge_instances, normalize_instance
 from .services.lims_oracle import query_lims_project
+from .services.system_field_group_assembler import apply_group_contracts
+from .services.system_field_groups import list_system_field_groups
 
 
 def create_lims_router(database: Database, settings: Settings, auth: AuthManager) -> APIRouter:
@@ -58,9 +60,12 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
             raise HTTPException(404, f"项目编号 {request.project_id} 未查询到 LIMS 数据")
         fields = database.list_lims_fields()
         rules = database.list_lims_parser_rules()
+        groups = list_system_field_groups(database)
         # 先完成全部归一化：任一实例解析失败时不留下 0 实例的孤儿导入记录
         try:
-            normalized = [(raw, normalize_instance(raw, fields, rules)) for raw in instances]
+            # LIMS 解析结果与 Excel 一样，在落库前就按编组配置固定成标准字段目录的结构。
+            normalized = [(raw, apply_group_contracts(normalize_instance(raw, fields, rules), groups))
+                          for raw in instances]
         except (ValueError, IndexError, KeyError, TypeError) as error:
             raise HTTPException(502, f"LIMS 数据解析失败：{error}") from error
         import_id = uuid.uuid4().hex

@@ -34,20 +34,24 @@ class UpdatePermissionsRequest(BaseModel):
 
 
 def create_management_router(database: Database, settings: Settings, auth: AuthManager) -> APIRouter:
-    router = APIRouter(prefix=f"{settings.api_prefix}/admin", tags=["后台管理系统"])
+    router = APIRouter(
+        prefix=f"{settings.api_prefix}/admin",
+        tags=["系统管理"],
+        dependencies=[Depends(auth.require("ADMIN_ACCESS"))],
+    )
 
     def ensure_user_manageable(actor: dict[str, Any], target_role: str) -> None:
         if actor["role_code"] != "SUPER_ADMIN" and target_role != "REPORT_USER":
             raise HTTPException(403, "系统管理员只能管理报告用户")
 
     @router.get("/users")
-    def list_users(query: str = "", actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE", "admin"))) -> list[dict[str, Any]]:
+    def list_users(query: str = "", actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE"))) -> list[dict[str, Any]]:
         items = database.list_users(query)
         return [auth.public_user(item, database.role_permissions(item["role_code"])) for item in items]
 
     @router.post("/users")
     def create_user(payload: CreateUserRequest,
-                    actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE", "admin"))) -> dict[str, Any]:
+                    actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE"))) -> dict[str, Any]:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", payload.username):
             raise HTTPException(422, "用户名只能包含字母、数字、点、下划线和短横线")
         if payload.role_code not in {role["code"] for role in database.list_roles()}:
@@ -64,7 +68,7 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
 
     @router.put("/users/{user_id}")
     def update_user(user_id: str, payload: UpdateUserRequest,
-                    actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE", "admin"))) -> dict[str, Any]:
+                    actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE"))) -> dict[str, Any]:
         target = database.get_user(user_id)
         if not target:
             raise HTTPException(404, "用户不存在")
@@ -84,7 +88,7 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
 
     @router.post("/users/{user_id}/reset-password")
     def reset_password(user_id: str, payload: ResetPasswordRequest,
-                       actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE", "admin"))) -> dict[str, bool]:
+                       actor: dict[str, Any] = Depends(auth.require("USERS_MANAGE"))) -> dict[str, bool]:
         target = database.get_user(user_id)
         if not target:
             raise HTTPException(404, "用户不存在")
@@ -96,13 +100,13 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
         return {"ok": True}
 
     @router.get("/roles")
-    def list_roles(actor: dict[str, Any] = Depends(auth.require("ADMIN_ACCESS", "admin"))) -> dict[str, Any]:
+    def list_roles(actor: dict[str, Any] = Depends(auth.require("ADMIN_ACCESS"))) -> dict[str, Any]:
         return {"permissions": [{"code": code, "name": name} for code, name in PERMISSIONS.items()],
                 "roles": database.list_roles()}
 
     @router.put("/roles/{role_code}/permissions")
     def update_role_permissions(role_code: str, payload: UpdatePermissionsRequest,
-                                actor: dict[str, Any] = Depends(auth.require("PERMISSIONS_MANAGE", "admin"))) -> dict[str, Any]:
+                                actor: dict[str, Any] = Depends(auth.require("PERMISSIONS_MANAGE"))) -> dict[str, Any]:
         if actor["role_code"] != "SUPER_ADMIN":
             raise HTTPException(403, "只有超级管理员可以修改角色权限")
         if role_code == "SUPER_ADMIN":
@@ -120,7 +124,7 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
     @router.get("/report-history")
     def report_history(query: str = "", status: str = "", user_id: str = "", date_from: str = "",
                        date_to: str = "", page: int = 1, page_size: int = 20,
-                       actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_VIEW", "admin"))) -> dict[str, Any]:
+                       actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_VIEW"))) -> dict[str, Any]:
         try:
             return database.list_generations(query, status, user_id, date_from, date_to,
                                              max(1, page), min(100, max(1, page_size)))
@@ -129,7 +133,7 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
 
     @router.get("/report-history/{generation_id}")
     def report_history_detail(generation_id: str,
-                              actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_VIEW", "admin"))) -> dict[str, Any]:
+                              actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_VIEW"))) -> dict[str, Any]:
         item = database.get_generation(generation_id)
         if not item:
             raise HTTPException(404, "生成记录不存在")
@@ -137,7 +141,7 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
 
     @router.get("/report-history/{generation_id}/file")
     def download_history_file(generation_id: str,
-                              actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_DOWNLOAD", "admin"))) -> FileResponse:
+                              actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_DOWNLOAD"))) -> FileResponse:
         item = database.get_generation(generation_id)
         if not item or not item.get("output_name"):
             raise HTTPException(404, "历史文件不存在")

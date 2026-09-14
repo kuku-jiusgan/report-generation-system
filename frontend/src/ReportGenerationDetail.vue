@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { adminApi, type GenerationHistoryItem, type StandardField } from './admin-api'
+import { adminApi, type GenerationHistoryItem, type StandardField, type StandardFieldCatalog, type SystemFieldGroup } from './admin-api'
+import SystemFieldCatalogTree from './SystemFieldCatalogTree.vue'
 
 /** 一次生成的详情：逐字段列出取值与来源，而不是把整份快照当一坨 JSON 丢出来。 */
 const props = defineProps<{ detail: GenerationHistoryItem }>()
@@ -9,43 +10,60 @@ const SOURCE_LABELS: Record<string, string> = {
   EXCEL: 'Excel', LIMS: 'LIMS', PDF: 'PDF', AI: 'AI 生成', CALCULATED: '系统计算',
   FIXED: '固定值', MANUAL: '人工录入', MANUAL_WORD: 'Word 人工编辑',
 }
-// resolved_data 里这些键是机器用的，不算"报告字段"
-const INTERNAL_KEYS = new Set([
-  'source_payloads', 'field_sources', 'original_values', 'warnings',
-  'template_id', 'template_name', 'template_code', 'template_version',
-  'template_revision', 'template_catalog_version_id',
-])
-
 const labels = ref<Record<string, string>>({})
+const catalog = ref<StandardFieldCatalog>()
+const configuredRules = ref<Record<string, any>>({})
+const selectedField = ref<StandardField>()
+const selectedGroup = ref<SystemFieldGroup>()
 const keyword = ref('')
-const showRaw = ref(false)
 
 watch(() => props.detail?.id, async () => {
   if (Object.keys(labels.value).length) return
   try {
-    const fields = await adminApi.allStandardFields()
+    const [fields, directory] = await Promise.all([adminApi.allStandardFields(), adminApi.standardFieldCatalog()])
     labels.value = Object.fromEntries(fields.map((item: StandardField) => [item.fieldCode, item.label]))
+    catalog.value = directory
+    const rules = await Promise.all(fields.map(async (field: StandardField) => {
+      try { return [field.fieldCode, (await adminApi.systemFieldRules(field.fieldCode)).find((rule) => rule.enabled)] as const }
+      catch { return [field.fieldCode, undefined] as const }
+    }))
+    configuredRules.value = Object.fromEntries(rules.filter(([, rule]) => rule))
   } catch { labels.value = {} }
 }, { immediate: true })
 
 const snapshot = computed(() => (props.detail?.generation_snapshot || {}) as Record<string, any>)
 const resolved = computed(() => (snapshot.value.resolved_data || {}) as Record<string, any>)
 const context = computed(() => (props.detail?.generation_context || {}) as Record<string, any>)
-const warnings = computed<string[]>(() => snapshot.value.warnings || resolved.value.warnings || [])
+function firstPopulatedMap(...values: unknown[]): Record<string, any> {
+  const found = values.find((value) => value && typeof value === 'object' && Object.keys(value).length > 0)
+  return (found && typeof found === 'object' ? found : {}) as Record<string, any>
+}
+const fieldSources = computed(() =>
+  firstPopulatedMap(snapshot.value.field_sources, resolved.value.field_sources),
+)
+const originalValues = computed(() =>
+  firstPopulatedMap(snapshot.value.original_values, resolved.value.original_values),
+)
 
 /** 一行 = 一个标准字段：取值 + 从哪来 + 用的哪条规则 */
 const fieldRows = computed(() => {
-  const sources = (snapshot.value.field_sources || {}) as Record<string, any>
-  const values = (snapshot.value.original_values || {}) as Record<string, any>
-  const codes = Array.from(new Set([...Object.keys(sources), ...Object.keys(values)])).sort()
+  const sources = fieldSources.value
+  const values = originalValues.value
+  const catalogFields = catalog.value?.fields || []
+  const catalogCodes = catalogFields.map((field) => field.fieldCode)
+  const codes = Array.from(new Set([...catalogCodes, ...Object.keys(sources), ...Object.keys(values)])).sort()
   return codes.map((code) => {
     const source = sources[code] || {}
+    const configured = configuredRules.value[code] || {}
+    const config = configured.config && typeof configured.config === 'object' ? configured.config : {}
+    const field = catalogFields.find((item) => item.fieldCode === code)
+    const extractedValue = hasValue(values[code]) ? values[code] : readResolvedValue(field?.legacyJsonPath || code)
     return {
       code, label: labels.value[code] || '',
-      value: format(values[code]),
-      sourceType: String(source.type || ''),
-      rule: String(source.ruleName || source.record_id || ''),
-      path: String(source.sourcePath || ''),
+      value: format(extractedValue),
+      sourceType: String(source.type || configured.sourceType || ''),
+      rule: String(source.ruleName || configured.name || source.record_id || ''),
+      path: String(source.sourcePath || config.sourcePath || ''),
     }
   })
 })
@@ -54,39 +72,70 @@ const visibleFields = computed(() => {
   if (!text) return fieldRows.value
   return fieldRows.value.filter((row) => `${row.code}${row.label}${row.value}`.toLowerCase().includes(text))
 })
-
-/** 报告本身的固定字段（报告编号、委托单位等） */
-const reportFields = computed(() => Object.entries(resolved.value)
-  .filter(([key, value]) => !INTERNAL_KEYS.has(key) && !Array.isArray(value)
-    && (value === null || typeof value !== 'object'))
-  .map(([key, value]) => ({ key, value: format(value) })))
-
-/** 提取到的数据集合：编组数组长什么样、有几条 */
-const collections = computed(() => {
-  const payloads = (resolved.value.source_payloads || {}) as Record<string, any>
-  const result: Array<{ origin: string; name: string; rows: any[] }> = []
-  for (const [origin, payload] of Object.entries(payloads)) {
-    if (!payload || typeof payload !== 'object') continue
-    for (const [name, value] of Object.entries(payload as Record<string, any>)) {
-      if (Array.isArray(value) && value.length && typeof value[0] === 'object') {
-        result.push({ origin, name, rows: value })
-      }
-    }
+const selectedFieldRow = computed(() => selectedField.value
+  ? fieldRows.value.find((row) => row.code === selectedField.value?.fieldCode) || {
+      code: selectedField.value.fieldCode,
+      label: selectedField.value.label,
+      value: format(readResolvedValue(selectedField.value.legacyJsonPath || selectedField.value.fieldCode)),
+      sourceType: '', rule: '', path: selectedField.value.legacyJsonPath || '',
+    } : undefined)
+const selectedGroupJson = computed(() => {
+  if (!selectedGroup.value) return undefined
+  const payloads = resolved.value.source_payloads
+  if (!payloads || typeof payloads !== 'object') return undefined
+  const path = selectedGroup.value.itemPath || `$.${selectedGroup.value.groupCode}`
+  for (const sourceType of ['EXCEL', 'LIMS', 'PDF']) {
+    const value = readValueAtPath(payloads[sourceType], path)
+    if (value !== undefined) return value
   }
-  return result
+  return readValueAtPath(resolved.value, path)
 })
 
-function columnsOf(rows: any[]) {
-  return Array.from(new Set(rows.flatMap((row) => Object.keys(row || {})))).filter((key) => key !== '_evidence')
+function readResolvedValue(fieldCode: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(resolved.value, fieldCode)) return resolved.value[fieldCode]
+  const direct = readValueAtPath(resolved.value, fieldCode)
+  if (hasValue(direct)) return direct
+  const payloads = resolved.value.source_payloads
+  if (payloads && typeof payloads === 'object') {
+    for (const sourceType of ['EXCEL', 'LIMS', 'PDF']) {
+      const value = readValueAtPath(payloads[sourceType], fieldCode)
+      if (hasValue(value)) return value
+    }
+  }
+  return direct
 }
+function readValueAtPath(root: unknown, fieldCode: string): unknown {
+  if (!root || typeof root !== 'object') return undefined
+  const path = fieldCode.replace(/^\$\.?/, '').split('.').filter(Boolean)
+  let values: any[] = [root]
+  for (const rawSegment of path) {
+    const isCollection = rawSegment.endsWith('[*]')
+    const segment = isCollection ? rawSegment.slice(0, -3) : rawSegment
+    values = values.flatMap((value) => {
+      const next = value && typeof value === 'object' ? value[segment] : undefined
+      return isCollection && Array.isArray(next) ? next : next === undefined ? [] : [next]
+    })
+  }
+  return fieldCode.includes('[*]') ? values : values[0]
+}
+function hasValue(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== ''
+    && !(Array.isArray(value) && value.length === 0)
+}
+function selectField(field: StandardField) {
+  selectedGroup.value = undefined
+  selectedField.value = field
+}
+function selectGroup(group: SystemFieldGroup) {
+  selectedField.value = undefined
+  selectedGroup.value = group
+}
+
 function format(value: unknown): string {
   if (value === null || value === undefined) return ''
-  if (Array.isArray(value)) return `${value.length} 条`
+  if (Array.isArray(value)) return JSON.stringify(value)
   if (typeof value === 'object') return `{${Object.keys(value as object).join('、')}}`
   return String(value)
-}
-function cell(row: any, key: string): string {
-  return format(row?.[key])
 }
 </script>
 
@@ -108,12 +157,31 @@ function cell(row: any, key: string): string {
       </el-descriptions-item>
     </el-descriptions>
 
-    <template v-if="warnings.length">
-      <h3>生成警告 <small>{{ warnings.length }} 条</small></h3>
-      <ul class="warning-list"><li v-for="(item, index) in warnings" :key="index">{{ item }}</li></ul>
-    </template>
-
     <h3>字段取值与来源 <small>{{ fieldRows.length }} 个字段</small></h3>
+    <div v-if="catalog" class="field-directory">
+      <SystemFieldCatalogTree :chapters="catalog.chapters" :groups="catalog.groups" :fields="catalog.fields"
+        :selected-code="selectedField?.fieldCode" :selected-group="selectedGroup?.groupCode"
+        @select="selectField" @group="selectGroup" />
+      <section class="field-inspector">
+        <template v-if="selectedField">
+          <h4>{{ selectedField.label }} <small>{{ selectedField.fieldCode }}</small></h4>
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="提取值">{{ selectedFieldRow?.value || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="来源">{{ SOURCE_LABELS[selectedFieldRow?.sourceType || ''] || selectedFieldRow?.sourceType || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="规则 / 路径">{{ selectedFieldRow?.rule || selectedFieldRow?.path || '-' }}</el-descriptions-item>
+          </el-descriptions>
+        </template>
+        <template v-else-if="selectedGroup">
+          <h4>{{ selectedGroup.label }} <small>{{ selectedGroup.groupCode }}</small></h4>
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="标准 JSON 路径">{{ selectedGroup.itemPath || `$.${selectedGroup.groupCode}` }}</el-descriptions-item>
+          </el-descriptions>
+          <pre class="group-json">{{ selectedGroupJson === undefined ? '-' : JSON.stringify(selectedGroupJson, null, 2) }}</pre>
+        </template>
+        <el-empty v-else description="从左侧标准字段目录选择字段或编组查看本次提取结果" :image-size="50" />
+      </section>
+    </div>
+    <template v-else>
     <el-input v-model="keyword" placeholder="按字段名称或编码筛选" clearable size="small" class="field-filter" />
     <el-table v-if="visibleFields.length" :data="visibleFields" size="small" max-height="330">
       <el-table-column label="字段" min-width="150">
@@ -134,42 +202,7 @@ function cell(row: any, key: string): string {
       </el-table-column>
     </el-table>
     <el-empty v-else :description="fieldRows.length ? '没有匹配的字段' : '该记录没有字段来源信息'" :image-size="50" />
-
-    <template v-if="collections.length">
-      <h3>提取到的数据集合 <small>{{ collections.length }} 个</small></h3>
-      <el-collapse>
-        <el-collapse-item v-for="item in collections" :key="`${item.origin}.${item.name}`"
-          :name="`${item.origin}.${item.name}`">
-          <template #title>
-            <span class="collection-title">{{ item.name }}</span>
-            <el-tag size="small" type="info">{{ item.origin }}</el-tag>
-            <span class="collection-count">{{ item.rows.length }} 条</span>
-          </template>
-          <el-table :data="item.rows" size="small" max-height="300">
-            <el-table-column v-for="key in columnsOf(item.rows)" :key="key" :label="key" min-width="130"
-              show-overflow-tooltip>
-              <template #default="{ row }">{{ cell(row, key) }}</template>
-            </el-table-column>
-          </el-table>
-        </el-collapse-item>
-      </el-collapse>
     </template>
-
-    <template v-if="reportFields.length">
-      <h3>报告字段</h3>
-      <el-descriptions :column="2" border size="small">
-        <el-descriptions-item v-for="item in reportFields" :key="item.key" :label="item.key">
-          {{ item.value || '-' }}
-        </el-descriptions-item>
-      </el-descriptions>
-    </template>
-
-    <div class="raw-toggle">
-      <el-button text type="primary" @click="showRaw = !showRaw">
-        {{ showRaw ? '收起原始快照' : '查看原始快照 JSON' }}
-      </el-button>
-    </div>
-    <pre v-if="showRaw" class="raw-snapshot">{{ JSON.stringify(snapshot, null, 2) }}</pre>
   </div>
 </template>
 
@@ -178,11 +211,10 @@ function cell(row: any, key: string): string {
 .generation-detail h3{margin:16px 0 6px;color:#234c41;font-size:14px}
 .generation-detail h3 small{margin-left:6px;color:#8a9993;font-size:11px;font-weight:400}
 .failure{color:#c45656}
-.warning-list{margin:0;padding-left:18px;color:#a86a2c;font-size:12px;line-height:1.7}
 .field-filter{margin-bottom:6px}
-.collection-title{margin-right:8px;font-weight:600}
-.collection-count{margin-left:auto;padding-right:12px;color:#7d918a;font-size:11px}
-.raw-toggle{margin-top:12px}
-.raw-snapshot{margin:0;max-height:320px;overflow:auto;padding:10px;white-space:pre-wrap;
-  border:1px solid #dbe5ee;border-radius:6px;background:#f8fafc;color:#41564e;font:11px/1.6 Consolas,monospace}
+.field-directory{display:grid;grid-template-columns:minmax(280px,36%) minmax(0,1fr);height:min(620px,calc(100vh - 250px));min-height:380px;overflow:hidden;border:1px solid #dbe5ee;border-radius:6px;background:#fff}
+.field-directory :deep(.catalog-tree){height:100%;min-height:0;overflow:auto;padding:8px;border-right:1px solid #dbe5ee}
+.field-inspector{min-height:0;overflow:auto;padding:14px}.field-inspector h4{margin:0 0 12px;font-size:14px}.field-inspector h4 small{margin-left:6px;color:#8a9993;font-weight:400}
+.group-json{margin:10px 0 0;max-height:420px;overflow:auto;padding:10px;white-space:pre-wrap;border:1px solid #dbe5ee;border-radius:6px;background:#f8fafc;color:#41564e;font:11px/1.6 Consolas,monospace}
+@media (max-width: 760px){.field-directory{grid-template-columns:1fr;grid-template-rows:260px minmax(260px,1fr);height:min(660px,calc(100vh - 180px));min-height:520px}.field-directory :deep(.catalog-tree){border-right:0;border-bottom:1px solid #dbe5ee}}
 </style>

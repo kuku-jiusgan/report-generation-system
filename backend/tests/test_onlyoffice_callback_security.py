@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from backend.app.auth import AuthManager
 from backend.app.config import Settings
 from backend.app.database import Database, now_iso
+from backend.app.onlyoffice_callback import is_current_document_key
 from backend.app.report_word_api import create_report_word_router
 from backend.app.services.rule_admin import RuleAdminRepository
 
@@ -211,6 +212,12 @@ def test_callback_rejects_missing_and_stale_document_key(env: dict) -> None:
     assert status == 200
     assert body == {"error": 0}
     assert env["working"].read_bytes() == _minimal_docx("SAVED-EDIT")
+
+
+def test_current_document_key_rejects_stale_editor_session() -> None:
+    assert is_current_document_key("active-editor-key", "active-editor-key")
+    assert not is_current_document_key("active-editor-key", "stale-editor-key")
+    assert not is_current_document_key("", "active-editor-key")
 
 
 def test_repeated_autosaves_keep_working_with_same_key(env: dict) -> None:

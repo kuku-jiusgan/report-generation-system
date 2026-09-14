@@ -1,6 +1,8 @@
 import logging
 from typing import Any
 
+from .system_field_group_levels import structure_preview
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,36 +18,17 @@ def _read_relative(source: Any, path: str) -> Any:
     return current
 
 
-def _write_relative(target: dict[str, Any], path: str, value: Any) -> None:
-    parts = [part for part in path.strip().strip(".").split(".") if part]
-    if not parts:
-        return
-    current = target
-    for part in parts[:-1]:
-        nested = current.get(part)
-        if not isinstance(nested, dict):
-            nested = {}
-            current[part] = nested
-        current = nested
-    current[parts[-1]] = value
-
-
-def _field_path(field: dict[str, Any]) -> str:
-    configured = str(field.get("fieldPath") or "").strip()
-    return configured or str(field.get("fieldCode") or "").rsplit(".", 1)[-1]
-
-
-def _canonical_record(record: dict[str, Any], fields: list[dict[str, Any]]) -> dict[str, Any]:
-    result = dict(record)
-    for field in fields:
-        path = _field_path(field)
-        value = _read_relative(record, path)
-        if value is None:
-            legacy_key = str(field.get("fieldCode") or "").rsplit(".", 1)[-1]
-            value = record.get(legacy_key)
-        if value is not None:
-            _write_relative(result, path, value)
-    return result
+def _ordered_like(value: Any, template: Any) -> Any:
+    """按结构模板的键序重排取值；模板之外的键按键名排在后面。"""
+    if isinstance(template, list):
+        template = template[0] if template else {}
+    if isinstance(value, list):
+        return [_ordered_like(item, template) for item in value]
+    if not isinstance(value, dict) or not isinstance(template, dict):
+        return value
+    order = {key: index for index, key in enumerate(template)}
+    keys = sorted(value, key=lambda key: (order.get(key, len(order)), key))
+    return {key: _ordered_like(value[key], template.get(key)) for key in keys}
 
 
 def apply_group_contracts(payload: dict[str, Any], groups: list[dict[str, Any]]) -> dict[str, Any]:
@@ -57,10 +40,13 @@ def apply_group_contracts(payload: dict[str, Any], groups: list[dict[str, Any]])
         if not code or code not in payload:
             continue
         cardinality = str(group.get("cardinality") or "ONE").upper()
+        # 记录的键顺序服从标准字段目录里那份结构：先记录顶层字段，再按层的顺序展开子层。
+        # 直接复用目录结构预览的键序，避免这里另推一套排序规则、和目录里显示的对不上。
+        template = structure_preview(list(group.get("levels") or []), list(group.get("fields") or []))
         current = payload.get(code)
         if cardinality == "MANY":
             records = current if isinstance(current, list) else ([current] if isinstance(current, dict) else [])
-            payload[code] = [_canonical_record(record, list(group.get("fields") or []))
+            payload[code] = [_ordered_like(record, template)
                              for record in records if isinstance(record, dict)]
             item_key = str(group.get("itemKey") or "").strip()
             if item_key:
@@ -69,7 +55,7 @@ def apply_group_contracts(payload: dict[str, Any], groups: list[dict[str, Any]])
                 if missing:
                     logger.warning("编组记录缺少 itemKey group=%s itemKey=%s rows=%s", code, item_key, missing)
         elif isinstance(current, list):
-            payload[code] = _canonical_record(current[0], list(group.get("fields") or [])) if current else {}
+            payload[code] = _ordered_like(current[0], template) if current else {}
         elif isinstance(current, dict):
-            payload[code] = _canonical_record(current, list(group.get("fields") or []))
+            payload[code] = _ordered_like(current, template)
     return payload

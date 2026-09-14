@@ -13,9 +13,8 @@ from .database import Database, now_iso
 
 
 REPORT_SESSION_COOKIE = "report_user_session"
-ADMIN_SESSION_COOKIE = "report_admin_session"
 PERMISSIONS = {
-    "ADMIN_ACCESS": "访问后台管理系统",
+    "ADMIN_ACCESS": "访问系统管理功能",
     "RULES_MANAGE": "管理报告模板与规则",
     "LIMS_FIELDS_MANAGE": "管理 LIMS 标准字段",
     "USERS_MANAGE": "管理用户",
@@ -47,7 +46,6 @@ DEFAULT_ROLE_PERMISSIONS = {
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=256)
-    portal: str = Field(pattern="^(report|admin)$")
 
 
 class ChangePasswordRequest(BaseModel):
@@ -136,14 +134,6 @@ class AuthManager:
     def current_user(self, session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE)) -> dict[str, Any]:
         return self.session_user(session)
 
-    def current_admin_user(self, session: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE)) -> dict[str, Any]:
-        return self.session_user(session)
-
-    def either_user(self,
-                    report_session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE),
-                    admin_session: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE)) -> dict[str, Any]:
-        return self.session_user(report_session or admin_session)
-
     def optional_user(self, session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE)) -> dict[str, Any] | None:
         if not session:
             return None
@@ -152,9 +142,8 @@ class AuthManager:
             user["permissions"] = self.database.role_permissions(user["role_code"])
         return user
 
-    def require(self, permission: str, portal: str = "report") -> Callable[..., dict[str, Any]]:
-        source = self.current_admin_user if portal == "admin" else self.current_user
-        def dependency(user: dict[str, Any] = Depends(source)) -> dict[str, Any]:
+    def require(self, permission: str) -> Callable[..., dict[str, Any]]:
+        def dependency(user: dict[str, Any] = Depends(self.current_user)) -> dict[str, Any]:
             if permission not in user["permissions"]:
                 raise HTTPException(403, "没有执行此操作的权限")
             if user["must_change_password"]:
@@ -163,7 +152,7 @@ class AuthManager:
         return dependency
 
     def require_any(self, *permissions: str) -> Callable[..., dict[str, Any]]:
-        def dependency(user: dict[str, Any] = Depends(self.either_user)) -> dict[str, Any]:
+        def dependency(user: dict[str, Any] = Depends(self.current_user)) -> dict[str, Any]:
             if not set(permissions).intersection(user["permissions"]):
                 raise HTTPException(403, "没有执行此操作的权限")
             if user["must_change_password"]:
@@ -172,10 +161,10 @@ class AuthManager:
         return dependency
 
     def admin_route_guard(self, request: Request,
-                          session: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE)) -> dict[str, Any]:
+                          session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE)) -> dict[str, Any]:
         # ONLYOFFICE fetches the document and posts save callbacks from the
-        # Document Server process, so those requests cannot carry a browser
-        # admin-session cookie.  The endpoints themselves validate a signed
+        # Document Server process, so those requests cannot carry the browser
+        # application-session cookie.  The endpoints themselves validate a signed
         # ONLYOFFICE JWT; keep the rest of the admin API behind the session
         # guard.
         path = request.url.path
@@ -209,34 +198,28 @@ def create_auth_router(auth: AuthManager) -> APIRouter:
         if not user:
             raise HTTPException(401, "用户名或密码错误")
         token, expires = auth.issue_session(user["id"])
-        cookie_name = ADMIN_SESSION_COOKIE if payload.portal == "admin" else REPORT_SESSION_COOKIE
         response.set_cookie(
-            cookie_name, token, httponly=True, samesite="lax",
+            REPORT_SESSION_COOKIE, token, httponly=True, samesite="lax",
             secure=auth.settings.secure_cookies, expires=expires, path="/",
         )
         return auth.public_user(user, auth.database.role_permissions(user["role_code"]))
 
     @router.post("/logout")
-    def logout(response: Response, portal: str = "report",
-               report_session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE),
-               admin_session: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE)) -> dict[str, bool]:
-        session = admin_session if portal == "admin" else report_session
+    def logout(response: Response,
+               session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE)) -> dict[str, bool]:
         auth.logout(session)
-        response.delete_cookie(ADMIN_SESSION_COOKIE if portal == "admin" else REPORT_SESSION_COOKIE, path="/")
+        response.delete_cookie(REPORT_SESSION_COOKIE, path="/")
         return {"ok": True}
 
     @router.get("/me")
-    def me(portal: str = "report",
-           report_session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE),
-           admin_session: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE)) -> dict[str, Any]:
-        user = auth.session_user(admin_session if portal == "admin" else report_session)
+    def me(session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE)) -> dict[str, Any]:
+        user = auth.session_user(session)
         return auth.public_user(user, user["permissions"])
 
     @router.post("/change-password")
-    def change_password(payload: ChangePasswordRequest, portal: str = "report",
-                        report_session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE),
-                        admin_session: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE)) -> dict[str, Any]:
-        user = auth.session_user(admin_session if portal == "admin" else report_session)
+    def change_password(payload: ChangePasswordRequest,
+                        session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE)) -> dict[str, Any]:
+        user = auth.session_user(session)
         if not auth.verify_password(payload.current_password, user["password_hash"]):
             raise HTTPException(422, "当前密码不正确")
         auth.database.update_user(

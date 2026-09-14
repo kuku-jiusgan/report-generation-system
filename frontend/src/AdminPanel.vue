@@ -192,7 +192,7 @@ const blockKindOptions: Array<{ value: ContentBlockKind; label: string }> = [
   { value: "FIXED", label: "固定内容" },
   { value: "MAPPED_FIELD", label: "单值字段组" },
   { value: "REPEATING_TABLE", label: "循环表格" },
-  { value: "MATRIX", label: "结果矩阵" },
+  { value: "MATRIX", label: "结果矩阵（可按数据向右扩展）" },
   { value: "TABLE_REPEAT", label: "按杂质复制整表" },
   { value: "AI_NARRATIVE", label: "AI 文本块" },
   { value: "CALCULATED", label: "计算内容块" },

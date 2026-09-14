@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_model: str = ""
     ai_timeout: float = 60.0
+    ai_max_tokens: int = 800
+    ai_thinking_enabled: bool = False
     bootstrap_admin_username: str = ""
     bootstrap_admin_password: str = ""
     session_hours: int = 8
@@ -75,5 +77,4 @@ def get_settings() -> Settings:
                 settings.onlyoffice_jwt_secret = str(payload["services"]["CoAuthoring"]["secret"]["browser"]["string"])
             except (KeyError, TypeError, ValueError, OSError):
                 pass
-    settings.ensure_directories()
     return settings

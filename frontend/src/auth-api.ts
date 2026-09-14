@@ -15,23 +15,21 @@ export interface AuthUser {
   lastLoginAt?: string
 }
 
-export type AuthPortal = 'report' | 'admin'
-
-export async function login(username: string, password: string, portal: AuthPortal) {
-  return (await http.post<AuthUser>('/login', { username, password, portal })).data
+export async function login(username: string, password: string) {
+  return (await http.post<AuthUser>('/login', { username, password })).data
 }
 
-export async function logout(portal: AuthPortal) {
-  await http.post('/logout', undefined, { params: { portal } })
+export async function logout() {
+  await http.post('/logout')
 }
 
-export async function currentUser(portal: AuthPortal) {
-  return (await http.get<AuthUser>('/me', { params: { portal } })).data
+export async function currentUser() {
+  return (await http.get<AuthUser>('/me')).data
 }
 
-export async function changePassword(currentPassword: string, newPassword: string, portal: AuthPortal) {
+export async function changePassword(currentPassword: string, newPassword: string) {
   return (await http.post<AuthUser>('/change-password', {
     current_password: currentPassword,
     new_password: newPassword,
-  }, { params: { portal } })).data
+  })).data
 }

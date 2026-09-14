@@ -13,19 +13,6 @@ http.interceptors.response.use(undefined, (error) => {
   return Promise.reject(error);
 });
 
-export interface AdminOverview {
-  mappingCount: number;
-  enabledMappings: number;
-  tableCount: number;
-  enabledTables: number;
-  sourceCounts: Record<string, number>;
-  pendingCount: number;
-  aiRuleCount: number;
-  publishedVersion?: number;
-  template: { name: string; size: number; exists: boolean };
-}
-
-
 export interface DataSourceRule {
   id: number;
   code: string;
@@ -128,6 +115,8 @@ export interface AiServiceConfig {
   baseUrl: string;
   model: string;
   timeout: number;
+  maxTokens: number;
+  thinkingEnabled: boolean;
   apiKeyConfigured: boolean;
   apiKeyMasked: string;
   apiKey?: string;
@@ -383,7 +372,6 @@ export const adminApi = {
   activateTemplateVersion: async (templateId: string, versionId: string) =>
     (await http.post(`/templates/${templateId}/versions/${versionId}/activate`))
       .data,
-  overview: async () => (await http.get<AdminOverview>("/overview")).data,
   designer: async () => (await http.get<TemplateDesigner>("/designer")).data,
   chapters: async () => (await http.get<DesignerChapter[]>("/chapters")).data,
   createChapter: async (data: Partial<DesignerChapter>) =>
@@ -434,6 +422,8 @@ export const adminApi = {
     (await http.post<StandardField>("/standard-fields", data)).data,
   updateStandardField: async (fieldCode: string, data: Partial<StandardField>) =>
     (await http.put<StandardField>(`/standard-fields/${encodeURIComponent(fieldCode)}`, data)).data,
+  moveStandardFieldOwnership: async (fieldCode: string, target: { groupCode: string } | { chapterId: number }) =>
+    (await http.put<StandardField>(`/standard-fields/${encodeURIComponent(fieldCode)}/ownership`, target)).data,
   deleteStandardField: async (fieldCode: string) =>
     (await http.delete(`/standard-fields/${encodeURIComponent(fieldCode)}`)).data,
   standardFieldReferences: async (fieldCode: string) =>

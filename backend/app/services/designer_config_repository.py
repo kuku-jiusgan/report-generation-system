@@ -35,15 +35,54 @@ class DesignerConfigRepositoryMixin:
         """矩阵版式以 JSON 文本保存；格式错误必须在保存时就说清楚，不能留到生成时。"""
         layout = item.get("matrixLayout", "")
         if isinstance(layout, dict):
-            return json.dumps(layout, ensure_ascii=False)
+            text = json.dumps(layout, ensure_ascii=False)
+            DesignerConfigRepositoryMixin._validate_matrix_layout(layout)
+            return text
         text = str(layout or "").strip()
         if not text:
             return ""
         try:
-            json.loads(text)
+            parsed = json.loads(text)
         except json.JSONDecodeError as error:
             raise ValueError(f"矩阵版式不是合法 JSON：{error}") from error
+        if not isinstance(parsed, dict):
+            raise ValueError("矩阵版式必须是 JSON 对象")
+        DesignerConfigRepositoryMixin._validate_matrix_layout(parsed)
         return text
+
+    @staticmethod
+    def _validate_matrix_layout(layout: dict[str, Any]) -> None:
+        row_fields = layout.get("rowFields")
+        if row_fields is not None:
+            if not isinstance(row_fields, list):
+                raise ValueError("矩阵版式的 rowFields 必须是数组")
+            for entry in row_fields:
+                try:
+                    row = int(entry.get("row", 0) or 0) if isinstance(entry, dict) else 0
+                except (TypeError, ValueError):
+                    row = 0
+                if not isinstance(entry, dict) or row < 1 or not str(entry.get("field") or "").strip():
+                    raise ValueError("矩阵版式的 rowFields 必须包含正整数 row 和非空 field")
+        policy = layout.get("columnPolicy")
+        if policy is None:
+            return
+        if not isinstance(row_fields, list) or not row_fields:
+            raise ValueError("启用矩阵横向扩展时，rowFields 不能为空")
+        if not isinstance(policy, dict):
+            raise ValueError("矩阵横向扩展的 columnPolicy 必须是 JSON 对象")
+        if str(policy.get("mode") or "DATA_LENGTH") != "DATA_LENGTH":
+            raise ValueError("矩阵横向扩展的 mode 只能是 DATA_LENGTH")
+        if str(policy.get("overflow") or "") != "HORIZONTAL":
+            raise ValueError("矩阵横向扩展的 overflow 只能是 HORIZONTAL")
+        try:
+            minimum = int(policy.get("minColumns", 1))
+        except (TypeError, ValueError) as error:
+            raise ValueError("矩阵横向扩展的 minColumns 必须是正整数") from error
+        if minimum < 1 or minimum > 1000:
+            raise ValueError("矩阵横向扩展的 minColumns 必须在 1 到 1000 之间")
+        width_mode = str(policy.get("widthMode") or "PROTOTYPE")
+        if width_mode not in {"PROTOTYPE", "PRESERVE_TOTAL"}:
+            raise ValueError("矩阵横向扩展的 widthMode 只能是 PROTOTYPE 或 PRESERVE_TOTAL")
 
     def upsert_table_rule(self, item: dict[str, Any]) -> dict[str, Any]:
         values = (

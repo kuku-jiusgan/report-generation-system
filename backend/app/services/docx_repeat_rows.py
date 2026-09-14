@@ -104,13 +104,12 @@ def _clear_unmapped_summary_cells(row: etree._Element, direct_tags: set[str]) ->
             _set_cell_text(cell, "")
 
 
-def _group_source(table_no: str, group: list[dict[str, Any]], report_data: dict[str, Any],
-                  warn: Warn) -> tuple[str, str] | None:
+def _group_source(table_no: str, group: list[dict[str, Any]], warn: Warn) -> tuple[str, str] | None:
     """循环表的数据集合以内容块配置为准，字段路径只作为未配置时的回退。"""
     block_source = next((repeat_source(item.get("blockSourcePath", "")) for item in group
                          if repeat_source(item.get("blockSourcePath", ""))), None)
-    field_source = next((repeat_source(mapping_source_path(item, report_data)) for item in group
-                         if repeat_source(mapping_source_path(item, report_data))), None)
+    field_source = next((repeat_source(mapping_source_path(item)) for item in group
+                         if repeat_source(mapping_source_path(item))), None)
     if block_source and field_source and block_source[0] != field_source[0]:
         warn("BLOCK_SOURCE_MISMATCH", table_no,
              f"内容块的循环数据集合是 {block_source[0]}，字段却取自 {field_source[0]}，"
@@ -210,7 +209,7 @@ def _write_cell_values(cells: list[etree._Element], record: dict[str, Any], tabl
         if is_formula_calculation(mapping):
             set_control_text(control, format_value(row_values.get(str(mapping.get("fieldCode"))), mapping))
             continue
-        repeat_path = repeat_source(mapping_source_path(mapping, report_data))
+        repeat_path = repeat_source(mapping_source_path(mapping))
         if not repeat_path:
             continue
         if repeat_path[0] != source[0]:
@@ -240,7 +239,7 @@ def _apply_vertical_merge(rows: list[etree._Element],
         previous: Any = object()
         previous_cell: etree._Element | None = None
         for row, (group_record, detail_record) in zip(rows, units):
-            repeat_path = repeat_source(mapping_source_path(mapping, report_data))
+            repeat_path = repeat_source(mapping_source_path(mapping))
             value = _level_value(repeat_path, group_record, detail_record) if repeat_path else None
             controls = {tag_of(control): control for control in row.xpath(".//w:sdt", namespaces=NS)}
             control = controls.get(tag)
@@ -284,21 +283,19 @@ def _prototype_row(document: etree._Element, table_no: str, mappings: list[dict[
     return bookmarks[0].getparent()
 
 
-def _group_tag(group: list[dict[str, Any]], group_field: str,
-               report_data: dict[str, Any]) -> str:
+def _group_tag(group: list[dict[str, Any]], group_field: str) -> str:
     for mapping in group:
-        path = repeat_source(mapping_source_path(mapping, report_data))
+        path = repeat_source(mapping_source_path(mapping))
         if path and path[1] == group_field and mapping.get("controlTag"):
             return str(mapping["controlTag"])
     return ""
 
 
-def _detail_key(group: list[dict[str, Any]], report_data: dict[str, Any],
-                table_no: str, warn: Warn) -> str:
+def _detail_key(group: list[dict[str, Any]], table_no: str, warn: Warn) -> str:
     """明细数组的键：从字段路径里的 `[*]` 解析。同一编组只允许一个明细数组。"""
     keys = []
     for mapping in group:
-        path = repeat_source(mapping_source_path(mapping, report_data))
+        path = repeat_source(mapping_source_path(mapping))
         if path and "[*]" in path[1]:
             keys.append(path[1].split("[*]", 1)[0])
     unique = list(dict.fromkeys(keys))
@@ -356,8 +353,11 @@ def _fill_level_controls(cells: list[etree._Element], group_record: dict[str, An
         if is_formula_calculation(mapping):
             set_control_text(control, format_value(row_values.get(str(mapping.get("fieldCode"))), mapping))
             continue
-        path = repeat_source(mapping_source_path(mapping, report_data))
+        path = repeat_source(mapping_source_path(mapping))
         if not path:
+            warn("FIELD_PATH_MISSING", table_no,
+                 f"字段“{mapping.get('wordLabel') or mapping.get('fieldCode')}”在标准字段目录里没有可用的"
+                 f"取值路径（多半是所属编组的数据集合路径没配），已跳过填充。")
             continue
         if path[0] != source[0]:
             warn("FIELD_SOURCE_MISMATCH", table_no,
@@ -375,7 +375,7 @@ def _fill_grouped_table(table: etree._Element, prototype: etree._Element, table_
                         layout: TableLayoutRules, warn: Warn) -> None:
     """向下填充 + 向右分组：编组数组的每个元素就是一个分组，明细数组就是行。"""
     group_field = layout.group_field(table_no)
-    tag = _group_tag(group, group_field, report_data)
+    tag = _group_tag(group, group_field)
     if not tag:
         warn("GROUP_FIELD_NOT_BOUND", table_no,
              f"表格配置了横向分组字段 {group_field}，但它没有绑定到 Word 里的内容控件；"
@@ -394,7 +394,7 @@ def _fill_grouped_table(table: etree._Element, prototype: etree._Element, table_
              f"数据里没有字段 {group_field} 的取值，无法确定横向分组，已保留 Word 原有内容。")
         return
     names = [str(record_value(item, group_field)) for item in groups]
-    detail_key = _detail_key(group, report_data, table_no, warn)
+    detail_key = _detail_key(group, table_no, warn)
     width, start = span[1] - span[0] + 1, span[0]
     for row_blocks in expand_group_columns(table, span, len(groups), layout.equal_group_columns(table_no)):
         fill_group_headers(row_blocks, tag, names)
@@ -450,7 +450,7 @@ def _fill_row_repeat_table(document: etree._Element, table_no: str, group: list[
     direct_tags = {item.get("controlTag", "") for item in mappings
                    if item.get("controlTag") and item.get("repeatType") != "ROW"}
     _drop_stale_rows(parent, insert_at, direct_tags, layout.preserved_row_labels(table_no))
-    detail_key = _detail_key(group, report_data, table_no, warn)
+    detail_key = _detail_key(group, table_no, warn)
     units = _row_units(records, detail_key)
     rows = _clone_rows(prototype, parent, insert_at, units)
     for row, (group_record, detail_record) in zip(rows, units):
@@ -518,13 +518,13 @@ def fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], p
                      report_data: dict[str, Any], values: dict[str, Any],
                      layout: TableLayoutRules, warn: Warn) -> None:
     for table_no, group in _group_mappings(mappings).items():
-        source = _group_source(table_no, group, report_data, warn)
+        source = _group_source(table_no, group, warn)
         if not source:
             warn("BLOCK_SOURCE_MISSING", table_no,
                  "内容块和字段都没有配置循环数据集合，已保留 Word 模板中的原有内容。")
             continue
         source_mapping = next((item for item in group
-                               if repeat_source(mapping_source_path(item, report_data))), group[0])
+                               if repeat_source(mapping_source_path(item))), group[0])
         source_payload = payload_for_mapping(source_mapping, payload, report_data)
         records = source_payload.get(source[0])
         records = _prepare_repeat_records(records if isinstance(records, list) else [], group)

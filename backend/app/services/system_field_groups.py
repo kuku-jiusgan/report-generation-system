@@ -79,6 +79,7 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
             "fieldCode": field["field_code"], "label": field["label"], "dataType": field["data_type"],
             "cardinality": field["field_cardinality"], "enabled": bool(field["enabled"]),
             "jsonKey": json_key, "levelKey": level_key,
+            "orderNo": int(field.get("order_no", 0) or 0),
             "fieldPath": field_path_for(level_key, kinds.get((code, level_key), ""), json_key),
         })
     chapters: dict[str, list[int]] = {}
@@ -152,11 +153,59 @@ def assign_field_to_group(database: Database, group_code: str, field_code: str, 
     if not database.get_lims_field(field_code):
         raise ValueError("系统字段不存在")
     with database.connect() as connection:
+        connection.execute("DELETE FROM system_field_chapters WHERE field_code=%s", (field_code,))
         connection.execute(
             "INSERT INTO system_field_group_fields(group_code,field_code,field_path,order_no) VALUES(%s,%s,%s,%s) ON DUPLICATE KEY UPDATE field_path=VALUES(field_path),order_no=VALUES(order_no)",
             (group_code, field_code, field_path, 0),
         )
     return next(group for group in list_system_field_groups(database) if group["groupCode"] == group_code)
+
+
+def move_field_ownership(
+    database: Database, field_code: str, *, group_code: str = "", chapter_id: int | None = None,
+) -> dict[str, Any]:
+    """将字段移动到唯一的目录归属，不改动字段本身的取值路径或提取规则。"""
+    ensure_system_field_groups(database)
+    target_group = group_code.strip()
+    if bool(target_group) == (chapter_id is not None):
+        raise ValueError("请选择一个目标章节或目标编组")
+    if not database.get_lims_field(field_code):
+        raise ValueError("系统字段不存在")
+    with database.connect() as connection:
+        if target_group:
+            if not connection.execute(
+                "SELECT 1 FROM system_field_groups WHERE group_code=%s", (target_group,),
+            ).fetchone():
+                raise ValueError("目标编组不存在")
+        elif not connection.execute(
+            "SELECT 1 FROM admin_template_chapters WHERE id=%s", (chapter_id,),
+        ).fetchone():
+            raise ValueError("目标章节不存在")
+
+        # 目录归属是单值关系：迁移时必须先清除所有旧位置，不能让同一字段出现在多处。
+        connection.execute("DELETE FROM system_field_group_fields WHERE field_code=%s", (field_code,))
+        connection.execute("DELETE FROM system_field_chapters WHERE field_code=%s", (field_code,))
+        if target_group:
+            next_order = connection.execute(
+                "SELECT COALESCE(MAX(order_no), -1) + 1 AS next_order FROM system_field_group_fields WHERE group_code=%s",
+                (target_group,),
+            ).fetchone()["next_order"]
+            connection.execute(
+                "INSERT INTO system_field_group_fields(group_code,field_code,field_path,order_no) VALUES(%s,%s,%s,%s)",
+                (target_group, field_code, "", next_order),
+            )
+        else:
+            order_no = connection.execute(
+                "SELECT order_no FROM lims_field_catalog WHERE field_code=%s", (field_code,),
+            ).fetchone()["order_no"]
+            connection.execute(
+                "INSERT INTO system_field_chapters(field_code,chapter_id,order_no) VALUES(%s,%s,%s)",
+                (field_code, chapter_id, order_no),
+            )
+    moved = database.get_lims_field(field_code)
+    if not moved:
+        raise ValueError("字段移动后无法读取")
+    return moved
 
 def remove_field_from_group(database: Database, group_code: str, field_code: str) -> dict[str, Any]:
     ensure_system_field_groups(database)

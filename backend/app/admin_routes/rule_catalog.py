@@ -9,7 +9,7 @@ from ..services.calculation_engine import CalculationError, validate_calculation
 from ..services.docx_control_index import control_locations, describe_binding
 from ..services.ai_field_generator import AiGenerationError, generate_ai_text, render_ai_prompt
 from ..services.ai_service_config import load_ai_service_config, save_ai_service_config
-from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, delete_system_field_group, list_system_field_groups, remove_field_from_group, reorder_group_fields, save_system_field_group, sync_group_field_paths
+from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, delete_system_field_group, list_system_field_groups, move_field_ownership, remove_field_from_group, reorder_group_fields, save_system_field_group, sync_group_field_paths
 from ..services.system_field_group_levels import delete_group_level, move_field_to_level, save_group_level, structure_preview
 
 
@@ -197,7 +197,6 @@ def _resolve_standard_field(repository: RuleAdminRepository, item: dict[str, Any
     )
     if not field:
         raise HTTPException(422, "标准字段不存在或已停用")
-    item["sourcePath"] = field.get("legacyJsonPath") or field.get("sourcePath") or ""
     item["dataType"] = field["dataType"]
     item["sourceType"] = "SYSTEM"
     item["calculationExpression"] = ""
@@ -349,6 +348,19 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
             assign_field_to_group(repository.database, str(item["groupCode"]), saved["fieldCode"])
         return saved
 
+    @router.put("/standard-fields/{field_code}/ownership")
+    def move_standard_field_ownership(field_code: str, item: dict[str, Any]) -> dict[str, Any]:
+        try:
+            chapter_id = item.get("chapterId")
+            return move_field_ownership(
+                repository.database,
+                field_code,
+                group_code=str(item.get("groupCode") or ""),
+                chapter_id=int(chapter_id) if chapter_id is not None else None,
+            )
+        except (TypeError, ValueError) as error:
+            raise HTTPException(422, str(error)) from error
+
     @router.put("/standard-fields/{field_code:path}")
     def update_standard_field(field_code: str, item: dict[str, Any]) -> dict[str, Any]:
         existing = repository.database.get_lims_field(field_code)
@@ -467,6 +479,9 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
     @router.put("/table-rules/{table_no}")
     def update_table_rule(table_no: str, item: dict[str, Any]) -> dict[str, Any]:
         item["tableNo"] = table_no.upper()
-        result = repository.upsert_table_rule(item)
+        try:
+            result = repository.upsert_table_rule(item)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(422, str(error)) from error
         repository.save_active_workspace()
         return result

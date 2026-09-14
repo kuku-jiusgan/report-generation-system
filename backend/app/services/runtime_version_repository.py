@@ -64,7 +64,7 @@ class RuntimeVersionRepositoryMixin:
         note: str, publish: bool,
     ) -> dict[str, Any]:
         with self.database.connect() as connection:
-            # BEGIN IMMEDIATE 先拿写锁，避免并发发布读到相同 MAX(version_no)
+            # MySQL 通过 FOR UPDATE 获取写锁，避免并发发布读到相同 MAX(version_no)
             version_no = connection.execute(
                 "SELECT COALESCE(MAX(version_no),0)+1 FROM admin_rule_versions FOR UPDATE"
             ).fetchone()[0]

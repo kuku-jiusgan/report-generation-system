@@ -112,7 +112,7 @@ def create_onlyoffice_bridge_router(settings: Settings, auth: AuthManager) -> AP
 
     @router.post("/{channel_id}")
     def submit_command(channel_id: str, command: dict[str, Any],
-                       _: dict = Depends(auth.either_user)) -> dict[str, bool]:
+                       _: dict = Depends(auth.current_user)) -> dict[str, bool]:
         store.submit(channel_id, command)
         return {"accepted": True}
 
@@ -126,7 +126,7 @@ def create_onlyoffice_bridge_router(settings: Settings, auth: AuthManager) -> AP
         return {"accepted": True}
 
     @router.get("/{channel_id}/trace")
-    def list_trace(channel_id: str, _: dict = Depends(auth.either_user)) -> list[dict[str, Any]]:
+    def list_trace(channel_id: str, _: dict = Depends(auth.current_user)) -> list[dict[str, Any]]:
         return store.list_traces(channel_id)
 
     return router

@@ -104,10 +104,15 @@ class LimsCatalogRepositoryMixin:
         fields = {item["fieldCode"]: item for item in self.list_lims_fields()}
         with self.connect() as connection:
             rows = connection.execute(
-                """SELECT DISTINCT gf.field_code FROM system_field_group_chapters gc
+                """SELECT DISTINCT field_code FROM (
+                   SELECT gf.field_code FROM system_field_group_chapters gc
                    JOIN system_field_group_fields gf ON gf.group_code=gc.group_code
-                   WHERE gc.chapter_id=%s""",
-                (chapter_id,),
+                   WHERE gc.chapter_id=%s
+                   UNION ALL
+                   SELECT sf.field_code FROM system_field_chapters sf
+                   WHERE sf.chapter_id=%s
+                ) chapter_fields""",
+                (chapter_id, chapter_id),
             ).fetchall()
         return [fields[row["field_code"]] for row in rows if row["field_code"] in fields]
 

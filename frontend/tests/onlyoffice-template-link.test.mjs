@@ -28,6 +28,7 @@ function createPluginHarness() {
           GetSelectedText: '供试品名称',
           AddContentControl: { Tag: args[1]?.Tag, InternalId: 'control-2' },
         }
+        if (name === 'AddContentControl') results.GetAllContentControls = controls.concat(results.AddContentControl)
         callback?.(results[name])
       },
     } },

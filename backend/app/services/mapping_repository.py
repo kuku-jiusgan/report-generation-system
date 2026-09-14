@@ -7,7 +7,7 @@ from ..database import now_iso
 MAPPING_COLUMNS = {
     "locationId": "location_id", "sectionCode": "section_code", "tableNo": "table_no",
     "wordLabel": "word_label", "fieldCode": "field_code", "dataType": "data_type",
-    "sourceType": "source_type", "sourcePath": "source_path", "standardFieldCode": "standard_field_code",
+    "sourceType": "source_type", "standardFieldCode": "standard_field_code",
     "repeatType": "repeat_type", "repeatKey": "repeat_key", "mergeRule": "merge_rule",
     "fillRule": "fill_rule", "calculationRule": "calculation_rule",
     "calculationExpression": "calculation_expression", "calculationDependencies": "calculation_dependencies",
@@ -22,10 +22,16 @@ REVERSE_MAPPING_COLUMNS = {value: key for key, value in MAPPING_COLUMNS.items()}
 class MappingRepositoryMixin:
     """Persistence and relationship management for template field mappings."""
 
+    def _catalog_source_paths(self) -> dict[str, str]:
+        """字段编码 → 取值路径。映射规则不存路径，一律来自标准字段目录。"""
+        return {str(item["fieldCode"]): str(item.get("legacyJsonPath") or "")
+                for item in self.database.list_lims_fields(True)}
+
     @staticmethod
-    def _mapping_to_api(row: dict[str, Any]) -> dict[str, Any]:
+    def _mapping_to_api(row: dict[str, Any], paths: dict[str, str]) -> dict[str, Any]:
         item = {REVERSE_MAPPING_COLUMNS.get(key, key): value
-                for key, value in row.items() if key != "updated_at"}
+                for key, value in row.items() if key not in ("updated_at", "source_path")}
+        item["sourcePath"] = paths.get(str(item.get("standardFieldCode") or ""), "")
         for key in ("required", "sourcePending", "enabled"):
             if key in item:
                 item[key] = bool(item[key])
@@ -59,7 +65,8 @@ class MappingRepositoryMixin:
         sql += " ORDER BY CASE WHEN m.table_no='HEADER' THEN 0 ELSE CAST(SUBSTRING(m.table_no,2) AS SIGNED) END,m.id"
         with self.database.connect() as connection:
             rows = [dict(row) for row in connection.execute(sql, params).fetchall()]
-        return [self._mapping_to_api(row) for row in rows]
+        paths = self._catalog_source_paths()
+        return [self._mapping_to_api(row, paths) for row in rows]
 
     @staticmethod
     def _mapping_values(item: dict[str, Any], partial: bool) -> dict[str, Any]:
@@ -82,8 +89,6 @@ class MappingRepositoryMixin:
     def create_mapping(self, item: dict[str, Any]) -> dict[str, Any]:
         item = self.ensure_mapping_identifiers(item)
         self.validate_calculation_mapping(item)
-        if item.get("sourceType") == "CALCULATED" and item.get("calculationExpression"):
-            item["sourcePath"] = ""
         values = self._mapping_values(item, partial=False)
         with self.database.connect() as connection:
             cursor = connection.execute(
@@ -93,7 +98,7 @@ class MappingRepositoryMixin:
             row = connection.execute("SELECT * FROM admin_mapping_rules WHERE id=%s", (cursor.lastrowid,)).fetchone()
         self._create_mapping_relations(cursor.lastrowid, item)
         return next((value for value in self.list_mappings() if value["id"] == cursor.lastrowid),
-                    self._mapping_to_api(dict(row)))
+                    self._mapping_to_api(dict(row), self._catalog_source_paths()))
 
     def _create_mapping_relations(self, mapping_id: int, item: dict[str, Any]) -> None:
         if item.get("chapterId"):
@@ -124,8 +129,6 @@ class MappingRepositoryMixin:
     def update_mapping(self, rule_id: int, item: dict[str, Any]) -> dict[str, Any] | None:
         item = self.ensure_mapping_identifiers(item, rule_id)
         self.validate_calculation_mapping(item, rule_id)
-        if item.get("sourceType") == "CALCULATED" and item.get("calculationExpression"):
-            item["sourcePath"] = ""
         values = self._mapping_values(item, partial=True)
         with self.database.connect() as connection:
             connection.execute(
@@ -139,7 +142,7 @@ class MappingRepositoryMixin:
         if item.get("blockId"):
             self._assign_mapping_block(rule_id, item["blockId"])
         return next((value for value in self.list_mappings() if value["id"] == rule_id),
-                    self._mapping_to_api(dict(row))) if row else None
+                    self._mapping_to_api(dict(row), self._catalog_source_paths())) if row else None
 
     @staticmethod
     def _update_chapter_relation(connection: Any, rule_id: int, item: dict[str, Any]) -> None:

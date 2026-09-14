@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
+import { Delete, Plus } from '@element-plus/icons-vue'
 import type { ContentBlockKind, DesignerBlock, DesignerChapter } from '../admin-api'
 
 defineProps<{ blockKindOptions: Array<{ value: ContentBlockKind; label: string }>; saving: boolean }>()
@@ -12,11 +13,53 @@ const block = defineModel<Partial<DesignerBlock> | undefined>('block', { require
 // 表格统一按"向下填充"处理：哪一列填哪个字段由 Word 里的控件绑定决定，不在这里重复声明。
 // 设了横向分组字段就额外向右扩列——一个分组占哪几列，取绑了该字段那一格的合并跨度。
 const groupDraft = reactive({ groupField: '', groupColumnWidth: 'EQUAL' })
+type MatrixRowFieldDraft = { row: number; field: string }
+type MatrixFieldOption = { value: string; label: string }
+const matrixDraft = reactive({
+  enabled: false,
+  minColumns: 5,
+  widthMode: 'PROTOTYPE',
+  rowFields: [] as MatrixRowFieldDraft[],
+})
 const groupMode = computed(() => block.value?.tableRule?.mode === 'ROW_REPEAT'
   || (block.value?.tableRule?.mode === 'TABLE_REPEAT' && block.value?.tableRule?.innerMode === 'ROW_REPEAT'))
 const groupFields = computed(() => (block.value?.standardFields || [])
   .filter((item) => item.enabled !== false)
   .map((item) => ({ value: item.fieldPath || item.fieldCode, label: `${item.label} · ${item.fieldPath || item.fieldCode}` })))
+function fieldKey(value: unknown): string {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  const normalized = text.replace(/^\$\.?/, '')
+  const segments = normalized.split('.').filter(Boolean)
+  const collectionIndex = segments.findIndex((segment) => /\[\*?\]$/.test(segment))
+  const segment = collectionIndex >= 0
+    ? segments[collectionIndex + 1] || segments[collectionIndex]
+    : segments[segments.length - 1] || normalized
+  return segment.replace(/\[\*?\]$/g, '')
+}
+function sourceFieldKey(sourcePath: unknown, fieldCode: unknown): string {
+  const source = String(sourcePath || '').trim()
+  const code = String(fieldCode || '').trim()
+  const sourceKey = source ? fieldKey(source) : ''
+  // 映射的 sourcePath 可能尚未从标准字段目录解析出来；带集合标记的字段编码仍是可用的记录字段路径。
+  if (sourceKey && !/\[\*?\]/.test(source) && /\[\*?\]/.test(code)) return fieldKey(code)
+  return sourceKey || fieldKey(fieldCode)
+}
+const matrixFieldOptions = computed<MatrixFieldOption[]>(() => {
+  const options = new Map<string, MatrixFieldOption>()
+  for (const item of block.value?.mappings || []) {
+    const value = sourceFieldKey(item.sourcePath, item.fieldCode)
+    if (value && !options.has(value)) options.set(value, { value, label: `${item.wordLabel || value} · ${value}` })
+  }
+  for (const item of block.value?.standardFields || []) {
+    const value = fieldKey(item.legacyJsonPath || item.fieldPath || item.jsonKey || item.fieldCode)
+    if (value && !options.has(value)) options.set(value, { value, label: `${item.label || value} · ${value}` })
+  }
+  for (const item of matrixDraft.rowFields) {
+    if (item.field && !options.has(item.field)) options.set(item.field, { value: item.field, label: `未找到字段 · ${item.field}` })
+  }
+  return [...options.values()]
+})
 function loadGroup() {
   let layout: any = {}
   try { layout = block.value?.tableRule?.matrixLayout ? JSON.parse(block.value.tableRule.matrixLayout) : {} } catch { layout = {} }
@@ -29,9 +72,51 @@ function saveGroup() {
     ? JSON.stringify({ groupField: groupDraft.groupField, groupColumnWidth: groupDraft.groupColumnWidth }, null, 2)
     : ''
 }
+function matrixLayout() {
+  try {
+    const value = block.value?.tableRule?.matrixLayout
+    const parsed = value ? JSON.parse(value) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+function loadMatrix() {
+  const layout = matrixLayout()
+  const policy = layout.columnPolicy && typeof layout.columnPolicy === 'object' ? layout.columnPolicy : {}
+  matrixDraft.enabled = policy.overflow === 'HORIZONTAL'
+  matrixDraft.minColumns = Number(policy.minColumns || 5)
+  matrixDraft.widthMode = String(policy.widthMode || 'PROTOTYPE')
+  matrixDraft.rowFields = Array.isArray(layout.rowFields)
+    ? layout.rowFields.map((entry: any) => ({ row: Number(entry?.row || 0), field: String(entry?.field || '') }))
+    : []
+}
+function saveMatrix() {
+  if (!block.value?.tableRule || block.value.tableRule.mode !== 'MATRIX') return
+  const layout = matrixLayout()
+  if (matrixDraft.enabled) {
+    layout.rowFields = matrixDraft.rowFields.map((entry) => ({ row: Number(entry.row), field: entry.field }))
+    layout.columnPolicy = {
+      mode: 'DATA_LENGTH', overflow: 'HORIZONTAL',
+      minColumns: Number(matrixDraft.minColumns || 1), widthMode: matrixDraft.widthMode,
+    }
+  } else {
+    delete layout.columnPolicy
+  }
+  block.value.tableRule.matrixLayout = JSON.stringify(layout, null, 2)
+}
+function addMatrixRowField() {
+  const row = Math.max(0, ...matrixDraft.rowFields.map((item) => Number(item.row) || 0)) + 1
+  matrixDraft.rowFields.push({ row, field: '' })
+}
+function removeMatrixRowField(index: number) {
+  matrixDraft.rowFields.splice(index, 1)
+}
 watch(groupMode, (active) => { if (active) loadGroup() }, { immediate: true })
 watch(() => block.value?.standardGroupCode, () => { if (groupMode.value) loadGroup() })
 watch(groupDraft, saveGroup, { deep: true })
+watch(() => block.value?.tableRule?.mode, (mode) => { if (mode === 'MATRIX') loadMatrix() }, { immediate: true })
+watch(matrixDraft, saveMatrix, { deep: true })
 </script>
 
 <template>
@@ -81,15 +166,15 @@ watch(groupDraft, saveGroup, { deep: true })
               <el-select v-model="block.tableRule.mode">
                 <el-option label="不自动填充" value="STATIC" />
                 <el-option label="按行向下扩展" value="ROW_REPEAT" />
-                <el-option label="转置矩阵：一条记录占一列" value="MATRIX" />
+                <el-option label="结果矩阵：一条记录占一列（可向右扩展）" value="MATRIX" />
                 <el-option label="按分组复制整表" value="TABLE_REPEAT" />
               </el-select>
             </el-form-item>
           </div>
-          <el-form-item label="重建数据行时保留的汇总行">
+          <el-form-item v-if="block.tableRule.mode !== 'MATRIX'" label="按行扩展时保留的汇总行">
             <el-select v-model="block.tableRule.preservedRowLabels" multiple filterable allow-create
               default-first-option placeholder="例如 RSD、结论、平均" />
-            <small class="dialog-hint">首列以这些文字开头的行不会被删除，只清空未绑定的单元格。</small>
+            <small class="dialog-hint">仅用于按行向下扩展：首列以这些文字开头的行不会被删除，只清空未绑定的单元格。矩阵横向扩展无需配置，未列入“逐列数据行配置”的行默认保留。</small>
           </el-form-item>
           <div v-if="block.tableRule.mode === 'ROW_REPEAT'" class="form-inline">
             <el-form-item label="原型数据行位置"><el-input-number v-model="block.tableRule.dataRowStart" :min="1" /></el-form-item>
@@ -127,6 +212,39 @@ watch(groupDraft, saveGroup, { deep: true })
             </el-select>
             <small class="dialog-hint">扩列后保持表格总宽度不变。标题长的窄列在多分组时容易被挤成三行，选等宽即可。</small>
           </el-form-item>
+          <template v-if="block.tableRule.mode === 'MATRIX'">
+            <div class="section-title">矩阵横向扩展（当前矩阵类型的可选布局）</div>
+            <div class="form-inline">
+              <el-form-item label="按数据条数向右扩展">
+                <el-switch v-model="matrixDraft.enabled" active-text="启用" />
+              </el-form-item>
+              <el-form-item v-if="matrixDraft.enabled" label="最少数据列数">
+                <el-input-number v-model="matrixDraft.minColumns" :min="1" :max="1000" />
+              </el-form-item>
+            </div>
+            <div v-if="matrixDraft.enabled" class="form-inline">
+              <el-form-item label="列宽策略">
+                <el-select v-model="matrixDraft.widthMode">
+                  <el-option label="沿用原型列宽，表格向右增长" value="PROTOTYPE" />
+                  <el-option label="保持表格总宽度" value="PRESERVE_TOTAL" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="逐列数据行配置" class="matrix-row-fields-item">
+                <div class="matrix-row-fields">
+                  <div v-for="(entry, index) in matrixDraft.rowFields" :key="index" class="matrix-row-field">
+                    <el-input-number v-model="entry.row" :min="1" controls-position="right" aria-label="Word行号" />
+                    <el-select v-model="entry.field" filterable placeholder="选择字段">
+                      <el-option v-for="option in matrixFieldOptions" :key="option.value" :label="option.label" :value="option.value" />
+                    </el-select>
+                    <el-button link type="danger" :icon="Delete" aria-label="删除数据行配置" @click="removeMatrixRowField(index)" />
+                  </div>
+                  <el-button text type="primary" :icon="Plus" @click="addMatrixRowField">添加数据行</el-button>
+                  <small v-if="!matrixDraft.rowFields.length" class="dialog-hint">请添加需要随数据记录向右扩展的 Word 行。</small>
+                </div>
+              </el-form-item>
+            </div>
+            <small v-if="matrixDraft.enabled" class="dialog-hint">只扩展配置为逐列数据的行；回归方程、相关系数、结论等固定行保持原布局。字段名必须来自报告数据记录。保存后该配置写入当前表格规则，不会新增独立业务类型。</small>
+          </template>
         </template>
       </template>
       <div v-if="!block.standardGroupCode" class="form-inline">
@@ -147,4 +265,8 @@ watch(groupDraft, saveGroup, { deep: true })
 .readonly-grid div { background:var(--el-fill-color-light); padding:8px 10px; border-radius:4px; }
 .readonly-grid span, .field-list > span { display:block; color:var(--el-text-color-secondary); font-size:12px; margin-bottom:4px; }
 .field-list { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+.matrix-row-fields-item { grid-column: 1 / -1; min-width: 0; }
+.matrix-row-fields { display: grid; gap: 8px; width: 100%; }
+.matrix-row-field { display: grid; grid-template-columns: 110px minmax(0, 1fr) 32px; gap: 8px; align-items: center; }
+.matrix-row-field :deep(.el-select) { width: 100%; }
 </style>

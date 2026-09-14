@@ -16,6 +16,7 @@ import SystemContextVariables, { type ContextVariable } from "./SystemContextVar
 import SystemGroupStructure from "./SystemGroupStructure.vue";
 import SystemFieldTree from "./SystemFieldTree.vue";
 import SystemFieldCatalogTree from "./SystemFieldCatalogTree.vue";
+import FieldOwnershipMover from "./FieldOwnershipMover.vue";
 import ExcelWorkbookLocation from "./ExcelWorkbookLocation.vue";
 import ExcelFieldRuleEditor from "./ExcelFieldRuleEditor.vue";
 import FieldOutputFormatSelect from "./FieldOutputFormatSelect.vue";
@@ -312,14 +313,17 @@ async function loadReferences(fieldCode: string) {
   try { references.value = await adminApi.standardFieldReferences(fieldCode) }
   catch (error) { references.value = []; ElMessage.error(errorText(error)) }
 }
-async function newField(groupCode = selectedGroupCode.value) {
+async function newField(groupCode = selectedGroupCode.value, chapterId = selectedChapter.value?.id) {
   try {
     const result = await ElMessageBox.prompt("请输入字段名称", "新增系统字段", {
       confirmButtonText: "创建", cancelButtonText: "取消", inputPlaceholder: "例如：报告摘要",
       inputValidator: (value) => Boolean(value.trim()) || "字段名称不能为空",
     });
-    // 新字段先进入未映射区，章节和编组由用户在目录管理中明确关联。
-    const saved = await adminApi.createStandardField({ label: result.value.trim(), groupCode });
+    const saved = await adminApi.createStandardField({
+      label: result.value.trim(),
+      ...(groupCode ? { groupCode } : {}),
+      ...(chapterId && !groupCode ? { chapterId } : {}),
+    });
     await loadFields(saved.fieldCode);
     ElMessage.success(`系统字段已创建，编码：${saved.fieldCode}`);
   } catch (error) {
@@ -418,12 +422,12 @@ onMounted(() => loadFields());
         </section>
         <section v-else-if="selectedChapter && !draft" class="definition-band">
           <div class="workspace-head"><div><span>章节</span><h1>{{ selectedChapter.title }}</h1></div><el-tag>{{ selectedChapter.code }}</el-tag></div>
-<div class="form-grid two"><el-form-item label="章节编号"><el-input v-model="selectedChapter.code" /></el-form-item><el-form-item label="章节名称"><el-input v-model="selectedChapter.title" /></el-form-item></div><el-button type="primary" @click="saveSelectedChapter">保存章节</el-button><el-button type="primary" plain @click="createGroupInChapter">新增编组</el-button><el-button type="danger" plain @click="removeSelectedChapter">删除章节</el-button><p class="form-help">该章节下可管理编组和字段。请从左侧选择具体编组或字段。</p>
+<div class="form-grid two"><el-form-item label="章节编号"><el-input v-model="selectedChapter.code" /></el-form-item><el-form-item label="章节名称"><el-input v-model="selectedChapter.title" /></el-form-item></div><el-button type="primary" @click="saveSelectedChapter">保存章节</el-button><el-button type="primary" plain :icon="Plus" @click="newField('', selectedChapter.id)">新增字段</el-button><el-button type="primary" plain @click="createGroupInChapter">新增编组</el-button><el-button type="danger" plain @click="removeSelectedChapter">删除章节</el-button><p class="form-help">新增字段会直接归属当前章节；字段加入编组后会转为该编组字段。</p>
         </section>
         <template v-if="draft">
           <div class="workspace-head">
             <div><span>全局字段库 / {{ groupDisplay(draft) || "未分组" }}</span><h1>{{ draft.label || "新标准字段" }}</h1></div>
-            <div><el-button v-if="selected" type="danger" plain :icon="Delete" @click="removeField">删除字段</el-button><el-button type="primary" :loading="saving" @click="saveField">保存字段</el-button></div>
+            <div><FieldOwnershipMover v-if="selected" :field="draft" :chapters="chapters" :groups="groups" :error-text="errorText" @moved="loadFields" /><el-button v-if="selected" type="danger" plain :icon="Delete" @click="removeField">删除字段</el-button><el-button type="primary" :loading="saving" @click="saveField">保存字段</el-button></div>
           </div>
           <div class="definition-band">
             <h2>字段定义</h2>

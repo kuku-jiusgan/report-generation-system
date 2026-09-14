@@ -55,3 +55,8 @@ def callback_status(payload: dict[str, Any]) -> int:
         return int(payload.get("status", 0))
     except (TypeError, ValueError) as error:
         raise HTTPException(400, "ONLYOFFICE 回调 status 无效") from error
+
+
+def is_current_document_key(issued_key: str, callback_key: str) -> bool:
+    """Only accept callbacks from the editor session that owns the current draft."""
+    return bool(issued_key) and issued_key == callback_key

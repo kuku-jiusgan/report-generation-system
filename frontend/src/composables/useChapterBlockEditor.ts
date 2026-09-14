@@ -108,6 +108,21 @@ export function useChapterBlockEditor(options: EditorOptions) {
     } catch (error) {
       return `表格布局不是合法 JSON：${(error as Error).message}`
     }
+    const policy = layout.columnPolicy
+    if (policy !== undefined) {
+      if (!policy || typeof policy !== 'object') return '矩阵横向扩展的 columnPolicy 必须是对象'
+      if (String(policy.mode || 'DATA_LENGTH') !== 'DATA_LENGTH') return '矩阵横向扩展的 mode 只能是 DATA_LENGTH'
+      if (policy.overflow !== 'HORIZONTAL') return '矩阵横向扩展的 overflow 只能是 HORIZONTAL'
+      const minimum = Number(policy.minColumns)
+      if (!Number.isInteger(minimum) || minimum < 1 || minimum > 1000) return '矩阵横向扩展的最少列数必须是 1 到 1000 的整数'
+      if (!['PROTOTYPE', 'PRESERVE_TOTAL'].includes(String(policy.widthMode || 'PROTOTYPE'))) {
+        return '矩阵横向扩展的列宽策略无效'
+      }
+      if (!Array.isArray(layout.rowFields) || !layout.rowFields.length) return '启用矩阵横向扩展时，逐列数据行配置不能为空'
+      if (layout.rowFields.some((entry: any) => !entry || !Number.isInteger(Number(entry.row)) || Number(entry.row) < 1 || !String(entry.field || '').trim())) {
+        return '逐列数据行配置必须包含正整数 row 和非空 field'
+      }
+    }
     if (!layout.groupField) return ''
     if (draft.tableRule?.mode !== 'ROW_REPEAT') return '横向分组字段只在“按行向下扩展”时生效'
     const bound = (draft.mappings || []).some(

@@ -62,6 +62,8 @@ def apply_template_block_rules(snapshot: dict[str, Any], field_groups: list[dict
         mapping = dict(source)
         standard_code = str(mapping.get("standardFieldCode") or "")
         field = catalog.get(standard_code)
+        # 取值路径只有标准字段目录一个权威来源：快照里可能带着绑定当时抄下的旧路径，一律覆盖。
+        mapping["sourcePath"] = str(field.get("legacyJsonPath") or "") if field else ""
         if field:
             mapping["standardFieldDataType"] = field.get("dataType", "string")
             mapping["standardFieldOutputFormat"] = field.get("outputFormat", "")

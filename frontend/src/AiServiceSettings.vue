@@ -8,7 +8,8 @@ const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const config = reactive<AiServiceConfig>({
-  baseUrl: '', model: '', timeout: 60, apiKeyConfigured: false, apiKeyMasked: '', apiKey: '',
+  baseUrl: '', model: '', timeout: 60, maxTokens: 800, thinkingEnabled: false,
+  apiKeyConfigured: false, apiKeyMasked: '', apiKey: '',
 })
 
 function errorText(error: any) {
@@ -49,6 +50,10 @@ onMounted(load)
         <div class="form-row">
           <el-form-item label="模型"><el-input v-model="config.model" placeholder="模型名称" /></el-form-item>
           <el-form-item label="请求超时（秒）"><el-input-number v-model="config.timeout" :min="5" :max="300" controls-position="right" /></el-form-item>
+        </div>
+        <div class="form-row">
+          <el-form-item label="默认最大输出 Token 数"><el-input-number v-model="config.maxTokens" :min="100" :max="8000" controls-position="right" /></el-form-item>
+          <el-form-item label="思考模式"><el-switch v-model="config.thinkingEnabled" active-text="开启" inactive-text="关闭" /></el-form-item>
         </div>
         <el-form-item label="API Key">
           <el-input v-model="config.apiKey" type="password" show-password :placeholder="config.apiKeyConfigured ? `已配置 ${config.apiKeyMasked}；留空保持不变` : '请输入 API Key'" autocomplete="new-password" />

@@ -16,6 +16,23 @@ class AiGenerationError(RuntimeError):
     pass
 
 
+def _response_content(result: dict[str, Any]) -> tuple[str, bool]:
+    """读取 OpenAI 兼容响应正文，并标记是否只有推理内容。"""
+    choices = result.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise AiGenerationError("AI 响应缺少 choices 内容")
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        raise AiGenerationError("AI 响应缺少 message 内容")
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(
+            str(part.get("text") or "") for part in content
+            if isinstance(part, dict) and part.get("type") in {"text", "output_text"}
+        )
+    return str(content or "").strip(), bool(str(message.get("reasoning_content") or "").strip())
+
+
 def context_variables(config: dict[str, Any]) -> list[dict[str, Any]]:
     configured = config.get("contextVariables")
     if isinstance(configured, list):
@@ -82,11 +99,13 @@ def generate_ai_text(field_code: str, rule: dict[str, Any], values: dict[str, An
     if not base_url or not api_key or not model:
         raise AiGenerationError("AI 服务未配置，请设置接口地址、API Key 和模型")
     prompt, _ = render_ai_prompt(config, values)
+    max_tokens = int(config.get("maxLength") or service.get("maxTokens") or 800)
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": float(config.get("temperature", 0.2)),
-        "max_tokens": int(config.get("maxLength", 800)),
+        "max_tokens": max_tokens,
+        "thinking": {"type": "enabled" if service.get("thinkingEnabled") else "disabled"},
     }, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}/chat/completions", data=payload, method="POST",
@@ -96,12 +115,15 @@ def generate_ai_text(field_code: str, rule: dict[str, Any], values: dict[str, An
     try:
         with urllib.request.urlopen(request, timeout=float(service["timeout"])) as response:
             result = json.loads(response.read().decode("utf-8"))
-        content = result["choices"][0]["message"]["content"]
-    except (urllib.error.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as error:
+        content, has_reasoning = _response_content(result)
+    except AiGenerationError:
+        raise
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
         raise AiGenerationError(f"AI 生成失败：{error}") from error
-    text = str(content or "").strip()
-    if not text:
+    if not content:
+        if has_reasoning:
+            raise AiGenerationError("AI 输出预算已被思考过程耗尽，请增大最大长度或关闭思考模式")
         raise AiGenerationError("AI 服务返回了空内容")
     logger.info("AI字段生成成功 field=%s rule=%s model=%s elapsedMs=%d",
                 field_code, rule.get("id"), model, int((time.monotonic() - started) * 1000))
-    return text
+    return content

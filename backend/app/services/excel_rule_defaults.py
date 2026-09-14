@@ -210,59 +210,6 @@ def _ensure_repeated_field_contracts(database: Any) -> None:
     _sync_repeatability_group_chapter(database)
 
 
-def _sync_excel_field_paths(database: Any) -> None:
-    timestamp = datetime.now(timezone.utc).isoformat()
-    with database.connect() as connection:
-        for field_code, source_path in EXCEL_FIELD_PATHS.items():
-            is_residual_chart = field_code == "uncategorized.field_029"
-            connection.execute(
-                """UPDATE lims_field_catalog SET legacy_json_path=%s,
-                   data_type=CASE WHEN %s THEN 'image' ELSE data_type END,updated_at=%s WHERE field_code=%s""",
-                (source_path, is_residual_chart, timestamp, field_code),
-            )
-            connection.execute(
-                """UPDATE admin_mapping_rules SET source_path=%s,
-                   data_type=CASE WHEN %s THEN 'image' ELSE data_type END,
-                   repeat_type=CASE WHEN %s THEN 'NONE' ELSE repeat_type END,
-                   location_id=CASE WHEN %s THEN 'body.T20.row9.cell2' ELSE location_id END,
-                   source_pending=CASE WHEN %s THEN 0 ELSE source_pending END,
-                   fill_rule=CASE WHEN %s THEN 'IMAGE_FIT_WIDE' ELSE fill_rule END,updated_at=%s
-                   WHERE standard_field_code=%s""",
-                (source_path, is_residual_chart, is_residual_chart, is_residual_chart,
-                 is_residual_chart, is_residual_chart, timestamp, field_code),
-            )
-        versions = connection.execute(
-            """SELECT v.id,v.snapshot FROM admin_template_versions v
-               JOIN admin_template_workspace w ON w.active_version_id=v.id
-               WHERE w.id=1 AND v.status='PUBLISHED'"""
-        ).fetchall()
-        for version in versions:
-            snapshot = json.loads(version["snapshot"] or "{}")
-            changed = False
-            for mapping in snapshot.get("mappings", []):
-                source_path = EXCEL_FIELD_PATHS.get(str(mapping.get("standardFieldCode") or ""))
-                if not source_path:
-                    continue
-                if mapping.get("sourcePath") != source_path or mapping.get("sourceType") != "EXCEL":
-                    mapping["sourcePath"] = source_path
-                    mapping["sourceType"] = "EXCEL"
-                    changed = True
-                if str(mapping.get("standardFieldCode") or "") == "uncategorized.field_029":
-                    image_values = {
-                        "dataType": "image", "repeatType": "NONE", "locationId": "body.T20.row9.cell2",
-                        "sourcePending": False, "fillRule": "IMAGE_FIT_WIDE",
-                    }
-                    for key, value in image_values.items():
-                        if mapping.get(key) != value:
-                            mapping[key] = value
-                            changed = True
-            if changed:
-                connection.execute(
-                    "UPDATE admin_template_versions SET snapshot=%s,updated_at=%s WHERE id=%s",
-                    (json.dumps(snapshot, ensure_ascii=False), timestamp, version["id"]),
-                )
-
-
 def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
     config = {
         "sourcePath": source_path,
@@ -323,12 +270,13 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
     elif field_code in LINEARITY_ROWS:
         row = LINEARITY_ROWS[field_code]
         config.update({"mode": "REPEAT_BLOCK", "sheet": "线性", "rowStart": row, "rowEnd": row,
-                       "startColumn": 3, "rowStep": 24, "valueCount": 5,
+                       "startColumn": 3, "rowStep": 24, "valueCountMode": "UNTIL_BLANK", "maxValueCount": 100,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "HORIZONTAL_CELL"})
     elif field_code in LINEARITY_STATISTICS:
         config.update({"mode": "REPEAT_BLOCK", "sheet": "线性", "rowStart": 3, "rowEnd": 3,
-                       "xRow": 3, "yRow": 4, "startColumn": 3, "rowStep": 24, "valueCount": 5,
+                       "xRow": 3, "yRow": 4, "startColumn": 3, "rowStep": 24,
+                       "valueCountMode": "UNTIL_BLANK", "maxValueCount": 100,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": LINEARITY_STATISTICS[field_code],
                        "broadcastRepeat": True})
@@ -348,15 +296,8 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
     return config
 
 
-# 一次性工作簿布局同步标记：首次启动把存量 Excel 规则/目录/已发布快照对齐到内置布局；
-# 之后以管理员的修改为准，启动只做"缺失才播种"，不再回滚配置
-EXCEL_LAYOUT_MIGRATION = "2026_excel_rule_defaults_layout_sync_v1"
-
-
 def ensure_excel_field_rules(database: Any) -> None:
-    first_sync = not database.migration_applied(EXCEL_LAYOUT_MIGRATION)
-    if first_sync:
-        _sync_excel_field_paths(database)
+    """启动只补缺失的 Excel 规则，不回滚管理员改过的配置。"""
     for field_code, default_path in EXCEL_FIELD_PATHS.items():
         field = database.get_lims_field(field_code)
         if not field:
@@ -364,21 +305,10 @@ def ensure_excel_field_rules(database: Any) -> None:
         # 字段目录里的 JSON 路径由编组层级推导，是权威值；这里的常量只在字段目录没有路径时兜底。
         # 否则编组改成分层结构后，每次启动都会照常量再建一条一级路径的规则，把结构撑坏。
         source_path = str(field.get("legacyJsonPath") or "") or default_path
-        excel_rules = [rule for rule in database.list_system_field_rules(field_code)
-                       if rule.get("sourceType") == "EXCEL"]
-        existing: list[dict[str, Any]] = []
-        for rule in excel_rules:
-            config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
-            if config.get("sourcePath") != source_path:
-                if first_sync:
-                    database.delete_system_field_rule(rule["id"])
-                continue
-            if first_sync:
-                expected = _rule_config(field_code, source_path)
-                if any(config.get(key) != value for key, value in expected.items()):
-                    config = {**config, **expected}
-                    database.save_system_field_rule({**rule, "config": config}, rule["id"])
-            existing.append(rule)
+        existing = [rule for rule in database.list_system_field_rules(field_code)
+                    if rule.get("sourceType") == "EXCEL"
+                    and isinstance(rule.get("config"), dict)
+                    and rule["config"].get("sourcePath") == source_path]
         if existing:
             continue
         database.save_system_field_rule({
@@ -386,5 +316,3 @@ def ensure_excel_field_rules(database: Any) -> None:
             "priority": 50, "transform": "TRIM", "enabled": True,
             "config": _rule_config(field_code, source_path),
         })
-    if first_sync:
-        database.mark_migration_applied(EXCEL_LAYOUT_MIGRATION)

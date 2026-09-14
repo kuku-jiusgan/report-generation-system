@@ -11,11 +11,17 @@ const props = defineProps<{
   selectedGroup?: string
 }>()
 function fieldsFor(group: SystemFieldGroup, all: StandardField[]) {
-  return group.fields.map((item) => all.find((field) => field.fieldCode === item.fieldCode)).filter(Boolean) as StandardField[]
+  return group.fields
+    .map((item) => all.find((field) => field.fieldCode === item.fieldCode))
+    .filter((field): field is StandardField => Boolean(field))
+    .sort((a, b) => a.orderNo - b.orderNo || a.id - b.id) as StandardField[]
+}
+function sortedFields(fields: StandardField[]) {
+  return [...fields].sort((a, b) => a.orderNo - b.orderNo || a.id - b.id)
 }
 function enrichChapter(chapter: any): any {
   return { ...chapter, children: [
-    ...(chapter.fields || []).map((field: StandardField) => ({ id: `field:${field.fieldCode}`, title: field.label, field })),
+    ...sortedFields(chapter.fields || []).map((field: StandardField) => ({ id: `field:${field.fieldCode}`, title: field.label, field })),
     ...props.groups.filter((group) => group.chapterIds.includes(chapter.id)).map((group) => ({ id: `group:${group.groupCode}`, title: group.label, group, children: fieldsFor(group, props.fields).map((field) => ({ id: `field:${field.fieldCode}`, title: field.label, field })) })),
     ...(chapter.children || []).map((child: any) => enrichChapter(child)),
   ] }

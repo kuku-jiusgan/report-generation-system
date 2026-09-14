@@ -2,17 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.app.database import Database
 from backend.app.services.rule_admin import RuleAdminRepository
 from backend.app.services.lims_configured_extractor import apply_configured_extraction
 from backend.app.services.lims_normalizer import normalize_instance
 from backend.app.services.lims_catalog_defaults import ensure_lims_catalog_defaults
+from backend.tests.database_helpers import make_test_database
 
 
 class LimsFieldCatalogTest(unittest.TestCase):
     def test_lims_parser_rules_come_from_admin_system_rule(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             database.upsert_lims_field({
                 "fieldCode": "systemSuitability.sequence", "label": "No.",
@@ -40,7 +40,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_report_source_catalog_exposes_canonical_binding_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             repository = RuleAdminRepository(database, Path(directory) / "unused.json")
             chapter = repository.create_template_chapter({
@@ -61,7 +61,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_catalog_uses_live_report_chapter_hierarchy_and_mapping_links(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             repository = RuleAdminRepository(database, Path(directory) / "unused.json")
             parent_a = repository.create_template_chapter({
@@ -108,7 +108,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_field_source_always_returns_all_items_for_unit_id_as_array(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             imported = database.create_lims_import({
                 "id": "import-rich", "file_name": "Oracle 查询：XM-RICH", "stored_name": "",
@@ -270,7 +270,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_validation_summary_defaults_create_fields_and_parser_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             repository = RuleAdminRepository(database, Path(directory) / "unused.json")
             chapter = repository.create_template_chapter({
@@ -302,7 +302,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_seed_localizes_display_group_without_changing_collection_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             database.upsert_lims_field({
                 "fieldCode": "samples.batchNo", "label": "供试品批号",
@@ -323,7 +323,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_generated_rule_records_upstream_html_parser_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             database.upsert_lims_field({
                 "fieldCode": "systemSuitability.peakArea", "label": "峰面积",
@@ -352,7 +352,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_field_and_system_rule_crud(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "catalog.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             field = database.upsert_lims_field({
                 "fieldCode": "samples.batchNo", "label": "供试品批号",
@@ -412,7 +412,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_preview_field_returns_recent_standard_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "preview.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             imported = database.create_lims_import({
                 "id": "import-1", "file_name": "Oracle 查询：XM-1", "stored_name": "",
@@ -467,7 +467,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_workbench_payload_is_rebuilt_from_persisted_standard_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "workbench.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             database.create_lims_import({
                 "id": "import-1", "file_name": "Oracle 查询：P1", "stored_name": "",
@@ -490,7 +490,7 @@ class LimsFieldCatalogTest(unittest.TestCase):
 
     def test_preview_deduplicates_reimported_lims_instance_and_keeps_latest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "preview.db")
+            database = make_test_database(Path(directory))
             database.initialize()
             for import_id, created_at, batch_no in (
                 ("import-old", "2026-07-25T08:00:00+00:00", "OLD-001"),

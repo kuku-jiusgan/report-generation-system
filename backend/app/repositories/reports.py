@@ -95,11 +95,16 @@ class ReportRepositoryMixin:
         return [dict(row) for row in rows]
 
     def create_version(self, report_id: str, data: dict[str, Any], note: str = "手工保存") -> dict[str, Any]:
-        # BEGIN IMMEDIATE 先拿写锁：并发自动保存/手工保存同时读 MAX 会算出同一 version_no，
-        # 触发 UNIQUE(report_id,version_no) 冲突导致保存 500
+        # 锁定父报告行作为每份报告的版本号序列锁。直接锁 report_versions 的
+        # MAX 记录在首个版本不存在时无法锁住任何行，并发插入会死锁或撞唯一键。
         with self.connect() as connection:
+            report = connection.execute(
+                "SELECT id FROM reports WHERE id=%s FOR UPDATE", (report_id,),
+            ).fetchone()
+            if not report:
+                raise ValueError("报告不存在，无法创建版本")
             version_no = connection.execute(
-                "SELECT COALESCE(MAX(version_no),0)+1 FROM report_versions WHERE report_id=%s FOR UPDATE", (report_id,),
+                "SELECT COALESCE(MAX(version_no),0)+1 FROM report_versions WHERE report_id=%s", (report_id,),
             ).fetchone()[0]
             cursor = connection.execute(
                 "INSERT INTO report_versions(report_id,version_no,note,data,created_at) VALUES(%s,%s,%s,%s,%s)",
@@ -164,7 +169,7 @@ class ReportRepositoryMixin:
         return bool(row)
 
     @staticmethod
-    def _generation_boundary(value: str, label: str) -> int:
+    def _generation_boundary(value: str, label: str) -> str:
         # generated_at 存的是带 +00:00 偏移的 UTC 时间串；前端传的是用户本地时间。
         # 直接做字符串比较会同时踩中时区偏移和 "+00:00" 后缀两个坑，必须先折算成 UTC 时间戳
         try:
@@ -173,7 +178,10 @@ class ReportRepositoryMixin:
             raise ValueError(f"{label}时间格式无效：{value}") from error
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
-        return int(moment.timestamp())
+        # generated_at 是 ISO 字符串列，必须用同样的 UTC ISO 格式比较；
+        # 传 Unix 整数会触发 MySQL 隐式数值转换，导致所有记录被错误排除。
+        moment = moment.astimezone(timezone.utc)
+        return moment.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
     @classmethod
     def _generation_filters(cls, query: str, status: str, user_id: str, date_from: str, date_to: str):

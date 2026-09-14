@@ -5,13 +5,14 @@ from backend.app.auth import AuthManager
 from backend.app.config import Settings
 from backend.app.database import Database
 from backend.app.services.rule_admin import RuleAdminRepository
+from backend.tests.database_helpers import make_test_database
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_template_versions_keep_independent_rule_snapshots(tmp_path: Path) -> None:
-    database = Database(tmp_path / "catalog.db")
+    database = make_test_database(tmp_path)
     database.initialize()
     repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
     repository.seed()
@@ -102,7 +103,7 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
     assert f"/onlyoffice/callback/{first_version['id']}" in config["editorConfig"]["callbackUrl"]
     plugin_url = config["editorConfig"]["plugins"]["pluginsData"][0]
     assert plugin_url.startswith(settings.onlyoffice_url)
-    assert plugin_url.endswith("config.json?v=18")
+    assert plugin_url.endswith("config.json?v=20")
     assert not any("/onlyoffice/plugin/" in route.path for route in router.routes)
     assert not any(route.path.endswith("/onlyoffice/command") for route in router.routes)
 
