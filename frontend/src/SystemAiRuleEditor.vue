@@ -6,7 +6,7 @@ import SystemContextVariables, { type ContextVariable } from './SystemContextVar
 
 type Variable = ContextVariable
 
-const props = defineProps<{ fields: StandardField[] }>()
+const props = defineProps<{ fields: StandardField[]; groups?: Array<{ groupCode: string; label: string; fields: Array<{ fieldCode: string }> }> }>()
 const config = defineModel<Record<string, any>>({ required: true })
 const testing = ref(false)
 const testOutput = ref('')
@@ -20,11 +20,15 @@ const variables = computed<Variable[]>({
 const referenced = computed(() => Array.from(
   String(config.value.promptTemplate || '').matchAll(/\{\{([^{}]+)\}\}/g), (match) => match[1].trim(),
 ))
+function contextCode(variable: Variable) {
+  return variable.groupCode || variable.fieldCode || ''
+}
 const preview = computed(() => {
   let result = String(config.value.promptTemplate || '')
   variables.value.forEach((item) => {
-    const value = item.previewValue || item.defaultValue || `【${item.fieldCode}】`
-    result = result.replaceAll(`{{${item.fieldCode}}}`, value)
+    const code = contextCode(item)
+    const value = item.previewValue || item.defaultValue || `【${code}】`
+    result = result.replaceAll(`{{${code}}}`, value)
   })
   return result
 })
@@ -34,14 +38,35 @@ function insertVariable(code: string) {
   const prompt = String(config.value.promptTemplate || '')
   config.value.promptTemplate = `${prompt}${prompt ? '\n' : ''}{{${code}}}`
 }
+function previewForVariable(variable: Variable, limit: number) {
+  if (variable.groupCode) return adminApi.fieldGroupPreview(variable.groupCode, limit, selectedInstanceIds.value)
+  if (variable.fieldCode) return adminApi.standardFieldPreview(variable.fieldCode, limit, selectedInstanceIds.value)
+  return undefined
+}
+function previewValue(variable: Variable, items: StandardFieldPreview['items']) {
+  if (variable.groupCode) {
+    const values = items.map((item) => item.value)
+    return values.length === 1 ? JSON.stringify(values[0], null, 2) : JSON.stringify(values, null, 2)
+  }
+  const raw = items.flatMap((item) => Array.isArray(item.value) ? item.value : [item.value])
+  const values = raw.filter((value) => value !== null && value !== undefined && String(value).trim())
+  if (!values.length) return ''
+  const unique = Array.from(new Set(values.map(String)))
+  if (variable.mode === 'COUNT_UNIQUE') return String(unique.length)
+  const suffix = variable.suffix || ''
+  return variable.mode === 'FIRST'
+    ? `${unique[0]}${suffix}`
+    : unique.map((item) => `${item}${suffix}`).join(variable.separator || '、')
+}
 async function loadRecentRecords() {
   recordsLoading.value = true
   try {
     for (const variable of variables.value) {
-      if (!variable.fieldCode) continue
-      const result = await adminApi.standardFieldPreview(variable.fieldCode, 12)
-      if (result.options?.length) {
-        recordOptions.value = result.options
+      const result = previewForVariable(variable, 12)
+      if (!result) continue
+      const preview = await result
+      if (preview.options?.length) {
+        recordOptions.value = preview.options
         break
       }
     }
@@ -50,18 +75,12 @@ async function loadRecentRecords() {
   } finally { recordsLoading.value = false }
 }
 async function fieldPreviewValue(variable: Variable) {
-  const preview = await adminApi.standardFieldPreview(variable.fieldCode, 50, selectedInstanceIds.value)
-  const raw = preview.items.flatMap((item) => Array.isArray(item.value) ? item.value : [item.value])
-  const values = raw.filter((value) => value !== null && value !== undefined && String(value).trim())
-  if (values.length) {
-    const unique = Array.from(new Set(values.map(String)))
-    if (variable.mode === 'COUNT_UNIQUE') return String(unique.length)
-    const suffix = variable.suffix || ''
-    return variable.mode === 'FIRST'
-      ? `${unique[0]}${suffix}`
-      : unique.map((item) => `${item}${suffix}`).join(variable.separator || '、')
-  }
-  const rules = await adminApi.systemFieldRules(variable.fieldCode)
+  const preview = previewForVariable(variable, 50)
+  if (!preview) return ''
+  const result = await preview
+  const value = previewValue(variable, result.items)
+  if (value || variable.groupCode) return value || variable.defaultValue || ''
+  const rules = await adminApi.systemFieldRules(variable.fieldCode!)
   return String(rules.find((rule) => rule.sourceType === 'FIXED' && rule.enabled)?.config?.value || variable.defaultValue || '')
 }
 async function importSelectedRecords() {
@@ -79,7 +98,12 @@ async function testGeneration() {
   testing.value = true
   testOutput.value = ''
   try {
-    const values = Object.fromEntries(variables.value.map((item) => [item.fieldCode, item.previewValue || item.defaultValue]))
+    const values = Object.fromEntries(variables.value.map((item) => {
+      const raw = item.previewValue || item.defaultValue
+      const code = contextCode(item)
+      if (!item.groupCode || !raw) return [code, raw]
+      try { return [item.groupCode, JSON.parse(raw)] } catch { return [item.groupCode, raw] }
+    }))
     const result = await adminApi.previewAiRule({ config: config.value, values, execute: true })
     testOutput.value = result.output
   } catch (error: any) {
@@ -98,11 +122,11 @@ onMounted(loadRecentRecords)
       <el-button :loading="recordsLoading" @click="loadRecentRecords">刷新</el-button>
       <el-button type="primary" :loading="recordsLoading" @click="importSelectedRecords">导入字段值</el-button>
     </div>
-    <SystemContextVariables v-model="variables" :fields="props.fields" insert-label="插入" @insert="insertVariable" />
+    <SystemContextVariables v-model="variables" :fields="props.fields" :groups="props.groups" insert-label="插入" @insert="insertVariable" />
     <el-form-item label="提示词模板"><el-input v-model="config.promptTemplate" type="textarea" :rows="7" placeholder="使用 {{系统字段编码}} 引用上下文" /></el-form-item>
     <p class="referenced-fields">已引用：{{ referenced.join('、') || '暂无' }}</p>
     <el-form-item label="预览用变量值（可选）">
-      <div class="preview-values"><el-input v-for="item in variables" :key="item.fieldCode" v-model="item.previewValue" :placeholder="item.fieldCode || '请先选择字段'" /></div>
+      <div class="preview-values"><el-input v-for="item in variables" :key="contextCode(item)" v-model="item.previewValue" :placeholder="contextCode(item) || '请先选择字段'" /></div>
     </el-form-item>
     <div class="prompt-preview"><b>最终提示词预览</b><pre>{{ preview }}</pre></div>
     <div class="ai-options"><el-input v-model="config.model" placeholder="模型；留空使用系统配置" /><el-input-number v-model="config.maxLength" :min="100" :max="8000" /><el-input-number v-model="config.temperature" :min="0" :max="2" :step="0.1" /></div>

@@ -32,6 +32,7 @@ export interface StandardField {
   groupCodes?: string[];
   groupLabel?: string;
   groupLabels?: string[];
+  /** 兼容历史接口返回；实际值由字段所属编组编码派生，不在字段表单中编辑。 */
   collectionCode: string;
   dataType: string;
   cardinality: "ONE" | "MANY";
@@ -41,6 +42,7 @@ export interface StandardField {
   legacyJsonPath: string;
   description: string;
   outputFormat: string;
+  fillRule?: string;
   defaultValue: string;
   validationRegex: string;
   orderNo: number;
@@ -73,9 +75,24 @@ export interface SystemFieldGroupLevel {
   levelKey: string; label: string; kind: 'OBJECT' | 'ARRAY'; orderNo: number;
 }
 
+export interface SystemGroupColumnMapping {
+  fieldCode: string;
+  columnPattern: string;
+}
+
+export interface SystemGroupSourceMapping {
+  sourceType: 'EXCEL' | 'LIMS';
+  sectionPattern?: string;
+  worksheetPattern?: string;
+  headerPattern?: string;
+  columnMappings: SystemGroupColumnMapping[];
+}
+
 export interface SystemFieldGroup {
   groupCode: string; label: string; description: string; cardinality: 'ONE' | 'MANY';
+  /** 由 groupCode 推导的标准数据集合路径；仅用于展示，不能手动修改。 */
   itemPath: string; itemKey: string; orderNo: number; enabled: boolean; fieldCount: number;
+  sourceMappings: SystemGroupSourceMapping[];
   chapterIds: number[]; fields: Array<{ fieldCode: string; label: string; dataType: string; cardinality: string; fieldPath: string; jsonKey: string; levelKey: string; enabled: boolean }>;
   levels: SystemFieldGroupLevel[];
   /** 按当前层级配置生成的记录结构预览，取值用字段名占位 */
@@ -432,6 +449,13 @@ export const adminApi = {
     (
       await http.get<StandardFieldPreview>(
         `/standard-fields/${encodeURIComponent(fieldCode)}/preview`,
+        { params: { limit, instance_ids: instanceIds.join(",") } },
+      )
+    ).data,
+  fieldGroupPreview: async (groupCode: string, limit = 12, instanceIds: string[] = []) =>
+    (
+      await http.get<StandardFieldPreview>(
+        `/field-groups/${encodeURIComponent(groupCode)}/preview`,
         { params: { limit, instance_ids: instanceIds.join(",") } },
       )
     ).data,

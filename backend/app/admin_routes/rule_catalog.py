@@ -11,6 +11,7 @@ from ..services.ai_field_generator import AiGenerationError, generate_ai_text, r
 from ..services.ai_service_config import load_ai_service_config, save_ai_service_config
 from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, delete_system_field_group, list_system_field_groups, move_field_ownership, remove_field_from_group, reorder_group_fields, save_system_field_group, sync_group_field_paths
 from ..services.system_field_group_levels import delete_group_level, move_field_to_level, save_group_level, structure_preview
+from ..services.excel_standard_path import excel_target_path
 
 
 CHAPTER_FIELD_PREFIXES = {
@@ -126,6 +127,10 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
     if source_type not in {"LIMS", "AI", "EXCEL", "PDF", "CALCULATED"}:
         raise HTTPException(422, f"不支持的系统字段来源：{source_type}")
     config = item.get("config") if isinstance(item.get("config"), dict) else {}
+    if source_type == "EXCEL":
+        field = repository.database.get_lims_field(field_code)
+        if field:
+            config = {**config, "sourcePath": excel_target_path(field, config.get("sourcePath"))}
     for key in ("sectionPattern", "headerPattern", "valuePattern", "rowPattern"):
         pattern = config.get(key)
         if pattern:
@@ -168,19 +173,37 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
 
         visit(field_code)
     if source_type == "AI":
-        known = {field["fieldCode"] for field in repository.database.list_lims_fields(True)}
+        known_fields = {field["fieldCode"] for field in repository.database.list_lims_fields(True)}
+        known_groups = {group["groupCode"] for group in list_system_field_groups(repository.database)}
         variables = config.get("contextVariables") or [
             {"fieldCode": value} for value in config.get("inputFields", [])
         ]
-        missing = [str(item.get("fieldCode")) for item in variables
-                   if isinstance(item, dict) and item.get("fieldCode") not in known]
-        if missing:
-            raise HTTPException(422, f"AI 上下文字段不存在：{', '.join(missing)}")
+        missing_fields = []
+        missing_groups = []
+        for variable in variables:
+            if not isinstance(variable, dict):
+                continue
+            context_field_code = variable.get("fieldCode")
+            group_code = variable.get("groupCode")
+            if context_field_code and context_field_code not in known_fields:
+                missing_fields.append(context_field_code)
+            if group_code and group_code not in known_groups:
+                missing_groups.append(group_code)
+            if not context_field_code and not group_code:
+                raise HTTPException(422, "AI 上下文变量必须指定 fieldCode 或 groupCode")
+        if missing_fields:
+            raise HTTPException(422, f"AI 上下文字段不存在：{', '.join(missing_fields)}")
+        if missing_groups:
+            raise HTTPException(422, f"AI 上下文编组不存在：{', '.join(missing_groups)}")
         prompt = str(config.get("promptTemplate") or "")
+        variable_codes = {
+            str(variable.get("groupCode") or variable.get("fieldCode") or "")
+            for variable in variables if isinstance(variable, dict)
+        }
         unknown = [name for name in re.findall(r"\{\{([^{}]+)\}\}", prompt)
-                   if name.strip() not in {str(item.get("fieldCode")) for item in variables if isinstance(item, dict)}]
+                   if name.strip() not in variable_codes]
         if unknown:
-            raise HTTPException(422, f"AI 提示词引用了未配置的字段：{', '.join(unknown)}")
+            raise HTTPException(422, f"AI 提示词引用了未配置的字段或编组：{', '.join(unknown)}")
     return {**item, "fieldCode": field_code, "sourceType": source_type, "config": config}
 
 
@@ -292,6 +315,12 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
     def group_structure(group_code: str) -> dict[str, Any]:
         """编组当前的层级配置，以及按它生成的记录结构预览。"""
         return _group(group_code)
+
+    @router.get("/field-groups/{group_code}/preview")
+    def preview_field_group(group_code: str, limit: int = 12, instance_ids: str = "") -> dict[str, Any]:
+        group = _group(group_code)
+        selected = [value.strip() for value in instance_ids.split(",") if value.strip()]
+        return repository.database.preview_lims_group(group, limit, selected)
 
     @router.post("/field-groups/{group_code}/levels")
     def save_group_structure_level(group_code: str, item: dict[str, Any]) -> dict[str, Any]:
@@ -420,11 +449,22 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
     @router.put("/system-field-rules/{rule_id}")
     def update_system_field_rule(rule_id: int, item: dict[str, Any]) -> dict[str, Any]:
         try:
-            return repository.database.save_system_field_rule(
-                _validate_system_rule(repository, item), rule_id,
-            )
+            # 确保必需字段存在，从现有规则中补充缺失的字段
+            if "name" not in item or "fieldCode" not in item:
+                existing_rules = repository.database.list_system_field_rules()
+                existing = next((r for r in existing_rules if r.get("id") == rule_id), None)
+                if not existing:
+                    raise HTTPException(404, "系统字段规则不存在")
+                # 用现有规则的值补充缺失字段
+                if "name" not in item:
+                    item["name"] = existing["name"]
+                if "fieldCode" not in item:
+                    item["fieldCode"] = existing["fieldCode"]
+
+            validated = _validate_system_rule(repository, item)
+            return repository.database.save_system_field_rule(validated, rule_id)
         except KeyError as error:
-            raise HTTPException(404, "系统字段规则不存在") from error
+            raise HTTPException(404, f"系统字段规则不存在: {error}") from error
 
     @router.delete("/system-field-rules/{rule_id}")
     def delete_system_field_rule(rule_id: int) -> dict[str, bool]:

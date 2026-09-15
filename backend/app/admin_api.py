@@ -289,6 +289,8 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
             table["mode"] = str(table["mode"])
             if table["mode"] == "MATRIX" and not str(table.get("matrixLayout") or "").strip():
                 raise HTTPException(422, "矩阵填充必须配置矩阵布局")
+            if table["mode"] == "TABLE_REPEAT" and not str(table.get("groupKey") or "").strip():
+                raise HTTPException(422, "按分组复制整表必须配置整表分组字段")
         table_no = str(table.get("tableNo") or next((str(row.get("tableNo") or "") for row in repository.list_mappings()
                                                      if str(row.get("standardFieldCode") or "").startswith(f"{group_code}.")
                                                      and str(row.get("tableNo") or "").startswith("T")), f"GROUP:{group_code}"))
@@ -323,7 +325,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                     )
             result = repository.save_template_block(active["versionId"], item)
             if table:
-                saved_rule = repository.upsert_table_rule({**table, "tableNo": table_no, "groupKey": group_code})
+                saved_rule = repository.upsert_table_rule({**table, "tableNo": table_no})
                 result["tableRule"] = saved_rule
             repository.save_active_workspace()
             return result
@@ -435,11 +437,13 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
             {"purpose": "template-file", "versionId": version_id, "exp": int(time.time()) + 600},
             settings.onlyoffice_jwt_secret, algorithm="HS256",
         )
-        signature = f"admin-template:{version_id}:{path.stat().st_mtime_ns}:{path.stat().st_size}"
-        key = hashlib.sha256(signature.encode()).hexdigest()[:20]
-        # 文档 key 基于文件 mtime/size，保存一次后即变化，必须落库供回调比对，
-        # 否则第二次自动保存起都会被误判为陈旧会话而丢弃
-        repository.set_version_document_key(version_id, key)
+        # 同一编辑会话内文件每次自动保存都会更新 mtime；key 不能随文件变化，
+        # 否则旧会话的后续回调会被误判为陈旧。模板被替换时由初始化流程主动清空 key。
+        key = str(workspace.get("documentKey") or "")
+        if not key:
+            signature = f"admin-template:{version_id}:{path.stat().st_mtime_ns}:{path.stat().st_size}"
+            key = hashlib.sha256(signature.encode()).hexdigest()[:20]
+            repository.set_version_document_key(version_id, key)
         config: dict[str, Any] = {
             "document": {"fileType": "docx", "key": key, "title": settings.template_path.name,
                          "url": (f"{settings.public_base_url}{settings.api_prefix}/admin/template/file/{version_id}"
@@ -454,7 +458,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                     "autostart": ["asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"],
                     "pluginsData": [
                         f"{settings.onlyoffice_url}/sdkjs-plugins/"
-                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=20"
+                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=22"
                     ],
                 },
             },

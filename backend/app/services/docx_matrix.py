@@ -56,7 +56,19 @@ def _fill_scalar_cells(rows: list[etree._Element], layout: dict[str, Any],
             continue
         cells = rows[row_index].xpath("./w:tc", namespaces=NS)
         if column_index < len(cells):
-            set_cell_text(cells[column_index], record.get(str(entry.get("field", "")), ""))
+            value = record.get(str(entry.get("field", "")), "")
+            control_tag = str(entry.get("controlTag") or "")
+            if entry.get("dataType") == "image":
+                if not control_tag:
+                    continue
+                controls = cells[column_index].xpath(
+                    ".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces=NS, tag=control_tag,
+                )
+                if controls:
+                    set_cell_text(controls[0], value)
+                # 图片字段只能交给图片内容控件处理，不能把 Data URL 降级成普通文字。
+                continue
+            set_cell_text(cells[column_index], value)
 
 
 def _fill_table(table: etree._Element, records: list[dict[str, Any]],

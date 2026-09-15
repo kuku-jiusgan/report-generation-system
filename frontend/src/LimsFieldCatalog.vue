@@ -14,6 +14,8 @@ import {
 import SystemAiRuleEditor from "./SystemAiRuleEditor.vue";
 import SystemContextVariables, { type ContextVariable } from "./SystemContextVariables.vue";
 import SystemGroupStructure from "./SystemGroupStructure.vue";
+import SystemGroupSourceMappings from "./SystemGroupSourceMappings.vue";
+import SystemGroupFieldPaths from "./SystemGroupFieldPaths.vue";
 import SystemFieldTree from "./SystemFieldTree.vue";
 import SystemFieldCatalogTree from "./SystemFieldCatalogTree.vue";
 import FieldOwnershipMover from "./FieldOwnershipMover.vue";
@@ -33,7 +35,14 @@ const selected = ref<StandardField>();
 const selectedChapterId = ref<number>();
 const selectedGroupCode = ref("");
 const selectedGroup = computed(() => groups.value.find((group) => group.groupCode === selectedGroupCode.value));
-const groupDraft = ref<Partial<SystemFieldGroup>>({});
+const groupDraft = ref<Partial<SystemFieldGroup>>({}); const groupSourceMappings = computed({ get: () => groupDraft.value.sourceMappings || [], set: (value: SystemFieldGroup["sourceMappings"]) => { groupDraft.value.sourceMappings = value } });
+const groupDataPath = computed(() => {
+  const code = String(groupDraft.value.groupCode || selectedGroup.value?.groupCode || "").trim();
+  const configured = String(groupDraft.value.itemPath || selectedGroup.value?.itemPath || "").trim();
+  return configured || (code ? `$.${code}` : "由编组编码自动生成");
+});
+const draftGroup = computed(() => { const code = draft.value?.fieldCode; return code ? groups.value.find((group) => group.fields.some((field) => field.fieldCode === code)) : undefined; });
+const draftStandardPath = computed(() => { const group = draftGroup.value; const field = group?.fields.find((item) => item.fieldCode === draft.value?.fieldCode); if (!group || !field) return String(draft.value?.legacyJsonPath || ""); const base = String(group.itemPath || `$.${group.groupCode}`).trim(); const prefix = group.cardinality === "MANY" ? `${base}[*]` : base; return field.fieldPath ? `${prefix}.${field.fieldPath.replace(/\.\[\*/g, "[*]")}` : prefix; });
 const selectedChapter = ref<StandardFieldCatalogChapter>();
 const draft = ref<Partial<StandardField>>();
 const rules = ref<CatalogRule[]>([]);
@@ -138,7 +147,6 @@ function buildChapterNode(chapter: StandardFieldCatalogChapter, keyword: string)
     .map((item) => buildChapterNode(item, keyword))
     .filter((item): item is FieldChapterNode => Boolean(item));
   if (keyword && !chapterMatches && !directFields.length && !children.length) return undefined;
-
   const subtreeCodes = new Set(directFields.map((item) => item.fieldCode));
   for (const child of children) {
     collectNodeFieldCodes(child, subtreeCodes);
@@ -183,7 +191,6 @@ const directoryOrderedGroups = computed(() => {
   });
   return ordered;
 });
-
 const visibleChapterRows = computed(() => {
   const rows: Array<{ node: FieldChapterNode; depth: number; open: boolean }> = [];
   const searching = Boolean(search.value.trim());
@@ -197,25 +204,33 @@ const visibleChapterRows = computed(() => {
   visit(chapterTree.value, 0);
   return rows;
 });
-
 const unmappedFields = computed(() => {
   const keyword = search.value.trim().toLowerCase();
   return catalogUnmappedFields.value.filter((item) =>
     !keyword || `${item.label} ${item.fieldCode} ${item.groupCode}`.toLowerCase().includes(keyword),
   );
 });
-
 function toggleChapter(id: number) {
   const next = new Set(expandedChapters.value);
   if (next.has(id)) next.delete(id);
   else next.add(id);
   expandedChapters.value = next;
 }
-function selectGroup(group: SystemFieldGroup) { selectedGroupCode.value = group.groupCode; groupDraft.value = JSON.parse(JSON.stringify(group)); selected.value = undefined; draft.value = undefined }
+function selectGroup(group: SystemFieldGroup) {
+  selectedGroupCode.value = group.groupCode;
+  groupDraft.value = { itemPath: "", sourceMappings: [], ...JSON.parse(JSON.stringify(group)) };
+  selected.value = undefined; draft.value = undefined;
+}
 function selectChapter(chapter: StandardFieldCatalogChapter) { selectedGroupCode.value = ''; selectedChapter.value = chapter; selected.value = undefined; draft.value = undefined }
 async function saveSelectedGroup() {
   if (!selectedGroup.value || !groupDraft.value.label) return
-  try { await adminApi.updateFieldGroup(selectedGroup.value.groupCode, groupDraft.value); await loadFields(); ElMessage.success('编组已保存') }
+  try {
+    const saved = await adminApi.updateFieldGroup(selectedGroup.value.groupCode, groupDraft.value)
+    const index = groups.value.findIndex((item) => item.groupCode === saved.groupCode)
+    if (index >= 0) groups.value[index] = saved
+    groupDraft.value = JSON.parse(JSON.stringify(saved))
+    await loadFields(); ElMessage.success('编组已保存')
+  }
   catch (error) { ElMessage.error(errorText(error)) }
 }
 async function moveGroupField(index: number, delta: number) {
@@ -375,13 +390,25 @@ async function saveRule() {
   try {
     const savedConfig = JSON.parse(JSON.stringify(ruleConfig.value));
     (savedConfig.contextVariables || []).forEach((item: Record<string, unknown>) => delete item.previewValue);
-    ruleDraft.value.config = ruleDraft.value.sourceType === "LIMS" ? { ...savedConfig,
-      sourceUnitType: ruleDraft.value.sourceUnitType, sourcePath: ruleDraft.value.sourcePath,
-      sectionPattern: ruleDraft.value.sectionPattern, headerPattern: ruleDraft.value.headerPattern,
-      valuePattern: ruleDraft.value.valuePattern } : savedConfig;
-    delete ruleDraft.value.priority;
-    if (ruleDraft.value.id) await adminApi.updateSystemFieldRule(ruleDraft.value.id, ruleDraft.value);
-    else await adminApi.createSystemFieldRule(selected.value.fieldCode, ruleDraft.value);
+    // 构建保存的规则对象，确保所有必需字段都有值
+    const ruleToSave: Record<string, any> = {
+      fieldCode: ruleDraft.value.fieldCode || selected.value.fieldCode,
+      name: ruleDraft.value.name?.trim() || "",
+      sourceType: ruleDraft.value.sourceType || "LIMS",
+      priority: ruleDraft.value.priority ?? 100,
+      transform: ruleDraft.value.transform || "TRIM",
+      enabled: ruleDraft.value.enabled !== undefined ? ruleDraft.value.enabled : true,
+      config: ruleDraft.value.sourceType === "LIMS" ? {
+        ...savedConfig,
+        sourceUnitType: ruleDraft.value.sourceUnitType || "",
+        sourcePath: ruleDraft.value.sourcePath || "",
+        sectionPattern: ruleDraft.value.sectionPattern || "",
+        headerPattern: ruleDraft.value.headerPattern || "",
+        valuePattern: ruleDraft.value.valuePattern || ""
+      } : savedConfig
+    };
+    if (ruleDraft.value.id) await adminApi.updateSystemFieldRule(ruleDraft.value.id, ruleToSave);
+    else await adminApi.createSystemFieldRule(selected.value.fieldCode, ruleToSave);
     await loadRules(selected.value.fieldCode);
     ruleDialog.value = false;
     ElMessage.success("提取规则已保存");
@@ -396,7 +423,6 @@ async function removeRule(rule: CatalogRule) {
 }
 onMounted(() => loadFields());
 </script>
-
 <template>
   <div class="lims-catalog">
     <header class="module-header">
@@ -415,10 +441,19 @@ onMounted(() => loadFields());
       <section class="field-workspace">
         <section v-if="selectedGroup && !draft" class="definition-band">
           <div class="workspace-head"><div><span>字段编组</span><h1>{{ selectedGroup.label }}</h1></div><el-tag>{{ selectedGroup.groupCode }}</el-tag></div>
-          <div class="form-grid two"><el-form-item label="编组名称"><el-input v-model="groupDraft.label" /></el-form-item><el-form-item label="数据关系"><el-select v-model="groupDraft.cardinality"><el-option label="单值" value="ONE" /><el-option label="数组/多行" value="MANY" /></el-select></el-form-item></div><el-button type="primary" @click="saveSelectedGroup">保存编组</el-button><el-button type="danger" plain @click="removeSelectedGroup">删除编组</el-button>
+          <el-form label-position="top">
+            <div class="form-grid four">
+              <el-form-item label="编组名称"><el-input v-model="groupDraft.label" /></el-form-item>
+              <el-form-item label="数据关系"><el-select v-model="groupDraft.cardinality"><el-option label="单值" value="ONE" /><el-option label="数组/多行" value="MANY" /></el-select></el-form-item>
+              <el-form-item label="数据集合"><el-input :model-value="groupDataPath" disabled /></el-form-item>
+            </div>
+          </el-form>
+          <el-button type="primary" @click="saveSelectedGroup">保存编组</el-button><el-button type="danger" plain @click="removeSelectedGroup">删除编组</el-button>
+          <SystemGroupSourceMappings v-model="groupSourceMappings" :fields="selectedGroup.fields" />
+          <SystemGroupFieldPaths :group="selectedGroup" />
           <SystemGroupStructure :group="selectedGroup" :error-text="errorText"
             @saved="(group) => { const index = groups.findIndex((item) => item.groupCode === group.groupCode); if (index >= 0) groups[index] = group }" />
-          <p class="form-help">当前编组包含 {{ selectedGroup.fields.length }} 个字段。点击左侧字段进入具体配置。</p>
+          <p class="form-help">数据集合由编组编码自动生成；当前编组包含 {{ selectedGroup.fields.length }} 个字段。点击左侧字段进入具体配置。</p>
         </section>
         <section v-else-if="selectedChapter && !draft" class="definition-band">
           <div class="workspace-head"><div><span>章节</span><h1>{{ selectedChapter.title }}</h1></div><el-tag>{{ selectedChapter.code }}</el-tag></div>
@@ -436,7 +471,7 @@ onMounted(() => loadFields());
                 <el-form-item label="字段名称"><el-input v-model="draft.label" /></el-form-item>
                 <el-form-item label="字段编码"><el-input v-model="draft.fieldCode" disabled /></el-form-item>
                 <el-form-item label="字段分组"><el-input :model-value="groupDisplay(draft)" disabled /></el-form-item>
-                <el-form-item label="标准集合编码"><el-input v-model="draft.collectionCode" /></el-form-item>
+                <el-form-item label="字段键名"><el-input :model-value="draft.jsonKey || draft.fieldCode?.split('.').pop() || ''" disabled /></el-form-item>
               </div>
               <el-form-item label="业务定义"><el-input v-model="draft.description" type="textarea" :rows="2" /></el-form-item>
               <div class="form-grid four">
@@ -446,14 +481,14 @@ onMounted(() => loadFields());
                 <el-form-item label="排序号"><el-input-number v-model="draft.orderNo" :min="0" controls-position="right" /></el-form-item>
               </div>
               <div class="form-grid three">
-                <el-form-item label="标准数据路径"><el-input v-model="draft.legacyJsonPath" placeholder="$.samples[*].sampleName" /></el-form-item>
-                <el-form-item label="默认值"><el-input v-model="draft.defaultValue" /></el-form-item>
+                <el-form-item label="标准数据路径">
+                  <el-input v-if="draftGroup" :model-value="draftStandardPath" disabled />
+                  <el-input v-else v-model="draft.legacyJsonPath" placeholder="$.samples[*].sampleName" />
+                </el-form-item>
+                <el-form-item label="填充规则">
+                  <el-input v-model="draft.fillRule" placeholder="例如: APPEND_SUFFIX:--定量限试验结果表" />
+                </el-form-item>
                 <el-form-item label="结果校验正则"><el-input v-model="draft.validationRegex" /></el-form-item>
-              </div>
-              <div class="form-grid three database-row">
-                <el-form-item label="数据库表"><el-input v-model="draft.dbTable" /></el-form-item>
-                <el-form-item label="数据库列"><el-input v-model="draft.dbColumn" /></el-form-item>
-                <el-form-item label="JSON 属性"><el-input v-model="draft.jsonKey" /></el-form-item>
               </div>
             </el-form>
           </div>
@@ -495,7 +530,6 @@ onMounted(() => loadFields());
         <div v-else class="empty-state"><Coin /><h2>选择或新增标准字段</h2></div>
       </section>
     </main>
-
     <el-dialog v-model="ruleDialog" :title="ruleDraft?.id ? '编辑提取规则' : '新增提取规则'" width="min(960px, 94vw)" class="rule-editor-dialog">
       <el-form v-if="ruleDraft" label-position="top">
         <div class="form-grid three">
@@ -512,14 +546,14 @@ onMounted(() => loadFields());
           <ExcelWorkbookLocation :config="ruleConfig" />
         </template>
         <template v-if="ruleDraft.sourceType === 'AI'">
-          <SystemAiRuleEditor v-model="ruleConfig" :fields="fields" />
+          <SystemAiRuleEditor v-model="ruleConfig" :fields="fields" :groups="groups" />
         </template>
         <template v-if="ruleDraft.sourceType === 'CALCULATED'">
           <el-form-item label="依赖系统字段"><el-select v-model="ruleConfig.dependencies" multiple filterable><el-option v-for="item in fields" :key="item.fieldCode" :label="`${item.label} · ${item.fieldCode}`" :value="item.fieldCode" /></el-select></el-form-item>
           <el-form-item label="计算表达式"><el-input v-model="ruleConfig.expression" placeholder="例如 {sample.weight} / {sample.volume}" /></el-form-item>
           <el-form-item label="文本拼接模板"><el-input v-model="ruleConfig.textTemplate" type="textarea" :rows="4" placeholder="例如 {sample.name}（批号：{sample.batchNo}）" /><small class="form-help">计算表达式和文本拼接模板二选一。文本模板用 {系统字段编码} 引用下面的上下文变量。</small></el-form-item>
           <el-form-item v-if="ruleConfig.textTemplate" label="上下文变量">
-            <SystemContextVariables v-model="calculatedVariables" :fields="fields" />
+            <SystemContextVariables v-model="calculatedVariables" :fields="fields" :groups="groups" />
             <small class="form-help">成组字段（一个字段多条取值）必须在这里声明取值方式，否则模板拿到的是整个列表。</small>
           </el-form-item>
         </template>
@@ -554,10 +588,8 @@ onMounted(() => loadFields());
       </el-form>
       <template #footer><el-button @click="ruleDialog = false">取消</el-button><el-button type="primary" @click="saveRule">保存规则</el-button></template>
     </el-dialog>
-
   </div>
 </template>
-
 <style scoped>
 .rule-flow{padding:12px 20px;display:flex;align-items:stretch;gap:10px;border-bottom:1px solid #e2e7e4;background:#f7f9fc}.rule-flow>span{min-width:0;display:grid;gap:4px;color:#50635c;font-size:11px}.rule-flow>span:first-child{flex:.9}.rule-flow>span:nth-of-type(2){flex:1}.rule-flow>span:nth-of-type(3){flex:1.15}.rule-flow>span:last-child{flex:1.3}.rule-flow b{color:#75847e;font-size:10px;font-weight:500}.rule-flow code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rule-flow i{align-self:center;color:#8aa098;font-style:normal}.rule-source,.rule-transform{display:grid;gap:4px}.rule-source b,.rule-transform b{color:#31463f;font-size:11px;font-weight:600}.rule-source small,.rule-transform small{color:#71817b;font-size:10px;line-height:1.45}.rule-detail{display:flex;flex-wrap:wrap;align-items:center;gap:5px 8px}.rule-detail>span{min-width:0;display:flex;align-items:center;gap:5px}.rule-detail>span b{flex:none;color:#71817b;font-size:10px;font-weight:500}.rule-detail code{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.rule-origin-note{margin-bottom:14px;padding:10px 12px;color:#50635c;background:#f4f7fb;border:1px solid #dce5e1;font-size:11px;line-height:1.6}.parser-config-grid{padding:10px 12px 0;background:#f7f9fc}.parser-config-grid+.parser-config-grid{margin-bottom:14px;padding-top:0}.form-help{display:block;margin-top:5px;color:#71817b;font-size:10px}.raw-json-head{width:100%;display:flex;align-items:center;justify-content:space-between;gap:18px}.raw-json-head h2{margin:0;color:#263548;font-size:17px}.raw-json-head span{display:block;margin-top:5px;color:#6b7c75;font-size:11px}.raw-json-body{height:100%;min-height:280px;display:flex;flex-direction:column}.raw-json-body>p{margin:0 0 12px;padding:10px 12px;color:#52665f;background:#f4f7fb;border:1px solid #dce5e1;font-size:11px;line-height:1.65}.raw-json-body>p code{color:#235c4d}.raw-json-body pre{min-height:0;flex:1;margin:0;padding:16px;overflow:auto;color:#d8e6e1;background:#19312b;border-radius:4px;font:11px/1.65 Consolas,"SFMono-Regular",monospace;white-space:pre-wrap;overflow-wrap:anywhere}@media(max-width:1400px){.rule-flow{flex-wrap:wrap}.rule-flow i{display:none}.rule-flow>span{flex:1 1 40%!important}}
 .lims-catalog{--space-xs:4px;--space-sm:8px;--space-md:12px;--space-lg:16px;--space-xl:24px;height:100%;min-width:0;color:#263731;background:#f4f7fb;overflow:hidden}.module-header{height:64px;padding:0 var(--space-xl);display:flex;align-items:center;background:#fff;border-bottom:1px solid #e4eaf2}.module-title{display:flex;align-items:center;gap:var(--space-md)}.module-title>svg{width:22px;color:#2167e8}.module-title strong,.module-title small{display:block}.module-title strong{color:#263548;font-size:14px}.module-title small{margin-top:3px;color:#6b7c75;font-size:10px}.header-actions{margin-left:auto;display:flex;gap:var(--space-sm)}.header-actions .el-button{margin:0}.catalog-main{height:calc(100% - 64px);display:grid;grid-template-columns:380px minmax(0,1fr)}.field-index{min-height:0;padding:18px 14px 0;display:flex;flex-direction:column;background:#fff;border-right:1px solid #e4eaf2}.index-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px}.index-head h1{margin:0;color:#263548;font-size:18px}.index-head span{color:#6d7e78;font-size:11px}.field-list{min-height:0;flex:1;overflow:auto;margin-top:var(--space-md);padding-bottom:var(--space-lg)}.field-list section{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 7px}.field-list section h2{grid-column:1/-1;margin:14px 8px 1px;display:flex;justify-content:space-between;color:#53675f;font-size:12px}.field-list section h2 span{font-weight:400}.field-list button{width:100%;min-width:0;min-height:44px;padding:6px var(--space-sm);display:grid;grid-template-columns:minmax(0,1fr) 8px;align-items:center;gap:6px;border:1px solid #e4e9e6;border-radius:4px;background:#fff;text-align:left;cursor:pointer;transition:background-color 180ms ease-out,border-color 180ms ease-out}.field-list button:hover{background:#f1f6f4;border-color:#b8cbc4}.field-list button.selected{background:#e5f0ed;border-color:#4f8ee8}.field-list b,.field-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.field-list b{font-size:12px}.field-list small{margin-top:3px;color:#687a73;font-size:10px}.field-state{width:7px;height:7px;border-radius:50%;background:#49a36e}.field-state.disabled{background:#9aa6a1}.field-workspace{min-width:0;overflow:auto;padding:var(--space-xl) 28px}.workspace-head,.rules-head,.preview-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px}.workspace-head>div:last-child{display:flex;gap:var(--space-sm)}.workspace-head span,.rules-head span,.preview-head span{color:#6b7c75;font-size:11px}.workspace-head h1{margin:6px 0 0;color:#263548;font-size:24px}.result-preview-band,.definition-band,.rules-band{margin-top:20px;background:#fff;border:1px solid #d7dfdb}.result-preview-band{min-height:118px}.preview-head{padding:var(--space-lg) 20px;border-bottom:1px solid #e2e7e4}.preview-head h2,.definition-band h2,.rules-head h2{margin:0 0 var(--space-lg);color:#234c41;font-size:16px}.preview-head h2,.rules-head h2{margin-bottom:var(--space-xs)}.preview-empty{min-height:68px;padding:var(--space-xl);display:grid;place-items:center;color:#6b7c75;font-size:12px}.preview-value{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#263548;font-weight:600}.preview-context b,.preview-context small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.preview-context b{font-size:12px;font-weight:500}.preview-context small{margin-top:2px;color:#708079;font-size:10px}.definition-band{padding:20px}.form-grid{display:grid;gap:var(--space-md)}.form-grid.two{grid-template-columns:1fr 1fr}.form-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.form-grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}.database-row{margin-top:var(--space-xs);padding-top:14px;border-top:1px solid #e4e9e6}.rules-band{padding:0;overflow-x:auto}.rules-head{padding:18px 20px;border-bottom:1px solid #e2e7e4}.rules-band code{color:#31594e}.empty-state{height:100%;display:grid;place-content:center;text-align:center;color:#708079}.empty-state svg{width:36px;margin:auto}.empty-state h2{font-size:18px}.el-select,.el-input-number{width:100%}@media(max-width:1400px){.catalog-main{grid-template-columns:360px minmax(0,1fr)}.field-workspace{padding:var(--space-xl)}.form-grid.four{grid-template-columns:1fr 1fr}}@media(prefers-reduced-motion:reduce){.field-list button{transition:none}}
@@ -565,5 +597,4 @@ onMounted(() => loadFields());
 .preview-actions{display:flex;align-items:center;gap:8px}.preview-instance-select{width:360px}.preview-option{display:grid;gap:2px;line-height:1.25}.preview-option b{max-width:310px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#31463f;font-size:12px;font-weight:500}.preview-option small{color:#71817b;font-size:10px}@media(max-width:1200px){.preview-actions{width:100%;align-items:stretch}.preview-instance-select{min-width:0;flex:1}.preview-head{align-items:stretch;flex-direction:column}}
 @media(prefers-reduced-motion:reduce){.chapter-caret{transition:none}}
 .group-field-order{margin-top:18px;padding:14px 16px;border:1px solid #e1e8e5;border-radius:8px;background:#f8fafb}.group-field-order-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#30483f;font-size:12px;font-weight:650}.group-field-order-head small{color:#81908a;font-size:10px;font-weight:400}.group-field-order-row{min-height:38px;display:grid;grid-template-columns:34px minmax(120px,1fr) minmax(120px,1fr) auto;align-items:center;gap:10px;padding:5px 4px;border-top:1px solid #e8eeeb}.group-field-order-index{color:#7d9188;font:11px/1 Consolas,monospace}.group-field-order-row b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2d443b;font-size:12px;font-weight:550}.group-field-order-row code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#778a83;font:10px/1.3 Consolas,monospace}.group-field-order-actions{display:flex;gap:2px}.group-field-order-actions .el-button{width:28px;height:28px;margin:0;color:#477265}.group-field-order-actions .el-button:not(.is-disabled):hover{color:#2167e8;background:#e8f0ff}.group-field-order-empty{margin:10px 0 2px;color:#8a9993;font-size:11px;text-align:center}@media(max-width:700px){.group-field-order-row{grid-template-columns:28px minmax(0,1fr) auto}.group-field-order-row code{display:none}}.group-index{max-height:220px;overflow:auto;margin-bottom:12px}.group-index h1{margin:0 0 8px;font-size:13px}.group-index .el-menu{border-right:0}.group-index .el-menu-item{height:36px;line-height:36px;padding:0 10px!important;display:flex;justify-content:space-between}
-
 .references-band{margin-top:20px;padding:0 20px 18px;background:#fff;border:1px solid #d7dfdb}.references-band .rules-head{padding:18px 0 12px;border-bottom:1px solid #e2e7e4}.reference-missing{color:#c45656;font-size:11px;line-height:1.5}</style>

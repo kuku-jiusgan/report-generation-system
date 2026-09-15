@@ -18,6 +18,9 @@ from .docx_field_values import (
 )
 from .docx_group_columns import expand_group_columns, fill_group_headers, find_group_span
 from .docx_matrix import fill_matrix_table, fill_matrix_tables
+from .docx_summary_rows import (
+    clear_unmapped_summary_cells, fill_preserved_summary_rows, is_preserved_summary_row,
+)
 from .table_layout_rules import TableLayoutRules, repeat_bookmark_name
 
 
@@ -73,52 +76,24 @@ def _set_vertical_merge(cell: etree._Element, restart: bool) -> None:
         merge.set(W + "val", "restart")
 
 
-def _cell_text(cell: etree._Element) -> str:
-    return "".join(cell.xpath(".//w:t/text()", namespaces=NS)).strip()
-
-
-def _set_cell_text(cell: etree._Element, value: Any) -> None:
-    texts = cell.xpath(".//w:t", namespaces=NS)
-    if not texts:
-        paragraph = cell.find(W + "p")
-        if paragraph is None:
-            paragraph = etree.SubElement(cell, W + "p")
-        run = etree.SubElement(paragraph, W + "r")
-        texts = [etree.SubElement(run, W + "t")]
-    texts[0].text = "" if value is None else str(value)
-    for text in texts[1:]:
-        text.text = ""
-
-
-def _is_preserved_summary_row(row: etree._Element, preserved_labels: tuple[str, ...]) -> bool:
-    cells = row.xpath("./w:tc", namespaces=NS)
-    label = _cell_text(cells[0]) if cells else ""
-    return any(label.startswith(prefix) for prefix in preserved_labels)
-
-
-def _clear_unmapped_summary_cells(row: etree._Element, direct_tags: set[str]) -> None:
-    cells = row.xpath("./w:tc", namespaces=NS)
-    for cell in cells[1:]:
-        cell_tags = set(cell.xpath(".//w:sdtPr/w:tag/@w:val", namespaces=NS))
-        if not cell_tags.intersection(direct_tags):
-            _set_cell_text(cell, "")
-
-
 def _group_source(table_no: str, group: list[dict[str, Any]], warn: Warn) -> tuple[str, str] | None:
-    """循环表的数据集合以内容块配置为准，字段路径只作为未配置时的回退。"""
+    """循环表的数据集合优先使用编组 itemPath，其次才是内容块显式路径。"""
+    group_source = next((repeat_source(item.get("groupItemPath", "")) for item in group
+                         if repeat_source(item.get("groupItemPath", ""))), None)
     block_source = next((repeat_source(item.get("blockSourcePath", "")) for item in group
                          if repeat_source(item.get("blockSourcePath", ""))), None)
     field_source = next((repeat_source(mapping_source_path(item)) for item in group
                          if repeat_source(mapping_source_path(item))), None)
-    if block_source and field_source and block_source[0] != field_source[0]:
+    if group_source and block_source and group_source[0] != block_source[0]:
         warn("BLOCK_SOURCE_MISMATCH", table_no,
-             f"内容块的循环数据集合是 {block_source[0]}，字段却取自 {field_source[0]}，"
-             f"按内容块配置填充；请在模板设计器中对齐两者。")
-    if not block_source and field_source:
-        warn("BLOCK_SOURCE_MISSING", table_no,
-             f"内容块没有配置循环数据集合，暂按字段路径的 {field_source[0]} 填充；"
-             f"请在模板设计器中补填。")
-    return block_source or field_source
+             f"内容块的循环数据集合是 {block_source[0]}，编组集合路径是 {group_source[0]}，请修正模板配置。")
+    if group_source and field_source and group_source[0] != field_source[0]:
+        warn("BLOCK_SOURCE_MISMATCH", table_no,
+             f"编组集合路径是 {group_source[0]}，字段却取自 {field_source[0]}，已跳过不一致字段。")
+    if not group_source and not block_source:
+        warn("BLOCK_SOURCE_MISSING", table_no, "编组未配置循环数据集合 itemPath，无法确定循环来源。")
+        return None
+    return group_source or block_source
 
 
 def _is_matrix(table_no: str, group: list[dict[str, Any]], layout: TableLayoutRules, warn: Warn) -> bool:
@@ -148,8 +123,38 @@ def _fill_matrix_block(document: etree._Element, table_no: str, records: list[di
              "该表按矩阵填充，但表格规则里没有可用的矩阵版式；已保留 Word 模板中的原有内容，"
              "请在模板设计器的表格布局中补充矩阵版式。")
         return
-    fill_matrix_tables(document, table_no, records, matrix_layout, warn,
+    fill_matrix_tables(document, table_no, records, _matrix_layout_with_image_tags(matrix_layout, mappings), warn,
                        layout.anchored_index(document, table_no, mappings))
+
+
+def _matrix_layout_with_image_tags(matrix_layout: dict[str, Any],
+                                   mappings: list[dict[str, Any]]) -> dict[str, Any]:
+    """把映射里的图片控件标签注入对应 scalar cell，供矩阵写值复用已有图片嵌入链路。"""
+    result = copy.deepcopy(matrix_layout)
+    by_field: dict[str, dict[str, Any] | None] = {}
+    for item in mappings:
+        if item.get("dataType") != "image" or not item.get("controlTag"):
+            continue
+        keys = [str(item.get("fieldCode") or "").split(".")[-1]]
+        source_path = str(item.get("sourcePath") or "")
+        if source_path:
+            keys.append(source_path.rsplit(".", 1)[-1])
+        for key in keys:
+            if key:
+                # 同名字段无法确定其来源时必须显式跳过，不能让后一个映射
+                # 静默覆盖前一个映射并把图片写入错误控件。
+                if key in by_field and by_field[key] != item:
+                    by_field[key] = None
+                elif key not in by_field:
+                    by_field[key] = item
+    for entry in result.get("scalarCells") or []:
+        if not isinstance(entry, dict):
+            continue
+        mapping = by_field.get(str(entry.get("field") or ""))
+        if mapping is not None:
+            entry["controlTag"] = mapping["controlTag"]
+            entry["dataType"] = "image"
+    return result
 
 
 def _reset_prototype_row(prototype: etree._Element, group_tags: set[str]) -> None:
@@ -171,8 +176,8 @@ def _drop_stale_rows(parent: etree._Element, insert_at: int, direct_tags: set[st
         row_tags = set(old_row.xpath(".//w:sdtPr/w:tag/@w:val", namespaces=NS))
         if row_tags & direct_tags:
             continue
-        if _is_preserved_summary_row(old_row, preserved_labels):
-            _clear_unmapped_summary_cells(old_row, direct_tags)
+        if is_preserved_summary_row(old_row, preserved_labels):
+            clear_unmapped_summary_cells(old_row, direct_tags)
             continue
         parent.remove(old_row)
 
@@ -309,6 +314,10 @@ def _detail_key(group: list[dict[str, Any]], table_no: str, warn: Warn) -> str:
 def _row_units(records: list[dict[str, Any]],
                detail_key: str) -> list[tuple[dict[str, Any], dict[str, Any] | None]]:
     """行单元：有明细层就展开成每条明细一行，否则分组记录本身就是一行。"""
+    if detail_key and not any(isinstance(record.get(detail_key), list) for record in records):
+        # 数据集合本身就是 `$.<detail_key>[*]` 的明细数组，而不是包含该数组的
+        # 外层分组。此时同一条记录同时承担两层取值，通配路径才能正常写入。
+        return [(record, record) for record in records]
     units: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
     for record in records:
         if not detail_key:
@@ -456,6 +465,8 @@ def _fill_row_repeat_table(document: etree._Element, table_no: str, group: list[
     for row, (group_record, detail_record) in zip(rows, units):
         _fill_level_controls(row.xpath("./w:tc", namespaces=NS), group_record, detail_record,
                              detail_key, table_no, group, source, report_data, values, warn)
+    fill_preserved_summary_rows(parent, rows, records, table_no, group, source, report_data,
+                                values, layout, warn, detail_key, _fill_level_controls)
     if len(rows) > 1:
         _apply_vertical_merge(rows, units, group, report_data)
 
@@ -468,6 +479,33 @@ def _group_records(records: list[dict[str, Any]], group_key: str) -> list[list[d
             raise ValueError(f"整表分组字段 {group_key} 缺失")
         grouped.setdefault(str(value), []).append(record)
     return list(grouped.values())
+
+
+def _adjacent_group_heading(prototype: etree._Element, group: list[dict[str, Any]],
+                            source: tuple[str, str], group_key: str,
+                            ) -> tuple[etree._Element, dict[str, Any]] | None:
+    """紧邻原型表且绑定分组字段的正文元素，随表作为一个重复单元。"""
+    mapping = next((item for item in group
+                    if repeat_source(mapping_source_path(item)) == (source[0], group_key)
+                    and item.get("controlTag")), None)
+    heading = prototype.getprevious()
+    if mapping is None or heading is None:
+        return None
+    controls = heading.xpath(
+        "self::w:sdt[w:sdtPr/w:tag/@w:val=$tag] | .//w:sdt[w:sdtPr/w:tag/@w:val=$tag]",
+        namespaces=NS, tag=str(mapping["controlTag"]),
+    )
+    return (heading, mapping) if controls else None
+
+
+def _fill_group_heading(heading: etree._Element, mapping: dict[str, Any],
+                        record: dict[str, Any], group_key: str) -> None:
+    value = format_value(record_value(record, group_key), mapping)
+    for control in heading.xpath(
+        "self::w:sdt[w:sdtPr/w:tag/@w:val=$tag] | .//w:sdt[w:sdtPr/w:tag/@w:val=$tag]",
+        namespaces=NS, tag=str(mapping["controlTag"]),
+    ):
+        set_control_text(control, value)
 
 
 def _fill_table_repeat(document: etree._Element, table_no: str, group: list[dict[str, Any]],
@@ -496,11 +534,22 @@ def _fill_table_repeat(document: etree._Element, table_no: str, group: list[dict
         return
     prototype = table_nodes[0]
     parent, insert_at = prototype.getparent(), prototype.getparent().index(prototype)
+    heading_config = _adjacent_group_heading(prototype, group, source, group_key)
+    headings = [heading_config[0]] if heading_config else []
     tables = [prototype]
     for offset in range(1, len(record_groups)):
         cloned = copy.deepcopy(prototype)
-        parent.insert(insert_at + offset, cloned)
+        if heading_config:
+            cloned_heading = copy.deepcopy(heading_config[0])
+            parent.insert(insert_at + (offset * 2) - 1, cloned_heading)
+            parent.insert(insert_at + (offset * 2), cloned)
+            headings.append(cloned_heading)
+        else:
+            parent.insert(insert_at + offset, cloned)
         tables.append(cloned)
+    if heading_config:
+        for heading, grouped_records in zip(headings, record_groups):
+            _fill_group_heading(heading, heading_config[1], grouped_records[0], group_key)
     inner_mode = str(rule.get("innerMode") or "ROW_REPEAT")
     matrix_layout = layout.matrix_layout(table_no)
     for table, grouped_records in zip(tables, record_groups):
@@ -508,7 +557,8 @@ def _fill_table_repeat(document: etree._Element, table_no: str, group: list[dict
             if not matrix_layout:
                 warn("MATRIX_LAYOUT_MISSING", table_no, "整表复制的表内模式为矩阵，但未配置矩阵版式。")
                 return
-            fill_matrix_table(table, grouped_records, matrix_layout)
+            fill_matrix_table(table, grouped_records,
+                              _matrix_layout_with_image_tags(matrix_layout, group))
             continue
         _fill_row_repeat_table(table, table_no, group, mappings, grouped_records, source,
                                empty_behavior, report_data, values, layout, warn)
@@ -527,7 +577,11 @@ def fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], p
                                if repeat_source(mapping_source_path(item))), group[0])
         source_payload = payload_for_mapping(source_mapping, payload, report_data)
         records = source_payload.get(source[0])
-        records = _prepare_repeat_records(records if isinstance(records, list) else [], group)
+        if not isinstance(records, list):
+            warn("BLOCK_SOURCE_NOT_ARRAY", table_no,
+                 f"循环集合 {source[0]} 缺失或不是数组，无法填充 Word 表格。")
+            continue
+        records = _prepare_repeat_records(records, group)
         empty_behavior = next((item.get("blockEmptyBehavior") for item in group
                                if item.get("blockEmptyBehavior")), "KEEP")
         if layout.is_table_repeat(table_no):

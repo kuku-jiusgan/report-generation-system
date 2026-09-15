@@ -77,6 +77,17 @@ def test_excel_rule_reads_imported_source_payload() -> None:
     assert report_data["field_sources"]["sample.name"]["type"] == "EXCEL"
 
 
+def test_grouped_excel_rule_reads_field_standard_path_when_rule_is_stale() -> None:
+    field = [{"fieldCode": "result.value", "groupCode": "results", "legacyJsonPath": "$.results[*].value", "enabled": True}]
+    report_data = {"source_payloads": {"EXCEL": {"results": [{"value": "已落位"}]}}}
+
+    resolved = resolve_system_fields(
+        field, [rule("result.value", "EXCEL", 1, {"sourcePath": "$[*].value"}, 9)], {}, report_data,
+    )
+
+    assert resolved["results"] == [{"value": "已落位"}]
+
+
 def test_excel_many_fields_keep_record_indexes_aligned() -> None:
     fields = [
         {"fieldCode": "specificity.impurityName", "legacyJsonPath": "$.specificity[*].impurityName", "enabled": True},

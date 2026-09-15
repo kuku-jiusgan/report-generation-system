@@ -23,6 +23,7 @@ from .lims_parser_profiles import HTML_TABLE_LEGACY_DEFAULTS, HTML_TABLE_PARSER_
 from .lims_catalog_defaults import ensure_lims_catalog_defaults
 from .system_field_defaults import ensure_system_field_defaults
 from .system_field_groups import ensure_system_field_groups
+from .excel_rule_defaults import ensure_excel_field_rules
 
 
 def _chapter_for_mapping(item: dict[str, Any]) -> str:
@@ -88,6 +89,7 @@ class RuleAdminRepository(
         ensure_system_field_defaults(self.database)
         ensure_system_field_groups(self.database)
         ensure_lims_catalog_defaults(self.database)
+        ensure_excel_field_rules(self.database)
         self._localize_standard_field_groups()
         self._annotate_lims_rules()
         self._seed_template_catalog()
@@ -119,9 +121,14 @@ class RuleAdminRepository(
         with self.database.connect() as connection:
             rows = connection.execute(
                 """SELECT r.id,r.field_code,r.name,r.config,
-                          f.collection_code,f.json_key,f.db_table,f.db_column
+                          COALESCE(gf.group_code, f.collection_code) AS collection_code,
+                          f.json_key,f.db_table,f.db_column
                    FROM system_field_rules r
                    JOIN lims_field_catalog f ON f.field_code=r.field_code
+                   LEFT JOIN (
+                     SELECT field_code,MIN(group_code) AS group_code
+                     FROM system_field_group_fields GROUP BY field_code
+                   ) gf ON gf.field_code=f.field_code
                    WHERE r.source_type='LIMS'"""
             ).fetchall()
             for row in rows:

@@ -216,6 +216,42 @@ class LimsEvidenceRepositoryMixin:
             return {"fieldCode": field["fieldCode"], "total": 0, "items": [], "storageSupported": False}
         return self._preview_standard_field(field, selected_instances, limit)
 
+    def preview_lims_group(self, group: dict[str, Any], limit: int = 12,
+                           instance_ids: list[str] | None = None) -> dict[str, Any]:
+        """Return persisted records as the configured group payload for AI context."""
+        limit = max(1, min(int(limit), 50))
+        selected = {str(value) for value in (instance_ids or []) if str(value)}
+        rows = self._standard_preview_rows(str(group["groupCode"]))
+        latest: dict[str, str] = {}
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            instance_id = str(row["instance_id"])
+            if str(row["import_id"]) != latest.setdefault(instance_id, str(row["import_id"])):
+                continue
+            item = grouped.setdefault(instance_id, {
+                "importId": row["import_id"], "instanceId": instance_id,
+                "projectName": row["project_name"], "experimentTitle": row["title"],
+                "fileName": row["file_name"], "collectionCode": group["groupCode"],
+                "recordKey": row["record_key"], "recordKeys": [], "records": [],
+                "evidence": {"itemCount": 0}, "normalizedAt": row["normalized_at"],
+            })
+            item["recordKeys"].append(row["record_key"])
+            item["records"].append(json.loads(row["data_json"] or "{}"))
+            item["evidence"]["itemCount"] += 1
+        filtered = [item for key, item in grouped.items() if not selected or key in selected]
+        cardinality = str(group.get("cardinality") or "ONE").upper()
+        items = [{**item, "value": item["records"] if cardinality == "MANY"
+                  else (item["records"][0] if item["records"] else {})}
+                 for item in filtered[:limit]]
+        options = [{"instanceId": item["instanceId"], "experimentTitle": item["experimentTitle"],
+                    "projectName": item["projectName"], "normalizedAt": item["normalizedAt"],
+                    "recognizedCount": item["evidence"]["itemCount"]}
+                   for item in grouped.values()]
+        return {"groupCode": group["groupCode"], "total": len(filtered),
+                "availableTotal": len(grouped), "recognizedTotal": sum(
+                    item["evidence"]["itemCount"] for item in filtered),
+                "options": options, "items": items, "storageSupported": True}
+
     def _preview_experiment_field(self, field: dict[str, Any], db_column: str,
                                   selected: set[str], limit: int) -> dict[str, Any]:
         allowed = {"project_id", "project_name", "document_code", "document_version", "title",

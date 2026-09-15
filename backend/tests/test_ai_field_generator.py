@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.app.admin_routes.rule_catalog import _validate_system_rule
 from backend.app.services.ai_field_generator import AiGenerationError, _response_content, generate_ai_text, render_ai_prompt
 
 
@@ -103,3 +104,30 @@ def test_render_prompt_rejects_unresolved_placeholder() -> None:
             "contextVariables": [{"fieldCode": "project.name", "required": False}],
             "promptTemplate": "{{project.name}} {{missing.field}}",
         }, {})
+
+
+def test_validate_ai_rule_keeps_rule_fields_when_context_is_configured() -> None:
+    repository = MagicMock()
+    repository.database.get_lims_field.return_value = {"fieldCode": "narrative.summary"}
+    repository.database.list_lims_fields.return_value = [
+        {"fieldCode": "narrative.summary"},
+        {"fieldCode": "project.name"},
+    ]
+    rule = {
+        "fieldCode": "narrative.summary",
+        "name": "AI 生成摘要",
+        "sourceType": "AI",
+        "priority": 20,
+        "enabled": True,
+        "config": {
+            "contextVariables": [{"fieldCode": "project.name", "required": False}],
+            "promptTemplate": "项目：{{project.name}}",
+        },
+    }
+
+    with patch("backend.app.admin_routes.rule_catalog.list_system_field_groups", return_value=[]):
+        validated = _validate_system_rule(repository, rule)
+
+    assert validated["name"] == "AI 生成摘要"
+    assert validated["fieldCode"] == "narrative.summary"
+    assert validated["priority"] == 20

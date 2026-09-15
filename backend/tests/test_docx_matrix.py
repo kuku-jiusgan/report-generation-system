@@ -1,8 +1,10 @@
 """转置矩阵表：一条记录占一列。横向分组的用例见 test_docx_group_columns.py。"""
 
 from lxml import etree
+from zipfile import ZipInfo
 
 from backend.app.services.docx_matrix import fill_matrix_tables
+from backend.app.services.docx_images import embed_image_controls
 
 
 WARNINGS: list[tuple[str, str, str]] = []
@@ -23,7 +25,8 @@ LINEARITY_LAYOUT = {
         {"row": 8, "field": "residual"},
     ],
     "scalarCells": [{"row": 6, "column": 4, "field": "interceptRatio"},
-                    {"row": 9, "column": 2, "field": "residualChart"}],
+                    {"row": 9, "column": 2, "field": "residualChart",
+                     "dataType": "image", "controlTag": "repeat.t20.residualChart"}],
 }
 
 
@@ -40,8 +43,17 @@ def _matrix_document(row_count: int = 9) -> etree._Element:
         row = etree.SubElement(table, W + "tr")
         if row_index == 0:
             etree.SubElement(row, W + "bookmarkStart", {W + "name": "repeat_t20_row"})
-        for _ in range(6):
+        for column_index in range(6):
             cell = etree.SubElement(row, W + "tc")
+            if row_index == 8 and column_index == 1:
+                sdt = etree.SubElement(cell, W + "sdt")
+                props = etree.SubElement(sdt, W + "sdtPr")
+                etree.SubElement(props, W + "tag", {W + "val": "repeat.t20.residualChart"})
+                content = etree.SubElement(sdt, W + "sdtContent")
+                paragraph = etree.SubElement(content, W + "p")
+                run = etree.SubElement(paragraph, W + "r")
+                etree.SubElement(run, W + "t")
+                continue
             paragraph = etree.SubElement(cell, W + "p")
             run = etree.SubElement(paragraph, W + "r")
             etree.SubElement(run, W + "t")
@@ -51,6 +63,20 @@ def _matrix_document(row_count: int = 9) -> etree._Element:
 def _cell_text(document: etree._Element, row: int, column: int) -> str:
     cell = document.xpath(".//w:tbl/w:tr", namespaces=NS)[row].xpath("./w:tc", namespaces=NS)[column]
     return "".join(cell.xpath(".//w:t/text()", namespaces=NS))
+
+
+def _control_text(document: etree._Element, row: int, column: int, tag: str) -> str:
+    cell = document.xpath(".//w:tbl/w:tr", namespaces=NS)[row].xpath("./w:tc", namespaces=NS)[column]
+    return "".join(cell.xpath(
+        ".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]//w:t/text()", namespaces=NS, tag=tag,
+    ))
+
+
+def _cell_text_outside_controls(document: etree._Element, row: int, column: int) -> str:
+    cell = document.xpath(".//w:tbl/w:tr", namespaces=NS)[row].xpath("./w:tc", namespaces=NS)[column]
+    return "".join(cell.xpath(
+        ".//w:t[not(ancestor::w:sdt)]/text()", namespaces=NS,
+    ))
 
 
 def test_linearity_matrix_fills_detail_and_statistic_rows() -> None:
@@ -72,7 +98,8 @@ def test_linearity_matrix_fills_detail_and_statistic_rows() -> None:
     assert _cell_text(document, 5, 3) == "0.64"
     assert _cell_text(document, 6, 1) == "14944"
     assert _cell_text(document, 7, 1) == "-55"
-    assert _cell_text(document, 8, 1) == "data:image/png;base64,AAA="
+    assert _control_text(document, 8, 1, "repeat.t20.residualChart") == "data:image/png;base64,AAA="
+    assert _cell_text_outside_controls(document, 8, 1) == ""
 
 
 def test_linearity_matrix_clones_one_table_per_five_points() -> None:
@@ -119,3 +146,22 @@ def test_horizontal_matrix_expands_configured_rows_and_preserves_fixed_rows() ->
     assert _cell_text(document, 3, 1) == "y = 2x"
     assert len(document.xpath(".//w:tbl/w:tr[1]/w:tc", namespaces=NS)) == 8
     assert _cell_text(document, 5, 1) == "0.99"
+
+
+def test_matrix_image_control_is_embedded_as_drawing() -> None:
+    document = _matrix_document(row_count=10)
+    records = [{"residualChart": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}]
+    _fill_matrix_table(document, "T20", records, LINEARITY_LAYOUT)
+    content_types = etree.fromstring(b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+    rels = etree.fromstring(b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+    parts = {
+        "[Content_Types].xml": (ZipInfo("[Content_Types].xml"), etree.tostring(content_types)),
+        "word/_rels/document.xml.rels": (ZipInfo("word/_rels/document.xml.rels"), etree.tostring(rels)),
+    }
+    embed_image_controls(parts, {"word/document.xml": document}, [{
+        "dataType": "image", "controlTag": "repeat.t20.residualChart", "fillRule": "IMAGE_FIT_WIDE",
+    }])
+    cell = document.xpath(".//w:tbl/w:tr", namespaces=NS)[8].xpath("./w:tc", namespaces=NS)[1]
+    assert cell.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val='repeat.t20.residualChart']//w:drawing", namespaces=NS)
+    assert "word/media/" in "".join(parts)
+    assert "rId1" in etree.tostring(etree.fromstring(parts["word/_rels/document.xml.rels"][1])).decode()

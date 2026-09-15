@@ -1,13 +1,12 @@
 from typing import Any
 
-from .excel_validation_payload import enrich_excel_payload
 
 
 def replace_report_source(data: dict[str, Any], source: dict[str, Any], source_type: str,
                           api_prefix: str) -> dict[str, Any]:
     payloads = dict(data.get("source_payloads", {}))
     if source_type == "EXCEL":
-        excel_payload = enrich_excel_payload(source.get("payload") or {})
+        excel_payload = source.get("payload") or {}
         payloads["EXCEL"] = excel_payload
         payloads["EXCEL_DOCUMENT"] = {
             "id": source["id"], "fileName": source["file_name"],

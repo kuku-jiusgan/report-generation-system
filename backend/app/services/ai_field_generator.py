@@ -36,7 +36,10 @@ def _response_content(result: dict[str, Any]) -> tuple[str, bool]:
 def context_variables(config: dict[str, Any]) -> list[dict[str, Any]]:
     configured = config.get("contextVariables")
     if isinstance(configured, list):
-        return [item for item in configured if isinstance(item, dict) and item.get("fieldCode")]
+        return [
+            item for item in configured if isinstance(item, dict)
+            and (item.get("fieldCode") or item.get("groupCode"))
+        ]
     return [
         {"fieldCode": str(code), "required": True, "mode": "JOIN_UNIQUE", "separator": "、", "defaultValue": ""}
         for code in config.get("inputFields", [])
@@ -47,11 +50,21 @@ def _format_context(value: Any, variable: dict[str, Any]) -> str:
     """把一个标准字段的取值按上下文变量的取值方式拼成一段文字。
 
     FIRST 取第一个有效值，COUNT_UNIQUE 取去重后的个数，JOIN_UNIQUE 去重后拼接；
+    CURRENT_RECORD 用于按记录生成时，从当前记录读取字段值；
     suffix 加在每个取值后面（例如百分号），这样"1.4%、0.3%"不用在模板里硬拼。
     """
+    mode = str(variable.get("mode") or "JOIN_UNIQUE")
+    if mode == "CURRENT_RECORD":
+        # CURRENT_RECORD 模式：值已经是当前记录的值，直接格式化
+        if value is None or value == "":
+            return ""
+        if isinstance(value, (list, dict)):
+            import json
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        return str(value)
+
     values = value if isinstance(value, list) else [value]
     normalized = [str(item).strip() for item in values if item not in (None, "")]
-    mode = str(variable.get("mode") or "JOIN_UNIQUE")
     if mode == "FIRST":
         return f"{normalized[0]}{variable.get('suffix') or ''}" if normalized else ""
     unique = list(dict.fromkeys(normalized))
@@ -61,22 +74,75 @@ def _format_context(value: Any, variable: dict[str, Any]) -> str:
     return str(variable.get("separator") or "、").join(f"{item}{suffix}" for item in unique)
 
 
+def needs_per_record_generation(config: dict[str, Any]) -> bool:
+    """检查AI规则是否需要按记录生成（有 CURRENT_RECORD 模式的上下文变量）"""
+    for variable in context_variables(config):
+        if str(variable.get("mode") or "").upper() == "CURRENT_RECORD":
+            return True
+    return False
+
+
 def resolve_context_values(config: dict[str, Any],
-                           values: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
-    """按上下文变量配置解析出占位符取值，并列出缺失的必填字段。"""
+                           values: dict[str, Any],
+                           current_record: dict[str, Any] | None = None) -> tuple[dict[str, str], list[str]]:
+    """按上下文变量配置解析出占位符取值，并列出缺失的必填字段。
+
+    支持三种变量：
+    - fieldCode + mode(FIRST/JOIN_UNIQUE/COUNT_UNIQUE): 单个字段的值，按 mode 处理
+    - groupCode: 整个编组的数据，直接序列化为 JSON 字符串供 AI 使用
+    - fieldCode + mode(CURRENT_RECORD): 从当前记录读取字段值（用于按记录生成）
+
+    Args:
+        config: AI规则配置
+        values: 全局字段值字典
+        current_record: 当前记录（按记录生成时传入）
+    """
     resolved: dict[str, str] = {}
     missing: list[str] = []
     for variable in context_variables(config):
-        code = str(variable["fieldCode"])
-        text = _format_context(values.get(code), variable) or str(variable.get("defaultValue") or "")
+        field_code = variable.get("fieldCode")
+        group_code = variable.get("groupCode")
+        code = str(group_code or field_code or "")
+        mode = str(variable.get("mode") or "JOIN_UNIQUE").upper()
+
+        if mode == "CURRENT_RECORD":
+            # 从当前记录读取字段值
+            if not current_record:
+                # 没有当前记录上下文，标记缺失
+                text = str(variable.get("defaultValue") or "")
+            else:
+                if group_code and not field_code:
+                    # 仅配置 groupCode 时，当前记录本身就是上下文值。
+                    # 这支持按编组记录生成结论，而不要求规则虚构一个字段路径。
+                    record_value = current_record
+                else:
+                    # 从当前记录中读取字段（相对路径）。字段路径如
+                    # "limit.impurityName"，取最后一个点之后的记录内键名。
+                    relative_key = field_code.split(".")[-1] if field_code else ""
+                    record_value = current_record.get(relative_key) if relative_key else None
+                text = _format_context(record_value, variable) or str(variable.get("defaultValue") or "")
+        elif group_code:
+            # 编组：传递整个编组的数据（对象或数组）
+            group_value = values.get(group_code)
+            if group_value is None or group_value == "" or group_value == [] or group_value == {}:
+                text = str(variable.get("defaultValue") or "")
+            else:
+                # 将编组数据序列化为 JSON，让 AI 可以读取结构化数据
+                import json
+                text = json.dumps(group_value, ensure_ascii=False, indent=2)
+        else:
+            # 字段：按原有逻辑处理
+            text = _format_context(values.get(code), variable) or str(variable.get("defaultValue") or "")
+
         if not text and variable.get("required", True):
             missing.append(code)
         resolved[code] = text
     return resolved, missing
 
 
-def render_ai_prompt(config: dict[str, Any], values: dict[str, Any]) -> tuple[str, dict[str, str]]:
-    resolved, missing = resolve_context_values(config, values)
+def render_ai_prompt(config: dict[str, Any], values: dict[str, Any],
+                    current_record: dict[str, Any] | None = None) -> tuple[str, dict[str, str]]:
+    resolved, missing = resolve_context_values(config, values, current_record)
     if missing:
         raise AiGenerationError(f"AI 上下文字段缺失：{', '.join(missing)}")
     prompt = str(config.get("promptTemplate") or "")
@@ -89,7 +155,8 @@ def render_ai_prompt(config: dict[str, Any], values: dict[str, Any]) -> tuple[st
     return prompt, resolved
 
 
-def generate_ai_text(field_code: str, rule: dict[str, Any], values: dict[str, Any]) -> str:
+def generate_ai_text(field_code: str, rule: dict[str, Any], values: dict[str, Any],
+                     current_record: dict[str, Any] | None = None) -> str:
     settings = get_settings()
     service = load_ai_service_config(True)
     config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
@@ -98,7 +165,7 @@ def generate_ai_text(field_code: str, rule: dict[str, Any], values: dict[str, An
     api_key = str(service.get("apiKey") or "")
     if not base_url or not api_key or not model:
         raise AiGenerationError("AI 服务未配置，请设置接口地址、API Key 和模型")
-    prompt, _ = render_ai_prompt(config, values)
+    prompt, _ = render_ai_prompt(config, values, current_record)
     max_tokens = int(config.get("maxLength") or service.get("maxTokens") or 800)
     payload = json.dumps({
         "model": model,

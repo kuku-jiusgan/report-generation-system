@@ -237,7 +237,7 @@ const saveMapping = () => emit('saveMapping')
                     :icon="Link"
                     :loading="bindingMappingId === mapping.id"
                     aria-label="绑定当前 Word 位置"
-                    title="先在 Word 中选择文字，再点击绑定"
+                    title="先在 Word 中选择文字或图片，再点击绑定"
                     @click.stop="bindCurrentWordPosition(mapping)"
                   /></span
                 >

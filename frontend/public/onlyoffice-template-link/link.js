@@ -179,22 +179,18 @@
       window.clearTimeout(timeout)
       send(type, data)
     }
-    window.Asc.plugin.executeMethod('GetSelectedText', [{ Numbering: false, Math: true, ParaSeparator: '\n' }], function (text) {
+    function continueBinding(selectionType, text) {
       trace('plugin-bind-selection-read', command)
-      text = String(text || '').trim()
-      if (!text) {
-        finish('bind-error', { nonce: command.nonce, message: '请先在 Word 中选中要绑定的文字，再点击此按钮' })
-        return
-      }
       window.Asc.plugin.executeMethod('GetCurrentContentControlPr', [], function (current) {
         var currentTag = current && (current.Tag || current.tag) || ''
         var currentId = current && (current.InternalId || current.internalId || current.Id || current.id) || ''
         if (currentTag === command.tag) {
-          finish('bind-result', { nonce: command.nonce, control: current, selectedText: text, existing: true })
+          finish('bind-result', { nonce: command.nonce, control: current, selectedText: text, existing: true,
+            objectType: selectionType === 'drawing' ? 'image' : 'text' })
           return
         }
         if (currentId) {
-          finish('bind-error', { nonce: command.nonce, message: '当前文字已属于其他内容控件，请改选未绑定的文字' })
+          finish('bind-error', { nonce: command.nonce, message: '当前对象已属于其他内容控件，请改选未绑定的文字或图片' })
           return
         }
         var properties = {
@@ -205,9 +201,11 @@
           Color: { R: 33, G: 122, B: 103 }
         }
         // Inline controls preserve the paragraph's first-line indent and other formatting.
-        window.Asc.plugin.executeMethod('AddContentControl', [1, properties], function (created) {
+        var method = selectionType === 'drawing' ? 'AddContentControlPicture' : 'AddContentControl'
+        var args = selectionType === 'drawing' ? [properties] : [1, properties]
+        window.Asc.plugin.executeMethod(method, args, function (created) {
           if (!created || (created.Tag || created.tag) !== command.tag) {
-            finish('bind-error', { nonce: command.nonce, message: 'Word 未能为当前选区创建内容控件，请重新选择文字后再试' })
+            finish('bind-error', { nonce: command.nonce, message: 'Word 未能为当前选区创建内容控件，请重新选择文字或图片后再试' })
             return
           }
           // Only report success after Word confirms that the new control is
@@ -215,13 +213,45 @@
           // force-save request behind the editor mutation instead of racing it.
           waitForControl(command.tag, function () {
             trace('plugin-bind-controls-read', command)
-            finish('bind-result', { nonce: command.nonce, control: created, selectedText: text, existing: false })
+            finish('bind-result', { nonce: command.nonce, control: created, selectedText: text, existing: false,
+              objectType: selectionType === 'drawing' ? 'image' : 'text' })
           }, function () {
             finish('bind-error', { nonce: command.nonce, message: 'Word 已创建控件，但控件列表尚未同步，请稍后重试' })
           }, 0)
         })
       })
+    }
+    window.Asc.plugin.executeMethod('GetSelectionType', [], function (rawSelectionType) {
+      var selectionType = normalizeSelectionType(rawSelectionType)
+      trace('plugin-bind-selection-type', { nonce: command.nonce, type: String(rawSelectionType || '') })
+      if (selectionType === 'image') {
+        continueBinding('drawing', '')
+        return
+      }
+      if (selectionType !== 'text') {
+        finish('bind-error', { nonce: command.nonce, message: 'Word 未返回可绑定的文字或图片选区，请重新选择后再试' })
+        return
+      }
+      window.Asc.plugin.executeMethod('GetSelectedText', [{ Numbering: false, Math: true, ParaSeparator: '\n' }], function (text) {
+        text = String(text || '').trim()
+        if (!text) {
+          trace('plugin-bind-empty-text', command)
+          continueBinding('drawing', '')
+          return
+        }
+        continueBinding('text', text)
+      })
     })
+  }
+
+  function normalizeSelectionType(value) {
+    var raw = value && typeof value === 'object'
+      ? (value.type || value.Type || value.value)
+      : value
+    var normalized = String(raw || '').trim().toLowerCase()
+    if (normalized === 'text') return 'text'
+    if (['drawing', 'image', 'picture'].indexOf(normalized) >= 0) return 'image'
+    return ''
   }
 
   function unbindSelection(command) {

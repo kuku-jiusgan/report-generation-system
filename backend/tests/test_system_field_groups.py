@@ -51,7 +51,19 @@ def test_user_group_label_survives_default_synchronization() -> None:
         )
 
         assert saved["label"] == "系统适用性溶液配置"
+        assert saved["itemPath"] == "$.systemSuitabilitySolutions"
         assert listed["label"] == "系统适用性溶液配置"
+        assert listed["itemPath"] == "$.systemSuitabilitySolutions"
+
+
+def test_group_path_is_derived_when_not_configured() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = _database(Path(directory))
+        saved = save_system_field_group(database, {
+            "groupCode": "customResults", "label": "自定义结果", "cardinality": "MANY",
+        })
+
+        assert saved["itemPath"] == "$.customResults"
 
 
 def test_field_catalog_uses_formal_group_relationship_for_display() -> None:
@@ -73,9 +85,11 @@ def test_field_catalog_uses_formal_group_relationship_for_display() -> None:
         field = database.get_lims_field("custom.lodName")
         assert field["groupCode"] == "未分类"
         assert field["groupLabel"] == "检测限试验结果表"
+        assert field["collectionCode"] == "detectionLimit"
         listed = next(item for item in database.list_lims_fields() if item["fieldCode"] == "custom.lodName")
         assert listed["groupCode"] == "未分类"
         assert listed["groupLabel"] == "检测限试验结果表"
+        assert listed["collectionCode"] == "detectionLimit"
 
 
 def test_chapter_field_list_only_uses_groups_assigned_to_that_chapter() -> None:
@@ -135,6 +149,7 @@ def test_move_field_ownership_replaces_every_previous_directory_location() -> No
 
         moved_to_group = move_field_ownership(database, "custom.target", group_code="target")
         assert moved_to_group["groupLabels"] == ["目标编组"]
+        assert moved_to_group["collectionCode"] == "target"
         with database.connect() as connection:
             group_rows = connection.execute(
                 "SELECT group_code FROM system_field_group_fields WHERE field_code=%s", ("custom.target",),

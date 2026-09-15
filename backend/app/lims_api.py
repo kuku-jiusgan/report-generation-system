@@ -64,7 +64,7 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
         # 先完成全部归一化：任一实例解析失败时不留下 0 实例的孤儿导入记录
         try:
             # LIMS 解析结果与 Excel 一样，在落库前就按编组配置固定成标准字段目录的结构。
-            normalized = [(raw, apply_group_contracts(normalize_instance(raw, fields, rules), groups))
+            normalized = [(raw, apply_group_contracts(normalize_instance(raw, fields, rules, groups), groups))
                           for raw in instances]
         except (ValueError, IndexError, KeyError, TypeError) as error:
             raise HTTPException(502, f"LIMS 数据解析失败：{error}") from error

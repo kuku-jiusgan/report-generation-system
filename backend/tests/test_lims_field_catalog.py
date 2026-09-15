@@ -465,6 +465,31 @@ class LimsFieldCatalogTest(unittest.TestCase):
             self.assertEqual(len(instance_source["source"]["unitGroups"][0]["recognizedItems"]), 2)
             self.assertEqual(len(instance_source["source"]["unitGroups"][0]["sourceItems"]), 2)
 
+    def test_preview_group_returns_structured_records_for_ai_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = make_test_database(Path(directory))
+            database.initialize()
+            database.create_lims_import({
+                "id": "import-1", "file_name": "Oracle 查询：XM-1", "stored_name": "",
+                "size": 100, "summary": {}, "created_at": "2026-07-25T08:00:00+00:00",
+            })
+            database.replace_lims_instance(
+                "import-1", {"instanceId": "EXP-1", "title": "亚硝胺验证"},
+                {"project": {}, "document": {}, "samples": [
+                    {"sampleName": "供试品A", "batchNo": "B-001", "evidence": {}},
+                    {"sampleName": "供试品B", "batchNo": "B-002", "evidence": {}},
+                ]}, ["samples"],
+            )
+
+            preview = database.preview_lims_group({"groupCode": "samples", "cardinality": "MANY"})
+
+            self.assertEqual(preview["total"], 1)
+            self.assertEqual(preview["options"][0]["instanceId"], "EXP-1")
+            self.assertEqual(preview["items"][0]["value"], [
+                {"sampleName": "供试品A", "batchNo": "B-001"},
+                {"sampleName": "供试品B", "batchNo": "B-002"},
+            ])
+
     def test_workbench_payload_is_rebuilt_from_persisted_standard_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = make_test_database(Path(directory))

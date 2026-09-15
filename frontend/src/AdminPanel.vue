@@ -24,12 +24,8 @@ import {
   firstAnchoredMapping,
 } from "./admin/designer-formatters";
 import { mappingDisplayName, mappingIdentifiers } from "./admin/mapping-identifiers";
-import {
-  controlId,
-  controlTag,
-  useAdminWordEditor,
-  type WordControl as Control,
-} from "./composables/useAdminWordEditor";
+import { useAdminWordEditor } from "./composables/useAdminWordEditor";
+import { useAdminWordBinding } from "./composables/useAdminWordBinding";
 import { useDesignerDrag } from "./composables/useDesignerDrag";
 import { useChapterBlockEditor } from "./composables/useChapterBlockEditor";
 import { useAdminPublishing } from "./composables/useAdminPublishing";
@@ -68,8 +64,6 @@ const selectedMapping = ref<MappingRule>();
 const mappingDraft = ref<Partial<MappingRule>>({});
 const advancedOpen = ref(false);
 const saving = ref(false);
-const bindingMappingId = ref<number>();
-const unbindingWord = ref(false);
 const detectingTable = ref(false);
 const {
   ready: wordReady,
@@ -333,130 +327,26 @@ function generateMappingDisplayName(mapping: Partial<MappingRule>) {
     selectedBlock: selectedBlock.value,
   }, standardFields.value);
 }
-function requestPluginBind(mapping: MappingRule, tag: string, oldInternalId: string) {
-  return requestWordBind(mapping.wordLabel, tag, oldInternalId);
-}
-async function bindCurrentWordPosition(mapping: MappingRule) {
-  if (!hasConnector() && !pluginReady.value)
-    return ElMessage.warning("Word 编辑器尚未连接完成");
-  if (bindingMappingId.value) return;
-  bindingMappingId.value = mapping.id;
-  let created: Control | undefined;
-  let createdNew = false;
-  try {
-    const identifiers = generateMappingIdentifiers(mapping);
-    const tag = identifiers.controlTag;
-    const oldControl = controls.value.find(
-      (item) => controlTag(item) === mapping.controlTag,
-    );
-    let selectedText = "";
-    let existing = false;
-    if (hasConnector()) {
-      selectedText = String(
-        (await execWord("GetSelectedText", [
-          { Numbering: false, Math: true, ParaSeparator: "\n" },
-        ])) || "",
-      ).trim();
-      if (!selectedText)
-        throw new Error("请先在 Word 中选中要绑定的文字，再点击此按钮");
-      const current = (await execWord("GetCurrentContentControlPr")) as Control | null;
-      if (current && controlTag(current) === mapping.controlTag) existing = true;
-      else if (current && controlId(current))
-        throw new Error("当前文字已属于其他内容控件，请改选未绑定的文字");
-      if (existing) created = current || undefined;
-      else {
-        created = (await execWord("AddContentControl", [
-          1,
-          { Tag: tag, Alias: mapping.wordLabel, Lock: 3, Appearance: 1,
-            Color: { R: 33, G: 122, B: 103 } },
-        ])) as Control | undefined;
-        createdNew = true;
-      }
-    } else {
-      const result = await requestPluginBind(mapping, tag, controlId(oldControl));
-      created = result.control;
-      selectedText = result.selectedText;
-      existing = result.existing;
-      createdNew = !existing;
-    }
-    if (!created || controlTag(created) !== tag)
-      throw new Error("Word 未能为当前选区创建内容控件，请重新选择文字后再试");
-
-    const updated = await adminApi.updateMapping(mapping.id, {
-      fieldCode: identifiers.fieldCode,
-      controlTag: tag,
-      locationId: identifiers.locationId,
-    });
-    // 绑定成功后同步当前编辑草稿，避免随后点击“保存字段配置”用旧的空标签覆盖绑定。
-    if (mappingDraft.value?.id === mapping.id) {
-      mappingDraft.value.controlTag = updated.controlTag;
-      mappingDraft.value.locationId = updated.locationId;
-      mappingDraft.value.fieldCode = updated.fieldCode;
-    }
-    if (oldControl && controlId(oldControl) !== controlId(created)) {
-      if (hasConnector()) await execWord("RemoveContentControl", [controlId(oldControl)]);
-      else await requestPluginUnbind(controlId(oldControl));
-    }
-
-    if (hasConnector()) await refreshWordControls();
-    await adminApi.forceSaveOnlyOffice();
-    await loadDesigner(true);
-    const refreshed = flatten(designer.value?.chapters || [])
-      .flatMap((chapter) => chapter.blocks)
-      .flatMap((block) => block.mappings)
-      .find((item) => item.id === updated.id);
-    if (refreshed) selectMapping(refreshed, false);
-    await locateInWord(tag);
-    ElMessage.success(
-      existing ? "该文字已经绑定到当前字段" : `已绑定“${selectedText.slice(0, 30)}”并保存`,
-    );
-  } catch (error) {
-    if (createdNew && created && controlId(created)) {
-      try {
-        if (hasConnector()) await execWord("RemoveContentControl", [controlId(created)]);
-        else await requestPluginUnbind(controlId(created));
-      } catch { /* Preserve the original failure; the new control can be removed manually. */ }
-    }
-    ElMessage.error(errorText(error));
-  } finally {
-    bindingMappingId.value = undefined;
-  }
-}
-async function unbindCurrentWordPosition() {
-  if (!hasConnector() && !pluginReady.value)
-    return ElMessage.warning("Word 编辑器尚未连接完成");
-  if (unbindingWord.value) return;
-  try {
-    await ElMessageBox.confirm(
-      "解除当前文字的 Word 绑定？原文字和样式会保留，之后可以重新绑定。",
-      "解除 Word 绑定",
-      { type: "warning", confirmButtonText: "解除绑定", cancelButtonText: "取消" },
-    );
-  } catch {
-    return;
-  }
-  unbindingWord.value = true;
-  try {
-    if (hasConnector()) {
-      const current = (await execWord("GetCurrentContentControlPr")) as Control | null;
-      const id = controlId(current);
-      if (!id) throw new Error("请先在 Word 中点击要解除绑定的文字");
-      await execWord("RemoveContentControl", [id]);
-      await refreshWordControls();
-    } else {
-      await requestPluginUnbind();
-    }
-    if (selectedMapping.value) {
-      await adminApi.updateMapping(selectedMapping.value.id, { controlTag: '', locationId: '' });
-      await loadDesigner(true);
-    }
-    ElMessage.success("已解除 Word 绑定，原文字和样式已保留");
-  } catch (error) {
-    ElMessage.error(errorText(error));
-  } finally {
-    unbindingWord.value = false;
-  }
-}
+const {
+  bindingMappingId,
+  unbindingWord,
+  bindCurrentWordPosition,
+  unbindCurrentWordPosition,
+} = useAdminWordBinding({
+  controls,
+  mappingDraft,
+  selectedMapping,
+  designer,
+  pluginReady,
+  hasConnector,
+  execWord,
+  refreshWordControls,
+  requestWordBind,
+  requestPluginUnbind,
+  generateMappingIdentifiers,
+  reloadDesigner: () => loadDesigner(true),
+  locateInWord,
+});
 function handleWordTag(tag: string) {
   const all = designer.value ? flatten(designer.value.chapters) : [];
   const target = all

@@ -180,7 +180,7 @@ def create_report_word_router(
                     "autostart": ["asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"],
                     "pluginsData": [
                         f"{settings.onlyoffice_url}/sdkjs-plugins/"
-                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=18"
+                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=22"
                     ],
                 },
             },

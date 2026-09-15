@@ -35,7 +35,7 @@ docker exec "${container_id}" grep -q "executeMethod('SelectContentControl'" "${
 docker exec "${container_id}" grep -q "executeMethod('MoveCursorToContentControl'" "${plugin_root}/link.js"
 docker exec "${container_id}" grep -q "command.type === 'bind'" "${plugin_root}/link.js"
 
-plugin_url="http://127.0.0.1:8090/sdkjs-plugins/%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=18"
+plugin_url="http://127.0.0.1:8090/sdkjs-plugins/%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=22"
 for _ in {1..30}; do
   if curl -fsS "${plugin_url}" | grep -q '"version": "1.0.15"'; then
     echo "Installed and verified Report Template Link 1.0.15 in ONLYOFFICE container ${container_id}."

@@ -9,6 +9,7 @@ from lxml import html
 from .lims_configured_extractor import apply_configured_extraction
 from .lims_table_utils import cell_value, column_value, impurity_columns, limit_calculation_records, validation_summary_columns
 from .lims_validation import sort_validation_summary, validation_code
+from .configured_group_parser import apply_configured_group_tables
 
 
 COLLECTION_LABELS = {
@@ -398,7 +399,8 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
 
 
 def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | None = None,
-                       extraction_rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                       extraction_rules: list[dict[str, Any]] | None = None,
+                       groups: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     collections: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for name in ("samples", "referenceStandards", "instruments", "columns", "reagents", "weighings"):
         for source_item in instance.get(name, []):
@@ -429,7 +431,11 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
         tables = root.xpath(".//table") if root is not None else []
         for index, table in enumerate(tables, start=1):
             rows = _table_grid(table)
-            if not _classify_table(instance, rich_text, index, rows, collections, parser_profiles):
+            evidence = _evidence(instance, rich_text, index, rows[0] if rows else [])
+            configured = apply_configured_group_tables(
+                rows, ">".join(rich_text.get("sectionPath", [])), groups or [], evidence, collections,
+            )
+            if not configured and not _classify_table(instance, rich_text, index, rows, collections, parser_profiles):
                 unmatched.append({
                     "instanceId": instance["instanceId"], "instanceTitle": instance.get("title", ""),
                     "sectionPath": rich_text.get("sectionPath", []), "richTextId": rich_text.get("id"),
@@ -459,6 +465,10 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
         **{name: collections.get(name, []) for name in COLLECTION_ORDER},
         "unmatched": unmatched,
     }
+    for group in groups or []:
+        payload_key = str(group.get("groupCode") or "").strip()
+        if payload_key and payload_key not in result:
+            result[payload_key] = collections.get(payload_key, [])
     result["lodConclusion"] = next((item.get("conclusion", "") for item in result["lod"]
                                     if item.get("conclusion")), "")
     if fields and extraction_rules:
@@ -491,127 +501,11 @@ def _add_solution_views(payload: dict[str, Any]) -> None:
     ]
 
 
-def _identity(collection: str, item: dict[str, Any]) -> str:
-    if collection == "validationSummary":
-        return _semantic(item.get("validationItemCode") or item.get("field1"))
-    keys = {
-        "samples": ("sampleName", "batchNo"),
-        "referenceStandards": ("name", "batchNo"),
-        "instruments": ("assetNo", "instrumentName", "model"),
-        "columns": ("serialNo", "name"),
-        # A batch may contain multiple separately numbered reagent containers.
-        # Treat the LIMS stock number as part of the business identity when present.
-        "reagents": ("name", "batchNo", "stockNo"),
-        "impurity": ("impurityName",), "limit": ("impurityName",),
-        "solutions": ("validationCode", "name"),
-        "methodParameters": ("field1", "field2"),
-    }.get(collection)
-    if not keys:
-        return _hash({key: value for key, value in item.items() if key != "evidence"})
-    return "|".join(_semantic(item.get(key)) for key in keys)
-
-
-def _content(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in item.items() if key != "evidence"}
-
-
-_COMPARISON_IGNORED_KEYS = {"evidence", "sourceRecordId"}
-
-
-def _comparison_content(value: Any) -> Any:
-    """Remove provenance metadata that does not change the business record."""
-    if isinstance(value, dict):
-        return {
-            key: _comparison_content(item)
-            for key, item in value.items()
-            if key not in _COMPARISON_IGNORED_KEYS
-        }
-    if isinstance(value, list):
-        return [_comparison_content(item) for item in value]
-    return value
-
-
-def _content_hash(item: dict[str, Any]) -> str:
-    return _hash(_comparison_content(item))
-
-
 def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str] | None = None,
                     fields: list[dict[str, Any]] | None = None,
                     extraction_rules: list[dict[str, Any]] | None = None,
+                    groups: list[dict[str, Any]] | None = None,
                     normalized: bool = False) -> dict[str, Any]:
-    if not instances:
-        raise ValueError("至少选择一个实验记录")
-    project_ids = {str(item.get("projectId") or item.get("project", {}).get("id") or "") for item in instances}
-    if len(project_ids) != 1:
-        raise ValueError("只能合并同一项目下的实验记录")
+    from .lims_merge import merge_instances as _merge_instances
 
-    normalized_instances = instances if normalized else [
-        normalize_instance(item, fields, extraction_rules) for item in instances
-    ]
-    payload: dict[str, Any] = {
-        "project": normalized_instances[0]["project"], "document": normalized_instances[0]["document"],
-        "approval": [], "instances": [], "unmatched": [],
-    }
-    conflicts = []
-    duplicate_count = 0
-    resolutions = resolutions or {}
-    for collection in ["approval", *COLLECTION_ORDER]:
-        buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for source in normalized_instances:
-            for item in source.get(collection, []):
-                buckets[_identity(collection, item)].append(item)
-        merged = []
-        for identity, candidates in buckets.items():
-            unique: dict[str, dict[str, Any]] = {}
-            for candidate in candidates:
-                unique.setdefault(_content_hash(candidate), candidate)
-            duplicate_count += len(candidates) - len(unique)
-            choices = list(unique.values())
-            if len(choices) == 1 or collection not in {
-                "samples", "referenceStandards", "instruments", "columns", "reagents",
-                "impurity", "limit", "validationSummary", "solutions", "methodParameters",
-            }:
-                merged.extend(choices)
-                continue
-            conflict_id = _hash({"collection": collection, "identity": identity})
-            options = [{"candidateId": _content_hash(item), "value": _comparison_content(item),
-                        "evidence": item.get("evidence", {})} for item in choices]
-            selected_id = resolutions.get(conflict_id)
-            selected = next((item for item in choices if _content_hash(item) == selected_id), None)
-            conflicts.append({"id": conflict_id, "collection": collection,
-                              "label": COLLECTION_LABELS.get(collection, collection),
-                              "identity": identity, "options": options, "resolved": bool(selected)})
-            if selected:
-                merged.append(selected)
-        payload[collection] = merged
-    payload["validationSummary"] = sort_validation_summary(payload.get("validationSummary", []))
-    payload["lodConclusion"] = next((item.get("conclusion", "") for item in payload.get("lod", [])
-                                     if item.get("conclusion")), "")
-    for source in normalized_instances:
-        payload["instances"].extend(source["instances"])
-        payload["unmatched"].extend(source["unmatched"])
-    _add_solution_views(payload)
-
-    recognized = {name: len(payload.get(name, [])) for name in COLLECTION_ORDER if payload.get(name)}
-    validation_names = [name for name in (
-        "systemSuitability", "specificity", "lod", "loq", "linearity", "repeatability",
-        "intermediatePrecision", "accuracy", "solutionStability", "robustnessResult", "sampleResults",
-    ) if payload.get(name)]
-    return {
-        "payload": payload,
-        "recognizedCounts": recognized,
-        "recognizedTotal": sum(recognized.values()),
-        "validationSections": validation_names,
-        "duplicateCount": duplicate_count,
-        "conflicts": conflicts,
-        "unresolvedConflictCount": sum(not item["resolved"] for item in conflicts),
-        "unmatched": payload["unmatched"],
-        "coverage": {
-            "recognizedTables": len({(item.get("evidence", {}).get("instanceId"),
-                                      item.get("evidence", {}).get("richTextId"),
-                                      item.get("evidence", {}).get("tableIndex"))
-                                     for name in COLLECTION_ORDER for item in payload.get(name, [])
-                                     if item.get("evidence", {}).get("tableIndex")}),
-            "unmatchedTables": len(payload["unmatched"]),
-        },
-    }
+    return _merge_instances(instances, resolutions, fields, extraction_rules, groups, normalized)

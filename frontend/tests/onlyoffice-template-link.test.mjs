@@ -8,7 +8,7 @@ const script = readFileSync(
   'utf8',
 )
 
-function createPluginHarness() {
+function createPluginHarness(selectionType = 'text', selectedText = '供试品名称') {
   const calls = []
   const messages = []
   const listeners = {}
@@ -25,10 +25,13 @@ function createPluginHarness() {
         const results = {
           GetAllContentControls: controls,
           GetCurrentContentControlPr: null,
-          GetSelectedText: '供试品名称',
+          GetSelectionType: selectionType,
+          GetSelectedText: selectedText,
           AddContentControl: { Tag: args[1]?.Tag, InternalId: 'control-2' },
+          AddContentControlPicture: { Tag: args[0]?.Tag, InternalId: 'control-3' },
         }
         if (name === 'AddContentControl') results.GetAllContentControls = controls.concat(results.AddContentControl)
+        if (name === 'AddContentControlPicture') results.GetAllContentControls = controls.concat(results.AddContentControlPicture)
         callback?.(results[name])
       },
     } },
@@ -67,4 +70,38 @@ test('bind command creates a control and returns a result', () => {
   assert.equal(harness.calls.find((call) => call.name === 'AddContentControl').args[0], 1)
   assert.ok(harness.messages.some((message) =>
     message.type === 'bind-result' && message.data.control.InternalId === 'control-2'))
+})
+
+test('bind command creates a picture control for a selected drawing', () => {
+  const harness = createPluginHarness('drawing')
+  harness.send({
+    source: 'report-template-host', type: 'bind', tag: 'sample.name', alias: '残差图', nonce: 3,
+  })
+  assert.ok(harness.calls.some((call) => call.name === 'GetSelectionType'))
+  const pictureCall = harness.calls.find((call) => call.name === 'AddContentControlPicture')
+  assert.ok(pictureCall)
+  assert.equal(pictureCall.args[0].Tag, 'sample.name')
+  assert.ok(harness.messages.some((message) =>
+    message.type === 'bind-result' && message.data.objectType === 'image'))
+})
+
+test('bind command treats image selection aliases as picture controls', () => {
+  const harness = createPluginHarness('image')
+  harness.send({
+    source: 'report-template-host', type: 'bind', tag: 'sample.name', alias: '残差图', nonce: 4,
+  })
+  assert.ok(!harness.calls.some((call) => call.name === 'GetSelectedText'))
+  assert.ok(harness.calls.some((call) => call.name === 'AddContentControlPicture'))
+  assert.ok(harness.messages.some((message) =>
+    message.type === 'bind-result' && message.data.objectType === 'image'))
+})
+
+test('bind command tries a picture control when image selection has empty text', () => {
+  const harness = createPluginHarness('text', '')
+  harness.send({
+    source: 'report-template-host', type: 'bind', tag: 'sample.name', alias: '残差图', nonce: 5,
+  })
+  assert.ok(harness.calls.some((call) => call.name === 'AddContentControlPicture'))
+  assert.ok(harness.messages.some((message) =>
+    message.type === 'bind-result' && message.data.objectType === 'image'))
 })

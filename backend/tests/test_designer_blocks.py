@@ -48,6 +48,43 @@ class AuthStub:
         return {}
 
 
+class DatabaseStub:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def connect(self):
+        return self
+
+    @staticmethod
+    def execute(*_args) -> None:
+        return None
+
+
+class TemplateBlockRepositoryStub(DesignerRepositoryStub):
+    def __init__(self) -> None:
+        self.database = DatabaseStub()
+        self.saved_table_rule: dict | None = None
+
+    @staticmethod
+    def active_workspace() -> dict:
+        return {"versionId": "version-1"}
+
+    @staticmethod
+    def save_template_block(_version_id: str, item: dict) -> dict:
+        return dict(item)
+
+    def upsert_table_rule(self, item: dict) -> dict:
+        self.saved_table_rule = dict(item)
+        return dict(item)
+
+    @staticmethod
+    def save_active_workspace() -> None:
+        return None
+
+
 def test_designer_blocks_include_direct_fields_and_groups_without_mixing() -> None:
     direct_field = {"fieldCode": "method.testMethod", "label": "试验方法", "enabled": True}
     grouped_field = {"fieldCode": "systemSuitability.peakArea", "label": "峰面积", "enabled": True}
@@ -103,3 +140,23 @@ def test_designer_route_includes_chapter_fields_from_standard_catalog(tmp_path: 
     assert chapter["code"] == "7.1"
     assert [block["title"] for block in chapter["blocks"]] == ["章节字段", "系统适用性结果"]
     assert chapter["blocks"][0]["standardFields"][0]["label"] == "试验方法"
+
+
+def test_template_block_route_preserves_table_repeat_group_key(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", template_path=tmp_path / "template.docx")
+    repository = TemplateBlockRepositoryStub()
+    router = create_admin_router(repository, settings, AuthStub())
+    endpoint = next(route.endpoint for route in router.routes if route.path == "/api/v1/admin/template-blocks/{group_code}")
+
+    result = endpoint("dingliangxianjieguo", {
+        "chapterId": 22, "title": "定量限试验结果表", "kind": "TABLE_REPEAT",
+        "tableNo": "T18", "enabled": True,
+        "tableRule": {
+            "tableNo": "T18", "mode": "TABLE_REPEAT", "groupKey": "field_046",
+            "innerMode": "ROW_REPEAT", "physicalTableIndex": 18,
+        },
+    })
+
+    assert repository.saved_table_rule is not None
+    assert repository.saved_table_rule["groupKey"] == "field_046"
+    assert result["tableRule"]["groupKey"] == "field_046"

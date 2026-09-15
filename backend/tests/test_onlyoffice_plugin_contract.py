@@ -17,7 +17,7 @@ def test_installed_plugin_manifest_matches_protocol_release() -> None:
     index = (PLUGIN_DIR / "index.html").read_text(encoding="utf-8")
     assert config["version"] == "1.0.15"
     assert config["guid"] == "asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"
-    assert "link.js?v=20" in index
+    assert "link.js?v=22" in index
     assert config["serviceUrl"].endswith("/api/v1/onlyoffice/plugin-bridge")
 
 

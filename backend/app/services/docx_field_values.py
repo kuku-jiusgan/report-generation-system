@@ -196,13 +196,23 @@ def row_calculated_values(
 
 
 def format_value(value: Any, mapping: dict[str, Any], use_empty_rule: bool = True) -> str:
+    # 填充规则优先从映射规则取，如果没有则从标准字段取
+    fill_rule = str(mapping.get("fillRule") or mapping.get("standardFieldFillRule") or "")
+
     if value in (None, ""):
-        return "-" if use_empty_rule and "EMPTY_AS_DASH" in mapping.get("fillRule", "") else ""
-    if mapping.get("fillRule") == "VERSION_2_DIGITS":
+        return "-" if use_empty_rule and "EMPTY_AS_DASH" in fill_rule else ""
+    if fill_rule == "VERSION_2_DIGITS":
         try:
             return f"{int(value):02d}"
         except (TypeError, ValueError):
             pass
+
+    # APPEND_SUFFIX:后缀文字 — 在字段值后面拼接固定文字
+    # ponytail: 解决 Word 控件无法包裹部分文本的限制；用于表标题等场景
+    if fill_rule.startswith("APPEND_SUFFIX:"):
+        suffix = fill_rule[len("APPEND_SUFFIX:"):]
+        return f"{value}{suffix}"
+
     output_format = str(mapping.get("standardFieldOutputFormat") or "")
     if output_format.isdigit() and mapping.get("standardFieldDataType") in {"decimal", "number"}:
         try:

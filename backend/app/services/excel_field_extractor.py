@@ -1,10 +1,11 @@
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
 from .excel_rule_engine import ExcelRuleError, WorkbookValues
 from .excel_chart_extractor import ExcelChartError, extract_residual_chart_values
-from .excel_validation_payload import enrich_excel_payload
+from .excel_standard_path import excel_target_path
 from .payload_paths import PayloadPathError, path_depth, set_payload_path
 
 
@@ -182,7 +183,39 @@ def _generated_sequences(payload: dict[str, Any], fields: dict[str, dict[str, An
     return result
 
 
-def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[dict[str, Any]]) -> dict[str, Any]:
+def _seed_group_collections(reader: WorkbookValues, payload: dict[str, Any],
+                            pending: list[tuple[str, str, Any]],
+                            fields: dict[str, dict[str, Any]],
+                            configs: dict[str, dict[str, Any]]) -> None:
+    """先按 Excel 规则的重复次数建立编组外层，供嵌套字段切分明细。"""
+    sizes: dict[str, int] = {}
+    for field_code, target, _ in pending:
+        if path_depth(target) < 2:
+            continue
+        field = fields.get(field_code) or {}
+        group_code = str(field.get("groupCode") or "").strip()
+        if not group_code:
+            continue
+        config = configs.get(field_code) or {}
+        try:
+            count = _repeat_count(reader, config)
+        except (ExcelRuleError, TypeError, ValueError):
+            continue
+        sizes[group_code] = max(sizes.get(group_code, 0), count)
+    for group_code, count in sizes.items():
+        if count < 1:
+            continue
+        existing = payload.get(group_code)
+        if existing is None:
+            payload[group_code] = [{} for _ in range(count)]
+        elif not isinstance(existing, list) or len(existing) != count:
+            raise PayloadPathError(
+                f"编组 {group_code} 的外层记录数与 Excel 重复次数不一致"
+            )
+
+
+def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[dict[str, Any]],
+                         groups: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     reader, payload = WorkbookValues(path), {}
     fields_by_code = {str(field["fieldCode"]): field for field in fields}
     rules_by_field: dict[str, list[dict[str, Any]]] = {}
@@ -191,6 +224,7 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
             rules_by_field.setdefault(str(rule["fieldCode"]), []).append(rule)
     generated: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     pending: list[tuple[str, str, Any]] = []
+    pending_configs: dict[str, dict[str, Any]] = {}
     for field_code, candidates in rules_by_field.items():
         field = fields_by_code.get(field_code)
         if not field:
@@ -210,9 +244,10 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
                 continue
             value = _normalize_cardinality(value, field, field_code, reader.warnings)
             if value not in (None, "", []):
-                pending.append((field_code, str(config.get("sourcePath") or field.get("legacyJsonPath")
-                                                or field_code), value))
+                pending.append((field_code, excel_target_path(field, config.get("sourcePath")), value))
+                pending_configs[field_code] = config
                 break
+    _seed_group_collections(reader, payload, pending, fields_by_code, pending_configs)
     # 分层编组里明细层要按外层数组切分，必须等分组层先把外层建好，所以按数组层数排序写入
     for field_code, target, value in sorted(pending, key=lambda item: path_depth(item[1])):
         try:
@@ -220,12 +255,89 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
         except PayloadPathError as error:
             reader.warnings.append(f"字段 {field_code} 落位失败：{error}")
     for field_code, field, config in generated:
-        target = str(config.get("sourcePath") or field.get("legacyJsonPath") or field_code)
+        target = excel_target_path(field, config.get("sourcePath"))
         try:
             set_payload_path(payload, target, _generated_sequences(payload, fields_by_code, config))
         except (ExcelRuleError, PayloadPathError, KeyError, TypeError, ValueError) as error:
             reader.warnings.append(f"字段 {field_code} 序号生成失败：{error}")
-    enrich_excel_payload(payload)
+    _apply_group_source_mappings(reader, payload, fields_by_code, groups or [])
     payload["_meta"] = {"format": "CONFIGURED_FIELD_RULES", "warnings": reader.warnings,
                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     return payload
+
+
+def _apply_group_source_mappings(reader: WorkbookValues, payload: dict[str, Any],
+                                 fields_by_code: dict[str, dict[str, Any]],
+                                 groups: list[dict[str, Any]]) -> None:
+    """按编组来源映射从 Excel 工作表读取列，并写入编组对应的数据列表。"""
+    for group in groups:
+        if not group.get("enabled", True):
+            continue
+        item_path = str(group.get("itemPath") or "").strip()
+        mappings = group.get("sourceMappings") or []
+        if not item_path or str(group.get("cardinality") or "ONE").upper() != "MANY":
+            continue
+        payload_key = str(group.get("groupCode") or "").strip()
+        if not payload_key:
+            continue
+        for mapping in mappings:
+            if str(mapping.get("sourceType") or "").upper() != "EXCEL":
+                continue
+            sheet = str(mapping.get("worksheetPattern") or mapping.get("sheet") or "").strip()
+            if not sheet:
+                continue
+            try:
+                sheet_names = [name for name in reader.values.sheetnames if re.search(sheet, name, re.IGNORECASE)]
+            except re.error as error:
+                raise ExcelRuleError(f"编组来源映射正则无效：{sheet}") from error
+            for sheet_name in sheet_names:
+                rows = list(reader.values[sheet_name].iter_rows(values_only=True))
+                if not rows:
+                    continue
+                headers = [str(value or "").strip() for value in rows[0]]
+                header_pattern = str(mapping.get("headerPattern") or "").strip()
+                if header_pattern:
+                    try:
+                        if not re.search(header_pattern, "|".join(headers), re.IGNORECASE):
+                            continue
+                    except re.error as error:
+                        raise ExcelRuleError(f"编组来源映射正则无效：{header_pattern}") from error
+                indexes = []
+                columns = mapping.get("columnMappings", mapping.get("fieldMappings", mapping.get("columns", [])))
+                for column in columns:
+                    field_code = str(column.get("fieldCode") or "").strip()
+                    pattern = str(column.get("columnPattern") or column.get("column") or "").strip()
+                    if field_code not in fields_by_code or not pattern:
+                        continue
+                    try:
+                        index = next((i for i, header in enumerate(headers) if re.search(pattern, header, re.IGNORECASE)), None)
+                    except re.error as error:
+                        raise ExcelRuleError(f"编组来源映射正则无效：{pattern}") from error
+                    if index is not None:
+                        indexes.append((field_code, index))
+                if not indexes:
+                    continue
+                records = []
+                for row in rows[1:]:
+                    if not any(value not in (None, "") for value in row):
+                        continue
+                    record = {}
+                    for field_code, index in indexes:
+                        field = fields_by_code[field_code]
+                        key_path = str(field.get("fieldPath") or field.get("jsonKey") or field_code.rsplit(".", 1)[-1])
+                        target = record
+                        raw_parts = [part for part in key_path.split(".") if part]
+                        for raw_part in raw_parts[:-1]:
+                            part, is_array = raw_part.replace("[*]", ""), "[*]" in raw_part
+                            if is_array:
+                                collection = target.setdefault(part, [{}])
+                                target = collection[0]
+                            else:
+                                target = target.setdefault(part, {})
+                        target[raw_parts[-1].replace("[*]", "")] = row[index] if index < len(row) else None
+                    records.append(record)
+                if records:
+                    existing = payload.get(payload_key)
+                    if existing is not None and not isinstance(existing, list):
+                        raise ExcelRuleError(f"编组 {group.get('groupCode')} 的数据列表冲突：{payload_key}")
+                    payload[payload_key] = (existing or []) + records

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from backend.app.admin_api import create_admin_router
@@ -103,7 +104,13 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
     assert f"/onlyoffice/callback/{first_version['id']}" in config["editorConfig"]["callbackUrl"]
     plugin_url = config["editorConfig"]["plugins"]["pluginsData"][0]
     assert plugin_url.startswith(settings.onlyoffice_url)
-    assert plugin_url.endswith("config.json?v=20")
+    assert plugin_url.endswith("config.json?v=22")
+    issued_key = config["document"]["key"]
+    draft_file = Path(first_version["templateFile"])
+    current_time = draft_file.stat().st_mtime_ns
+    os.utime(draft_file, ns=(current_time + 1_000_000, current_time + 1_000_000))
+    refreshed_config = config_endpoint()["config"]
+    assert refreshed_config["document"]["key"] == issued_key
     assert not any("/onlyoffice/plugin/" in route.path for route in router.routes)
     assert not any(route.path.endswith("/onlyoffice/command") for route in router.routes)
 

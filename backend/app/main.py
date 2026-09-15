@@ -237,7 +237,14 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
         code = pending_codes.pop()
         for rule in rules_by_field.get(code, []):
             config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
-            dependencies = list(config.get("dependencies", []) or []) + [item.get("fieldCode") for item in (config.get("contextVariables", []) or []) if isinstance(item, dict)]
+            # 收集计算规则的依赖字段
+            dependencies = list(config.get("dependencies", []) or [])
+            # 收集上下文变量中的字段依赖（兼容旧的 fieldCode）
+            dependencies += [
+                item.get("fieldCode") for item in (config.get("contextVariables", []) or [])
+                if isinstance(item, dict) and item.get("fieldCode")
+            ]
+            # 上下文变量中的编组依赖不需要加到字段依赖中，因为编组数据从 payload 直接读取
             for dependency in dependencies:
                 if dependency and dependency not in required_codes:
                     required_codes.add(dependency)
@@ -362,6 +369,14 @@ def create_report(request: CreateReportRequest,
             source_payload = data.get("source_payloads", {}).get(source_name)
             if isinstance(source_payload, dict):
                 apply_group_contracts(source_payload, list_system_field_groups(database))
+        # 在报告和首条生成历史入库前解析系统字段，确保后台详情反映本次提取结果。
+        active_payload = next(
+            (data.get("source_payloads", {}).get(name) for name in ("EXCEL", "LIMS", "PDF")
+             if isinstance(data.get("source_payloads", {}).get(name), dict)),
+            {},
+        )
+        resolve_system_fields(database.list_lims_fields(), database.list_system_field_rules(),
+                              active_payload, data)
         if not data["project_name"] and data["sample"]:
             data["project_name"] = f"{data['sample']}分析报告"
         report_id = uuid.uuid4().hex

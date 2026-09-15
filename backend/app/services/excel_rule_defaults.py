@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 import json
 from typing import Any
 
+from .excel_standard_path import excel_target_path
+
 
 EXCEL_FIELD_PATHS = {
     "project.name": "$.project.name",
@@ -54,6 +56,7 @@ EXCEL_FIELD_PATHS = {
     "uncategorized.field_028": "$.linearity[*].residual",
     "uncategorized.field_029": "$.linearity[*].residualChart",
     **{f"uncategorized.field_{index:03d}": f"$.custom.field_{index:03d}" for index in range(30, 43)},
+    "uncategorized.field_046": "$.dingliangxianjieguo[*].field_046",
 }
 
 EXCEL_WORKBOOK_LOCATIONS = {
@@ -89,6 +92,7 @@ EXCEL_WORKBOOK_LOCATIONS = {
     "uncategorized.field_018": {"sheet": "检测限与定量限", "cells": "H8:H13、H16:H21……", "matchBy": "每个杂质 6 行数据", "valueColumn": "H（定量限浓度）"},
     "uncategorized.field_019": {"sheet": "检测限与定量限", "cells": "I8:I13、I16:I21……", "matchBy": "每个杂质 6 行数据", "valueColumn": "I（相当于供试品含量）"},
     "uncategorized.field_020": {"sheet": "检测限与定量限", "cells": "J8:J13、J16:J21……", "matchBy": "每个杂质 6 行数据", "valueColumn": "J（占限度百分比）"},
+    "uncategorized.field_046": {"sheet": "检测限与定量限", "cells": "C8、C16、C24……", "matchBy": "每个杂质 6 行分块的首行", "valueColumn": "C（杂质名称）"},
     "uncategorized.field_021": {"sheet": "线性", "cells": "C2:G2、C26:G26……", "matchBy": "每个杂质 5 个水平", "valueColumn": "溶液名称"},
     "uncategorized.field_022": {"sheet": "线性", "cells": "C3:G3、C27:G27……", "matchBy": "每个杂质 5 个水平", "valueColumn": "实际浓度"},
     "uncategorized.field_023": {"sheet": "线性", "cells": "C4:G4、C28:G28……", "matchBy": "每个杂质 5 个水平", "valueColumn": "峰面积"},
@@ -205,9 +209,22 @@ def _ensure_repeated_field_contracts(database: Any) -> None:
     repeated_fields = (*DETECTION_LIMIT_COLUMNS, *QUANTITATION_LIMIT_COLUMNS,
                        *LINEARITY_ROWS, *LINEARITY_STATISTICS,
                        "uncategorized.field_029",
+                       "uncategorized.field_046",
                        *REPEATABILITY_DETAIL_COLUMNS, *REPEATABILITY_SUMMARY_CELLS)
     _sync_repeated_field_catalog(database, repeated_fields)
     _sync_repeatability_group_chapter(database)
+
+
+def _ensure_quantitation_impurity_name_contract(database: Any) -> None:
+    """杂质名称来自定量限分块，必须保留每个杂质一条记录。"""
+    with database.connect() as connection:
+        connection.execute(
+            """UPDATE lims_field_catalog
+               SET cardinality='MANY', group_code=COALESCE(
+                   (SELECT gf.group_code FROM system_field_group_fields gf
+                    WHERE gf.field_code='uncategorized.field_046' LIMIT 1), group_code)
+               WHERE field_code='uncategorized.field_046'"""
+        )
 
 
 def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
@@ -256,15 +273,24 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
                        "startColumn": 2 if field_code.endswith("005") else 3, "columnStep": 3,
                        "rowStep": 0, "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL"})
+    elif field_code == "uncategorized.field_046":
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "检测限与定量限", "rowStart": 8, "rowEnd": 8,
+                       "startColumn": 3, "columnStep": 0, "rowStep": 8,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code in DETECTION_LIMIT_COLUMNS:
         config.update({"mode": "REPEAT_BLOCK", "sheet": "检测限与定量限", "rowStart": 3, "rowEnd": 3,
                        "startColumn": DETECTION_LIMIT_COLUMNS[field_code], "columnStep": 0, "rowStep": 1,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code in QUANTITATION_LIMIT_COLUMNS:
+        summary = field_code in {
+            "uncategorized.field_017", "uncategorized.field_018",
+            "uncategorized.field_019", "uncategorized.field_020",
+        } and str(source_path).startswith("$.dingliangxianjieguo")
         config.update({"mode": "REPEAT_BLOCK", "sheet": "检测限与定量限", "rowStart": 8, "rowEnd": 13,
                        "startColumn": QUANTITATION_LIMIT_COLUMNS[field_code], "columnStep": 0, "rowStep": 8,
-                       "rowStartOffsetFromRepeatCount": 6, "rowCount": 6,
+                       "rowStartOffsetFromRepeatCount": 6, "rowCount": 1 if summary else 6,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code in LINEARITY_ROWS:
@@ -297,19 +323,33 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
 
 
 def ensure_excel_field_rules(database: Any) -> None:
-    """启动只补缺失的 Excel 规则，不回滚管理员改过的配置。"""
+    """补齐 Excel 规则，并同步编组字段的标准结果路径。"""
+    _ensure_quantitation_impurity_name_contract(database)
     for field_code, default_path in EXCEL_FIELD_PATHS.items():
         field = database.get_lims_field(field_code)
         if not field:
             continue
-        # 字段目录里的 JSON 路径由编组层级推导，是权威值；这里的常量只在字段目录没有路径时兜底。
-        # 否则编组改成分层结构后，每次启动都会照常量再建一条一级路径的规则，把结构撑坏。
-        source_path = str(field.get("legacyJsonPath") or "") or default_path
+        source_path = excel_target_path(field, str(field.get("legacyJsonPath") or "") or default_path)
         existing = [rule for rule in database.list_system_field_rules(field_code)
-                    if rule.get("sourceType") == "EXCEL"
-                    and isinstance(rule.get("config"), dict)
-                    and rule["config"].get("sourcePath") == source_path]
+                    if rule.get("sourceType") == "EXCEL"]
         if existing:
+            for rule in existing:
+                config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
+                desired_row_count = 1 if (
+                    field_code in {"uncategorized.field_017", "uncategorized.field_018",
+                                   "uncategorized.field_019", "uncategorized.field_020"}
+                    and source_path.startswith("$.dingliangxianjieguo")
+                ) else None
+                needs_row_count = desired_row_count is not None and config.get("rowCount") != desired_row_count
+                needs_field_config = field_code == "uncategorized.field_046"
+                if config.get("sourcePath") == source_path and not needs_row_count and not needs_field_config:
+                    continue
+                updated_config = _rule_config(field_code, source_path) if needs_field_config else {**config, "sourcePath": source_path}
+                if desired_row_count is not None:
+                    updated_config["rowCount"] = desired_row_count
+                database.save_system_field_rule(
+                    {**rule, "config": updated_config}, rule.get("id")
+                )
             continue
         database.save_system_field_rule({
             "fieldCode": field_code, "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",

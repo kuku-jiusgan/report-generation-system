@@ -62,3 +62,11 @@ def test_record_key_order_follows_the_catalog_structure():
     assert list(record) == list(preview) == ["impurityName", "summary", "injections"]
     assert list(record["injections"][0]) == list(preview["injections"][0])
     assert list(record["summary"]) == list(preview["summary"])
+
+
+def test_missing_configured_data_list_is_skipped_for_this_source():
+    group = {"groupCode": "accuracySolutions", "label": "准确度溶液", "cardinality": "MANY",
+             "enabled": True, "itemPath": "$.accuracySolutions", "payloadKey": "accuracySolutions",
+             "levels": [], "fields": []}
+
+    assert apply_group_contracts({}, [group]) == {}

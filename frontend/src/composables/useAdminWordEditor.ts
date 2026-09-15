@@ -38,7 +38,7 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
   const pluginReady = ref(false)
   const pendingTag = ref<string>()
   const pendingBinds = new Map<number, {
-    resolve: (value: { control: WordControl; selectedText: string; existing: boolean }) => void
+    resolve: (value: { control: WordControl; selectedText: string; existing: boolean; objectType?: 'text' | 'image' }) => void
     reject: (reason: Error) => void
     timer: number
     acknowledged: boolean
@@ -148,7 +148,7 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
 
   function settleBind(type: string, data: unknown) {
     const result = data as {
-      nonce: number; message?: string; control?: WordControl; selectedText?: string; existing?: boolean
+      nonce: number; message?: string; control?: WordControl; selectedText?: string; existing?: boolean; objectType?: 'text' | 'image'
     }
     const pending = pendingBinds.get(result.nonce)
     if (!pending) return
@@ -156,7 +156,7 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
     pendingBinds.delete(result.nonce)
     if (type === 'bind-error') pending.reject(new Error(result.message || 'Word 绑定失败'))
     else pending.resolve({
-      control: result.control || {}, selectedText: result.selectedText || '', existing: Boolean(result.existing),
+      control: result.control || {}, selectedText: result.selectedText || '', existing: Boolean(result.existing), objectType: result.objectType,
     })
   }
 
@@ -237,7 +237,7 @@ export function useAdminWordEditor(onTag: (tag: string) => void) {
 
   function requestBind(alias: string, tag: string, oldInternalId: string) {
     const nonce = Date.now()
-    return new Promise<{ control: WordControl; selectedText: string; existing: boolean }>((resolve, reject) => {
+    return new Promise<{ control: WordControl; selectedText: string; existing: boolean; objectType?: 'text' | 'image' }>((resolve, reject) => {
       const timer = window.setTimeout(async () => {
         const pending = pendingBinds.get(nonce)
         pendingBinds.delete(nonce)

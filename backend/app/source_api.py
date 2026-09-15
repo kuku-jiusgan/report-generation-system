@@ -76,12 +76,13 @@ def create_source_router(
             raise HTTPException(404, "源文件不存在")
         try:
             if item.get("source_type") == "EXCEL":
+                groups = list_system_field_groups(database)
                 payload = extract_excel_fields(
                     settings.uploads_dir / item["stored_name"], database.list_lims_fields(True),
-                    database.list_system_field_rules(),
+                    database.list_system_field_rules(), groups,
                 )
                 # Excel 解析结果在落库前即固定为标准字段目录结构，报告创建阶段只复制该结果。
-                apply_group_contracts(payload, list_system_field_groups(database))
+                apply_group_contracts(payload, groups)
                 meta = payload.get("_meta", {})
                 updated = database.update_source_payload(
                     source_id, payload, list(meta.get("warnings", [])), str(meta.get("sha256", "")),

@@ -1,7 +1,6 @@
 from typing import Any
 
 from ..schemas import SourceDocument
-from .excel_validation_payload import enrich_excel_payload
 
 
 def build_source_document(item: dict[str, Any], api_prefix: str) -> SourceDocument:
@@ -17,7 +16,7 @@ def build_source_document(item: dict[str, Any], api_prefix: str) -> SourceDocume
 
 
 def apply_excel_source(data: dict[str, Any], source: dict[str, Any], api_prefix: str) -> None:
-    excel_payload = enrich_excel_payload(source.get("payload") or {})
+    excel_payload = source.get("payload") or {}
     payloads = data.setdefault("source_payloads", {})
     payloads["EXCEL"] = excel_payload
     payloads["EXCEL_DOCUMENT"] = {
@@ -36,21 +35,34 @@ def apply_excel_source(data: dict[str, Any], source: dict[str, Any], api_prefix:
 
 def _record_excel_field_provenance(data: dict[str, Any], payload: dict[str, Any]) -> None:
     """将 Excel 提取结果登记为字段级来源，供报告历史快照展示。"""
-    custom = payload.get("custom")
-    if not isinstance(custom, dict):
-        return
     sources = data.setdefault("field_sources", {})
     originals = data.setdefault("original_values", {})
-    for field_code, value in custom.items():
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "_meta":
+                    continue
+                visit(child, f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, list):
+            if value and all(isinstance(item, dict) for item in value):
+                for index, item in enumerate(value):
+                    visit(item, f"{path}[{index}]")
+            elif value not in (None, "", []):
+                code = path.removeprefix("custom.")
+                sources[code] = {"type": "EXCEL", "record_id": str(payload.get("_meta", {}).get("sha256") or "EXCEL"), "sourcePath": code}
+                originals[code] = value
+            return
         if value in (None, "", []):
-            continue
-        code = str(field_code)
+            return
+        code = path.removeprefix("custom.")
         sources[code] = {
             "type": "EXCEL",
             "record_id": str(payload.get("_meta", {}).get("sha256") or "EXCEL"),
             "sourcePath": code,
         }
         originals[code] = value
+    visit(payload, "")
 
 
 def apply_pdf_source(data: dict[str, Any], source: dict[str, Any]) -> None:

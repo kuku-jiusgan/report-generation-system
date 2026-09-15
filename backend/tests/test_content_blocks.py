@@ -161,6 +161,26 @@ class ContentBlockRegressionTest(unittest.TestCase):
             generated_text = "".join(sample_table.xpath(".//w:t/text()", namespaces=NS))
             self.assertIn("测试科技（上海）有限公司", generated_text)
 
+    def test_flat_detail_collection_expands_rows(self) -> None:
+        document = etree.fromstring(f'''<w:document xmlns:w="{NS['w']}"><w:body>
+          <w:tbl><w:tr><w:bookmarkStart w:id="1" w:name="repeat_t17_row"/>
+            <w:tc><w:sdt><w:sdtPr><w:tag w:val="lod.name"/></w:sdtPr>
+              <w:sdtContent><w:p><w:r><w:t>原型</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc>
+          </w:tr></w:tbl></w:body></w:document>''')
+        mappings = [{
+            "enabled": True, "repeatType": "ROW", "tableNo": "T17",
+            "blockSourcePath": "$.lod[*]", "sourcePath": "$.lod[*].name",
+            "controlTag": "lod.name", "fieldCode": "lod[].name",
+        }]
+        fill_repeat_rows(document, mappings, {"lod": [{"name": "杂质A"}, {"name": "杂质B"}]},
+                         {}, {}, TableLayoutRules([]), lambda *_args: None)
+        rows = document.xpath(".//w:tbl/w:tr", namespaces=NS)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            ["".join(row.xpath(".//w:t/text()", namespaces=NS)) for row in rows],
+            ["杂质A", "杂质B"],
+        )
+
     def test_compiler_accepts_an_interactively_bound_content_control(self) -> None:
         settings = get_settings()
         with tempfile.TemporaryDirectory() as directory:
@@ -211,6 +231,49 @@ class ContentBlockRegressionTest(unittest.TestCase):
         self.assertNotIn("B-1", "".join(tables[0].xpath(".//w:t/text()", namespaces=NS)))
         self.assertIn("B-1", "".join(tables[1].xpath(".//w:t/text()", namespaces=NS)))
         self.assertEqual(document.xpath("count(./w:body/w:p)", namespaces=NS), 1.0)
+        self.assertFalse(warnings)
+
+    def test_table_repeat_clones_adjacent_bound_group_heading(self) -> None:
+        document = etree.fromstring(f'''<w:document xmlns:w="{NS['w']}"><w:body>
+          <w:sdt><w:sdtPr><w:tag w:val="result.impurity"/></w:sdtPr><w:sdtContent>
+            <w:p><w:r><w:t>原型标题</w:t></w:r></w:p>
+          </w:sdtContent></w:sdt>
+          <w:tbl><w:tr><w:bookmarkStart w:id="1" w:name="repeat_t99_row"/>
+            <w:tc><w:sdt><w:sdtPr><w:tag w:val="result.value"/></w:sdtPr>
+              <w:sdtContent><w:p><w:r><w:t>原型数据</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc>
+          </w:tr></w:tbl></w:body></w:document>''')
+        mappings = [
+            {
+                "enabled": True, "repeatType": "ROW", "tableNo": "T99",
+                "groupItemPath": "$.results[*]", "sourcePath": "$.results[*].impurityName",
+                "controlTag": "result.impurity", "fieldCode": "results[].impurityName",
+            },
+            {
+                "enabled": True, "repeatType": "ROW", "tableNo": "T99",
+                "groupItemPath": "$.results[*]", "sourcePath": "$.results[*].value",
+                "controlTag": "result.value", "fieldCode": "results[].value",
+            },
+        ]
+        rules = TableLayoutRules([{
+            "tableNo": "T99", "mode": "TABLE_REPEAT", "groupKey": "impurityName",
+            "innerMode": "ROW_REPEAT", "preservedRowLabels": [],
+        }])
+        warnings = []
+        fill_repeat_rows(document, mappings, {"results": [
+            {"impurityName": "杂质A", "value": "A-1"},
+            {"impurityName": "杂质A", "value": "A-2"},
+            {"impurityName": "杂质B", "value": "B-1"},
+        ]}, {}, {}, rules, lambda *args: warnings.append(args))
+        children = document.xpath("./w:body/*[self::w:sdt or self::w:tbl]", namespaces=NS)
+        word_tag = f"{{{NS['w']}}}"
+        self.assertEqual(
+            [item.tag for item in children],
+            [word_tag + "sdt", word_tag + "tbl", word_tag + "sdt", word_tag + "tbl"],
+        )
+        self.assertEqual("".join(children[0].xpath(".//w:t/text()", namespaces=NS)), "杂质A")
+        self.assertIn("A-2", "".join(children[1].xpath(".//w:t/text()", namespaces=NS)))
+        self.assertEqual("".join(children[2].xpath(".//w:t/text()", namespaces=NS)), "杂质B")
+        self.assertIn("B-1", "".join(children[3].xpath(".//w:t/text()", namespaces=NS)))
         self.assertFalse(warnings)
 
 

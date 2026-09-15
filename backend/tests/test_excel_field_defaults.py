@@ -89,6 +89,20 @@ def test_extracts_quantitation_limit_result_columns() -> None:
     assert len(payload["loq"]) == 12
 
 
+def test_grouped_excel_rule_uses_field_standard_path_when_rule_is_stale() -> None:
+    code = "uncategorized.field_014"
+    fields = [{"fieldCode": code, "groupCode": "dingliangxianjieguo", "cardinality": "MANY",
+               "legacyJsonPath": "$.dingliangxianjieguo[*].injections[*].field_014"}]
+    stale_path = "$[*].injections[*].field_014"
+    rules = [{"id": 2, "fieldCode": code, "sourceType": "EXCEL", "priority": 50,
+              "enabled": True, "config": _rule_config(code, stale_path)}]
+
+    payload = extract_excel_fields(WORKBOOK, fields, rules)
+
+    assert payload["dingliangxianjieguo"][0]["injections"][0]["field_014"] == 1
+    assert "" not in payload
+
+
 def test_quantitation_limit_rules_skip_headers_and_conclusions_between_groups() -> None:
     for code, column in zip(QUANTITATION_CODES, range(4, 11), strict=True):
         config = _rule_config(code, EXCEL_FIELD_PATHS[code])
@@ -133,6 +147,33 @@ def test_quantitation_limit_rules_follow_dynamic_single_impurity_layout() -> Non
         "field5": 2.57, "field6": 2.6, "field7": 10.4,
     }
     assert len(payload["loq"]) == 6
+
+
+def test_quantitation_impurity_name_reads_block_header_cells() -> None:
+    code = "uncategorized.field_046"
+    config = _rule_config(code, EXCEL_FIELD_PATHS[code])
+    assert config["sheet"] == "检测限与定量限"
+    assert config["rowStart"] == config["rowEnd"] == 8
+    assert config["startColumn"] == 3
+    assert config["rowStep"] == 8
+    assert config["repeatCountSource"] == {"sheet": "首页", "row": 8, "column": 2}
+
+    workbook = Workbook()
+    cover = workbook.active
+    cover.title = "首页"
+    cover["B8"] = 3
+    result = workbook.create_sheet("检测限与定量限")
+    result["C8"], result["C16"], result["C24"] = "测试1", "测试2", "测试3"
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "quantitation-names.xlsx"
+        workbook.save(path)
+        fields = [{"fieldCode": code, "groupCode": "dingliangxianjieguo", "cardinality": "MANY",
+                   "legacyJsonPath": EXCEL_FIELD_PATHS[code]}]
+        rules = [{"id": 1, "fieldCode": code, "sourceType": "EXCEL", "priority": 50,
+                  "enabled": True, "config": config}]
+        payload = extract_excel_fields(path, fields, rules)
+
+    assert [row["field_046"] for row in payload["dingliangxianjieguo"]] == ["测试1", "测试2", "测试3"]
 
 
 def test_extracts_horizontal_linearity_results_and_statistics() -> None:

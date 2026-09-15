@@ -74,7 +74,7 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
 
 
 def _clear_external_table_objects(document: etree._Element, layout: TableLayoutRules,
-                                  warn: Warn) -> set[str]:
+                                  warn: Warn, protected_tags: set[str] | None = None) -> set[str]:
     """清空表内图片/嵌入对象；清哪几张表由表格规则的“清除表内图片”开关决定。"""
     relationship_ids: set[str] = set()
     tables = document.xpath("./w:body/w:tbl", namespaces=NS)
@@ -88,6 +88,9 @@ def _clear_external_table_objects(document: etree._Element, layout: TableLayoutR
             ".//w:drawing | .//w:pict | .//w:object", namespaces=NS
         )
         for node in objects:
+            owner = node.xpath("ancestor::w:sdt[1]/w:sdtPr/w:tag/@w:val", namespaces=NS)
+            if owner and str(owner[0]) in (protected_tags or set()):
+                continue
             relationship_ids.update(node.xpath(".//@r:id | .//@r:embed | .//@r:link", namespaces=NS))
             node.getparent().remove(node)
     return relationship_ids
@@ -158,7 +161,11 @@ def build_mapped_docx(compiled_template: Path, output: Path, mappings: list[dict
     # opened.
     layout = TableLayoutRules(table_rules)
     warn = _warning_sink(report_data)
-    removed_relationship_ids = _clear_external_table_objects(roots["word/document.xml"], layout, warn)
+    protected_image_tags = {str(item.get("controlTag")) for item in active_mappings
+                            if item.get("dataType") == "image" and item.get("controlTag")}
+    removed_relationship_ids = _clear_external_table_objects(
+        roots["word/document.xml"], layout, warn, protected_image_tags,
+    )
     _remove_relationship_parts(parts, removed_relationship_ids)
 
     normalized_payload = payload or {}
