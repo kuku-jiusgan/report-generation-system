@@ -23,17 +23,50 @@ def tag_of(control: etree._Element) -> str:
 
 
 def set_control_text(control: etree._Element, value: Any) -> None:
+    content = control.find(W + "sdtContent")
     texts = control.xpath("./w:sdtContent//w:t", namespaces=NS)
     if not texts:
-        content = control.find(W + "sdtContent")
         if content is None:
             return
         paragraph = etree.SubElement(content, W + "p")
         run = etree.SubElement(paragraph, W + "r")
         texts = [etree.SubElement(run, W + "t")]
-    texts[0].text = "" if value is None else str(value)
+    text = "" if value is None else str(value)
+    texts[0].text = text.split("\n")[0]
+    for line_break in content.xpath(".//w:br | .//w:cr", namespaces=NS) if content is not None else []:
+        line_break.getparent().remove(line_break)
+    if "\n" in text:
+        previous = texts[0]
+        for line in text.split("\n")[1:]:
+            line_break = etree.Element(W + "br")
+            previous.addnext(line_break)
+            next_text = etree.Element(W + "t")
+            next_text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+            next_text.text = line
+            line_break.addnext(next_text)
+            previous = next_text
     for text in texts[1:]:
         text.text = ""
+    if content is not None:
+        _drop_blank_paragraphs(content)
+
+
+def _drop_blank_paragraphs(content: etree._Element) -> None:
+    """控件里的值只写进第一个段落，其余段落填完值就是空的，留着会在单元格里多出空行。
+
+    模板作者常把过长的文字（例如"三重四极/液质联用仪"）手动折成两段，绑定字段时
+    这些段落一起被包进控件；它们属于占位内容而不是模板固定文字，删掉才不会每行多一个空行。
+    控件外的前后缀不在 sdtContent 里，不受影响。至少保留一个段落，避免单元格没有段落。
+    """
+    paragraphs = content.findall(W + "p")
+    if len(paragraphs) < 2:
+        return
+    filled = [item for item in paragraphs
+              if "".join(item.xpath(".//w:t/text()", namespaces=NS)).strip()
+              or item.xpath(".//w:drawing | .//w:pict", namespaces=NS)]
+    for paragraph in paragraphs[1:] if not filled else paragraphs:
+        if paragraph not in filled:
+            content.remove(paragraph)
 
 
 def path_value(data: Any, path: str) -> Any:
@@ -83,6 +116,8 @@ def payload_for_mapping(mapping: dict[str, Any], payload: dict[str, Any],
     source_meta = field_sources.get(str(mapping.get("standardFieldCode") or ""), {})
     source_type = str(source_meta.get("type") or mapping.get("sourceType") or "LIMS").upper()
     payloads = report_data.get("source_payloads", {}) if isinstance(report_data, dict) else {}
+    if source_type == "PROTOCOL":
+        return payloads.get("PROTOCOL", {})
     if source_type == "EXCEL":
         return payloads.get("EXCEL", {}) if isinstance(payloads.get("EXCEL"), dict) else {}
     if source_type == "PDF":
@@ -100,6 +135,9 @@ def mapping_source_path(mapping: dict[str, Any]) -> str:
 
 def source_mapping_value(mapping: dict[str, Any], payload: dict[str, Any],
                           report_data: dict[str, Any]) -> Any:
+    source = report_data.get("field_sources", {}).get(str(mapping.get("standardFieldCode") or ""), {})
+    if source.get("type") == "PROTOCOL" and source.get("status") == "ERROR":
+        return ""
     path = mapping_source_path(mapping)
     source_payload = payload_for_mapping(mapping, payload, report_data)
     repeat = repeat_source(path)

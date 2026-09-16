@@ -63,6 +63,17 @@ def _hash(value: Any) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _content_hash(item: dict[str, Any]) -> str:
+    """Hash an item's content (excluding evidence) for deduplication."""
+    return _hash({key: value for key, value in item.items() if key != "evidence"})
+
+
+def _comparison_content(item: dict[str, Any]) -> str:
+    """Format item content for display in conflict resolution UI."""
+    content = {key: value for key, value in item.items() if key != "evidence" and value}
+    return json.dumps(content, ensure_ascii=False, indent=2, default=str)
+
+
 def _find_column(headers: list[str], patterns: tuple[str, ...]) -> int | None:
     for pattern in patterns:
         for index, header in enumerate(headers):

@@ -24,6 +24,7 @@ from .services.rule_admin import RuleAdminRepository
 from .services.docx_control_index import control_locations, describe_binding
 from .services.designer_blocks import designer_blocks
 from .services.docx_language import ensure_simplified_chinese
+from .admin_routes.protocol_rules import register_protocol_rule_routes
 from .admin_routes.rule_catalog import register_rule_catalog_routes
 from .admin_routes.data_sources import register_data_source_routes
 from .admin_routes.publishing import register_publishing_routes
@@ -543,6 +544,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         return {"error": 0}
 
     register_rule_catalog_routes(router, repository)
+    register_protocol_rule_routes(router, repository, settings)
     register_data_source_routes(router, repository)
     register_publishing_routes(router, repository, ensure_draft_template, active_draft_template, compiled_dir)
 

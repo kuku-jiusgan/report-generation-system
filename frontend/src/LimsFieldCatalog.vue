@@ -11,17 +11,15 @@ import {
   type SystemFieldRule,
   type SystemFieldGroup,
 } from "./admin-api";
-import SystemAiRuleEditor from "./SystemAiRuleEditor.vue";
-import SystemContextVariables, { type ContextVariable } from "./SystemContextVariables.vue";
 import SystemGroupStructure from "./SystemGroupStructure.vue";
 import SystemGroupSourceMappings from "./SystemGroupSourceMappings.vue";
 import SystemGroupFieldPaths from "./SystemGroupFieldPaths.vue";
 import SystemFieldTree from "./SystemFieldTree.vue";
 import SystemFieldCatalogTree from "./SystemFieldCatalogTree.vue";
 import FieldOwnershipMover from "./FieldOwnershipMover.vue";
-import ExcelWorkbookLocation from "./ExcelWorkbookLocation.vue";
-import ExcelFieldRuleEditor from "./ExcelFieldRuleEditor.vue";
 import FieldOutputFormatSelect from "./FieldOutputFormatSelect.vue";
+import FieldExtractionRuleForm from "./FieldExtractionRuleForm.vue";
+import { sourceTypes, sourceTypeLabel, transforms, parsers, limsExtractionTypes } from "./fieldRuleOptions";
 import { workbookLocation } from "./excelWorkbookLocation";
 type CatalogRule = Omit<LimsExtractionRule, "sourceType"> & SystemFieldRule;
 const loading = ref(false);
@@ -49,55 +47,28 @@ const rules = ref<CatalogRule[]>([]);
 const references = ref<MappingRule[]>([]);
 const search = ref("");
 const ruleDialog = ref(false);
+const ruleSaving = ref(false);
+const ruleMappingDirty = ref(false);
+function updateRuleGroup(group: SystemFieldGroup) {
+  groups.value = groups.value.map(item => item.groupCode === group.groupCode ? group : item);
+}
 const ruleDraft = ref<Partial<CatalogRule>>();
 const ruleConfig = ref<Record<string, unknown>>({});
-// 计算规则的文本模板与 AI 提示词共用同一套上下文变量配置
-const calculatedVariables = computed<ContextVariable[]>({
-  get: () => Array.isArray(ruleConfig.value.contextVariables) ? ruleConfig.value.contextVariables as ContextVariable[] : [],
-  set: (value) => { ruleConfig.value.contextVariables = value },
-});
 const dataTypes = [
   { value: "string", label: "文本" }, { value: "decimal", label: "数值" },
   { value: "date", label: "日期" }, { value: "richText", label: "富文本" },
   { value: "boolean", label: "布尔值" }, { value: "image", label: "图片" },
 ];
-const sourceTypes = [
-  { value: "LIMS", label: "LIMS 数据" },
-  { value: "AI", label: "AI 生成" },
-  { value: "EXCEL", label: "EXCEL 导入" },
-  { value: "PDF", label: "PDF 读取" },
-  { value: "CALCULATED", label: "计算" },
-];
-const limsExtractionTypes = [
-  { value: "NORMALIZED_PATH", label: "标准 JSONPath" },
-  { value: "RAW_UNIT_FIELD", label: "原始 UNITBODY 字段" },
-  { value: "RICH_TEXT_REGEX", label: "富文本正文" },
-  { value: "HTML_TABLE_COLUMN", label: "HTML 表格列" },
-];
-const transforms = [
-  { value: "TRIM", label: "去除首尾空白" }, { value: "NUMBER", label: "转换为数值" },
-  { value: "DATE", label: "转换为日期" }, { value: "UPPER", label: "转为大写" },
-  { value: "LOWER", label: "转为小写" },
-];
+
+
+
 const groupDisplay = (field?: Partial<StandardField>) => {
   const labels = field?.groupLabels || [];
   return labels.length ? labels.join(" / ") : field?.groupLabel || field?.groupCode || "";
 };
-const parsers = [
-  { value: "NORMALIZED_JSON", label: "标准 JSON 路径读取" },
-  { value: "INSTANCE_FIELD", label: "实验实例字段读取" },
-  { value: "STRUCTURED_UNIT", label: "结构化 UNITBODY 解析" },
-  { value: "HTML_TABLE_GRID", label: "HTML 表格结构解析" },
-];
-const parserProfiles = [
-  "SYSTEM_SUITABILITY_MATRIX", "SPECIFICITY_RESULT_TABLE", "SOLUTION_PREPARATION_TABLE",
-  "IMPURITY_LIMIT_TABLE", "METHOD_PARAMETER_TABLE", "ROBUSTNESS_SPECIFICITY_TABLE",
-  "ROBUSTNESS_SEQUENCE_TABLE",
-  "VALIDATION_SUMMARY_TABLE",
-  "LIMIT_CALCULATION_TABLE",
-];
-const unitTypes = ["Sample", "Standard", "Equipment", "Chromatogram", "Reagent", "Weighing"];
-const sourceTypeLabel = (value: string) => sourceTypes.find((item) => item.value === value)?.label || value;
+
+
+
 const parserLabel = (rule: CatalogRule) => {
   const parser = String(rule.config?.parser || "");
   return parsers.find((item) => item.value === parser)?.label || sourceTypeLabel(rule.sourceType);
@@ -386,7 +357,10 @@ function editRule(rule?: CatalogRule) {
   ruleDialog.value = true;
 }
 async function saveRule() {
+  if (ruleMappingDirty.value) return ElMessage.warning('请先保存编组提取条件');
   if (!ruleDraft.value?.name?.trim() || !selected.value) return ElMessage.warning("规则名称不能为空");
+  if (ruleSaving.value) return;
+  ruleSaving.value = true;
   try {
     const savedConfig = JSON.parse(JSON.stringify(ruleConfig.value));
     (savedConfig.contextVariables || []).forEach((item: Record<string, unknown>) => delete item.previewValue);
@@ -413,6 +387,7 @@ async function saveRule() {
     ruleDialog.value = false;
     ElMessage.success("提取规则已保存");
   } catch (error) { ElMessage.error(errorText(error)); }
+  finally { ruleSaving.value = false; }
 }
 async function removeRule(rule: CatalogRule) {
   try {
@@ -530,63 +505,9 @@ onMounted(() => loadFields());
         <div v-else class="empty-state"><Coin /><h2>选择或新增标准字段</h2></div>
       </section>
     </main>
-    <el-dialog v-model="ruleDialog" :title="ruleDraft?.id ? '编辑提取规则' : '新增提取规则'" width="min(960px, 94vw)" class="rule-editor-dialog">
-      <el-form v-if="ruleDraft" label-position="top">
-        <div class="form-grid three">
-          <el-form-item label="规则名称"><el-input v-model="ruleDraft.name" /></el-form-item>
-          <el-form-item label="提取方式"><el-select v-model="ruleDraft.sourceType"><el-option v-for="item in sourceTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
-        </div>
-        <div class="rule-origin-note"><b>数据来源：</b>{{ ruleOrigin(ruleDraft) }}</div>
-        <template v-if="ruleDraft.sourceType === 'PDF'">
-          <el-form-item label="PDF 字段路径或字段编码"><el-input v-model="ruleConfig.sourcePath" placeholder="默认使用当前系统字段编码" /></el-form-item>
-          <el-form-item label="PDF 取值正则（可选）"><el-input v-model="ruleConfig.valuePattern" /></el-form-item>
-        </template>
-        <template v-if="ruleDraft.sourceType === 'EXCEL'">
-          <ExcelFieldRuleEditor v-model="ruleConfig" :fields="fields" />
-          <ExcelWorkbookLocation :config="ruleConfig" />
-        </template>
-        <template v-if="ruleDraft.sourceType === 'AI'">
-          <SystemAiRuleEditor v-model="ruleConfig" :fields="fields" :groups="groups" />
-        </template>
-        <template v-if="ruleDraft.sourceType === 'CALCULATED'">
-          <el-form-item label="依赖系统字段"><el-select v-model="ruleConfig.dependencies" multiple filterable><el-option v-for="item in fields" :key="item.fieldCode" :label="`${item.label} · ${item.fieldCode}`" :value="item.fieldCode" /></el-select></el-form-item>
-          <el-form-item label="计算表达式"><el-input v-model="ruleConfig.expression" placeholder="例如 {sample.weight} / {sample.volume}" /></el-form-item>
-          <el-form-item label="文本拼接模板"><el-input v-model="ruleConfig.textTemplate" type="textarea" :rows="4" placeholder="例如 {sample.name}（批号：{sample.batchNo}）" /><small class="form-help">计算表达式和文本拼接模板二选一。文本模板用 {系统字段编码} 引用下面的上下文变量。</small></el-form-item>
-          <el-form-item v-if="ruleConfig.textTemplate" label="上下文变量">
-            <SystemContextVariables v-model="calculatedVariables" :fields="fields" :groups="groups" />
-            <small class="form-help">成组字段（一个字段多条取值）必须在这里声明取值方式，否则模板拿到的是整个列表。</small>
-          </el-form-item>
-        </template>
-        <template v-if="ruleDraft.sourceType === 'LIMS'">
-        <el-form-item label="LIMS 解析方式"><el-select v-model="ruleConfig.extractionType"><el-option v-for="item in limsExtractionTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
-        <div class="form-grid three parser-config-grid">
-          <el-form-item label="上游解析器">
-            <el-select v-model="ruleConfig.parser"><el-option v-for="item in parsers" :key="item.value" :label="item.label" :value="item.value" /></el-select>
-          </el-form-item>
-          <el-form-item label="解析配置">
-            <el-select v-model="ruleConfig.parserProfile" filterable allow-create clearable placeholder="选择或输入解析配置">
-              <el-option v-for="item in parserProfiles" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="原始数据库字段"><el-input v-model="ruleConfig.inputField" placeholder="例如 UNITBODY" /></el-form-item>
-        </div>
-        <div class="form-grid two parser-config-grid">
-          <el-form-item label="输出标准集合"><el-input v-model="ruleConfig.outputCollection" placeholder="例如 systemSuitability" /></el-form-item>
-          <el-form-item label="输出 JSON 属性"><el-input v-model="ruleConfig.outputField" placeholder="例如 peakArea" /></el-form-item>
-        </div>
-        <el-form-item v-if="ruleConfig.extractionType === 'RAW_UNIT_FIELD'" label="LIMS TYPE 筛选值"><el-select v-model="ruleDraft.sourceUnitType"><el-option v-for="item in unitTypes" :key="item" :label="item" :value="item" /></el-select><small class="form-help">对应 LIMS SQL 查询结果中的 TYPE 字段。</small></el-form-item>
-        <el-form-item v-if="['NORMALIZED_PATH','RAW_UNIT_FIELD'].includes(String(ruleConfig.extractionType || ''))" :label="ruleConfig.extractionType === 'RAW_UNIT_FIELD' ? 'UNITBODY.data[] 内的字段路径（不是正则）' : '标准 JSONPath（不是正则）'"><el-input v-model="ruleDraft.sourcePath" placeholder="例如 $.samples[*].sampleName" /></el-form-item>
-        <template v-if="['RICH_TEXT_REGEX','HTML_TABLE_COLUMN'].includes(String(ruleConfig.extractionType || '')) || ruleConfig.parser === 'HTML_TABLE_GRID'">
-          <el-form-item label="章节路径正则"><el-input v-model="ruleDraft.sectionPattern" placeholder="例如 实验材料|实验过程" /></el-form-item>
-          <el-form-item v-if="ruleConfig.extractionType === 'HTML_TABLE_COLUMN' || ruleConfig.parser === 'HTML_TABLE_GRID'" label="表头特征正则"><el-input v-model="ruleDraft.headerPattern" placeholder="例如 No\.? .*保留时间.*峰面积" /></el-form-item>
-          <el-form-item v-if="ruleConfig.extractionType === 'HTML_TABLE_COLUMN'" label="取值列标题正则"><el-input v-model="ruleDraft.sourcePath" placeholder="例如 批号|批次号" /></el-form-item>
-          <el-form-item label="取值正则（可选）"><el-input v-model="ruleDraft.valuePattern" placeholder="存在捕获组时取第一个捕获组；否则取完整匹配" /></el-form-item>
-          <el-form-item v-if="ruleConfig.parser === 'HTML_TABLE_GRID' || ruleConfig.extractionType === 'HTML_TABLE_COLUMN'" label="数据行过滤正则（可选）"><el-input v-model="ruleConfig.rowPattern" placeholder="例如 验证项目=.*系统适用性" /></el-form-item>
-        </template>
-        </template>
-        <div class="form-grid two"><el-form-item label="结果转换"><el-select v-model="ruleDraft.transform"><el-option v-for="item in transforms" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item><el-form-item label="状态"><el-switch v-model="ruleDraft.enabled" active-text="启用" inactive-text="停用" /></el-form-item></div>
-      </el-form>
-      <template #footer><el-button @click="ruleDialog = false">取消</el-button><el-button type="primary" @click="saveRule">保存规则</el-button></template>
+    <el-dialog v-model="ruleDialog" :title="ruleDraft?.id ? '编辑提取规则' : '新增提取规则'" width="min(960px, 94vw)" class="rule-editor-dialog" destroy-on-close>
+      <FieldExtractionRuleForm v-if="ruleDraft" v-model:rule="ruleDraft" v-model:config="ruleConfig" :fields="fields" :groups="groups" :field-code="draft?.fieldCode || ''" :origin="ruleOrigin(ruleDraft)" @group-updated="updateRuleGroup" @mapping-dirty="ruleMappingDirty = $event" />
+      <template #footer><el-button @click="ruleDialog = false">取消</el-button><el-button type="primary" :loading="ruleSaving" :disabled="ruleMappingDirty" @click="saveRule">保存规则</el-button></template>
     </el-dialog>
   </div>
 </template>

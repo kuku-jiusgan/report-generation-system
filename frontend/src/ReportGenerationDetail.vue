@@ -7,7 +7,7 @@ import SystemFieldCatalogTree from './SystemFieldCatalogTree.vue'
 const props = defineProps<{ detail: GenerationHistoryItem }>()
 
 const SOURCE_LABELS: Record<string, string> = {
-  EXCEL: 'Excel', LIMS: 'LIMS', PDF: 'PDF', AI: 'AI 生成', CALCULATED: '系统计算',
+  PROTOCOL: '方案', EXCEL: 'Excel', LIMS: 'LIMS', PDF: 'PDF', AI: 'AI 生成', CALCULATED: '系统计算',
   FIXED: '固定值', MANUAL: '人工录入', MANUAL_WORD: 'Word 人工编辑',
 }
 const labels = ref<Record<string, string>>({})
@@ -57,13 +57,14 @@ const fieldRows = computed(() => {
     const configured = configuredRules.value[code] || {}
     const config = configured.config && typeof configured.config === 'object' ? configured.config : {}
     const field = catalogFields.find((item) => item.fieldCode === code)
-    const extractedValue = hasValue(values[code]) ? values[code] : readResolvedValue(field?.legacyJsonPath || code)
+    const extractedValue = source.type === 'PROTOCOL' ? values[code] : hasValue(values[code]) ? values[code] : readResolvedValue(field?.legacyJsonPath || code)
     return {
       code, label: labels.value[code] || '',
       value: format(extractedValue),
       sourceType: String(source.type || configured.sourceType || ''),
       rule: String(source.ruleName || configured.name || source.record_id || ''),
       path: String(source.sourcePath || config.sourcePath || ''),
+      message: String(source.message || ''),
     }
   })
 })
@@ -77,13 +78,15 @@ const selectedFieldRow = computed(() => selectedField.value
       code: selectedField.value.fieldCode,
       label: selectedField.value.label,
       value: format(readResolvedValue(selectedField.value.legacyJsonPath || selectedField.value.fieldCode)),
-      sourceType: '', rule: '', path: selectedField.value.legacyJsonPath || '',
+      sourceType: '', rule: '', path: selectedField.value.legacyJsonPath || '', message: '',
     } : undefined)
+const selectedProtocolLocations = computed(() => fieldSources.value[selectedField.value?.fieldCode || '']?.type === 'PROTOCOL' ? fieldSources.value[selectedField.value?.fieldCode || ''].locations || [] : [])
 const selectedGroupJson = computed(() => {
   if (!selectedGroup.value) return undefined
   const payloads = resolved.value.source_payloads
   if (!payloads || typeof payloads !== 'object') return undefined
   const path = selectedGroup.value.itemPath || `$.${selectedGroup.value.groupCode}`
+  if (selectedGroup.value.fields.some(field => fieldSources.value[field.fieldCode]?.type === 'PROTOCOL')) return readValueAtPath(payloads.PROTOCOL, path)
   for (const sourceType of ['EXCEL', 'LIMS', 'PDF']) {
     const value = readValueAtPath(payloads[sourceType], path)
     if (value !== undefined) return value
@@ -166,10 +169,12 @@ function format(value: unknown): string {
         <template v-if="selectedField">
           <h4>{{ selectedField.label }} <small>{{ selectedField.fieldCode }}</small></h4>
           <el-descriptions :column="1" border size="small">
+            <el-descriptions-item v-if="selectedFieldRow?.message" label="未提取原因">{{ selectedFieldRow.message }}</el-descriptions-item>
             <el-descriptions-item label="提取值">{{ selectedFieldRow?.value || '-' }}</el-descriptions-item>
             <el-descriptions-item label="来源">{{ SOURCE_LABELS[selectedFieldRow?.sourceType || ''] || selectedFieldRow?.sourceType || '-' }}</el-descriptions-item>
             <el-descriptions-item label="规则 / 路径">{{ selectedFieldRow?.rule || selectedFieldRow?.path || '-' }}</el-descriptions-item>
           </el-descriptions>
+          <details v-if="selectedProtocolLocations.length"><summary>查看方案原文位置</summary><div v-for="(location, index) in selectedProtocolLocations" :key="index"><b>{{ location.section }}</b><span v-if="location.paragraph"> · 段落 {{ location.paragraph }}</span><span v-if="location.table"> · 表格 {{ location.table }}，行 {{ location.row }}，列 {{ location.column }}</span><pre class="group-json">{{ location.quote }}</pre></div></details>
         </template>
         <template v-else-if="selectedGroup">
           <h4>{{ selectedGroup.label }} <small>{{ selectedGroup.groupCode }}</small></h4>

@@ -22,6 +22,7 @@ from .docx_summary_rows import (
     clear_unmapped_summary_cells, fill_preserved_summary_rows, is_preserved_summary_row,
 )
 from .table_layout_rules import TableLayoutRules, repeat_bookmark_name
+from .standard_payloads import standard_group_values
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -574,9 +575,12 @@ def fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], p
                  "内容块和字段都没有配置循环数据集合，已保留 Word 模板中的原有内容。")
             continue
         source_mapping = next((item for item in group
-                               if repeat_source(mapping_source_path(item))), group[0])
+                               if (repeat_source(mapping_source_path(item)) or ('', ''))[0] == source[0]), None)
+        if source_mapping is None:
+            warn('BLOCK_SOURCE_MISSING', table_no, '循环表没有属于目标编组的字段映射，请修正模板绑定。')
+            continue
         source_payload = payload_for_mapping(source_mapping, payload, report_data)
-        records = source_payload.get(source[0])
+        records = standard_group_values(report_data, source_payload, {source[0]})[source[0]]
         if not isinstance(records, list):
             warn("BLOCK_SOURCE_NOT_ARRAY", table_no,
                  f"循环集合 {source[0]} 缺失或不是数组，无法填充 Word 表格。")

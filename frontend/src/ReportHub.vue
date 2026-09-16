@@ -6,7 +6,7 @@ import {
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import {
   applyLimsToReport, batchExportReports, createReport, deleteReport, extractExcel, extractPdf, generateReport, getHistory,
-  listReportGenerations, listReports, rebuildReport, replaceReportSource, reportGenerationFileUrl, reportPdfUrl, uploadExcel, uploadPdf,
+  listReportGenerations, listReports, rebuildReport, replaceReportSource, reportGenerationFileUrl, reportPdfUrl, uploadExcel, uploadPdf, uploadProtocol,
   type ChangeEvent, type ReportGeneration, type ReportTask, type SourceDocument,
 } from './api'
 import {
@@ -15,6 +15,8 @@ import {
 } from './lims-api'
 import type { AuthUser } from './auth-api'
 import ReportGenerationProgress from './ReportGenerationProgress.vue'
+import ReportTemplatePicker from './ReportTemplatePicker.vue'
+import ProtocolUpload from './ProtocolUpload.vue'
 
 const props = defineProps<{ sessionUser: AuthUser }>()
 const emit = defineEmits<{ open: [id: string] }>()
@@ -26,6 +28,7 @@ const actionId = ref('')
 const auditVisible = ref(false)
 const auditReport = ref<ReportTask>()
 const auditEvents = ref<ChangeEvent[]>([])
+const createTemplateId = ref('')
 const createVisible = ref(false)
 const createBusy = ref(false)
 const createRecognizing = ref(false)
@@ -33,6 +36,7 @@ const createProjectId = ref('')
 const createImport = ref<LimsImport>()
 const createInstances = ref<LimsInstanceSummary[]>([])
 const createRecognition = ref<LimsRecognition>()
+const createProtocol = ref<File>()
 const createPdf = ref<File>()
 const createPdfFiles = ref<UploadFile[]>([])
 const createExcel = ref<File>()
@@ -144,6 +148,8 @@ function errorText(error: unknown) {
 }
 
 function createNew() {
+  createTemplateId.value = ''
+  createProtocol.value = undefined
   if (createRecognitionTimer) clearTimeout(createRecognitionTimer)
   createRecognitionSequence += 1
   createProjectId.value = ''
@@ -283,6 +289,7 @@ async function submitReplaceSource() {
 }
 
 async function submitCreateReport() {
+  if (!createTemplateId.value) return ElMessage.warning('请选择报告模板')
   const hasLims = Boolean(createImport.value && createInstances.value.length && createRecognition.value)
   const hasPdf = Boolean(createPdf.value)
   const hasExcel = Boolean(createExcel.value)
@@ -308,7 +315,8 @@ async function submitCreateReport() {
       createExcelSource.value = await extractExcel(source.id)
       excelSourceId = source.id
     }
-    created = await createReport(sourceId, excelSourceId)
+    const protocolSource = createProtocol.value ? await uploadProtocol(createProtocol.value) : undefined
+    created = await createReport(sourceId, excelSourceId, createTemplateId.value, protocolSource?.id)
     if (hasLims && createImport.value) {
       created = await applyLimsToReport(
         created.id, createImport.value.id, createInstances.value.map((item) => item.instanceId),
@@ -465,16 +473,19 @@ onMounted(load)
         <div class="hub-table-footer">显示 {{ filtered.length }} / {{ reports.length }} 份报告</div>
       </section>
 
-    <el-dialog v-model="createVisible" title="发起新报告生成" width="980px" class="create-report-dialog" :close-on-click-modal="false">
-      <el-steps :active="createRecognition ? 2 : createImport ? 1 : 0" finish-status="success" align-center>
-        <el-step title="查询项目" />
-        <el-step title="选择并识别记录" />
-        <el-step title="上传数据文件" />
-      </el-steps>
+    <el-dialog v-model="createVisible" title="发起新报告生成" width="1040px" top="5vh" class="create-report-dialog" :close-on-click-modal="false">
+      <template #header>
+        <div class="create-dialog-heading">
+          <h2>发起新报告生成</h2>
+        </div>
+      </template>
+      <div class="create-template-area">
+        <ReportTemplatePicker v-if="createVisible" v-model="createTemplateId" />
+      </div>
       <section class="create-report-section">
-        <header><span>1</span><div><strong>选择 LIMS 实验记录（可选）</strong><small>输入项目编号，查询并勾选本次报告需要引用的实验记录</small></div></header>
+        <header><div><strong>选择 LIMS 实验记录（可选）</strong></div></header>
         <div class="create-project-query">
-          <el-input v-model="createProjectId" clearable placeholder="请输入项目编号，如 XM2024108" @keyup.enter="queryCreateProject" />
+          <el-input v-model="createProjectId" aria-label="LIMS 项目编号" clearable placeholder="请输入项目编号" @keyup.enter="queryCreateProject" />
           <el-button type="primary" :icon="Search" :loading="createBusy" @click="queryCreateProject">查询 LIMS</el-button>
         </div>
         <el-table v-if="createImport" v-loading="createRecognizing" :data="createImport.summary.instances" max-height="280" stripe @selection-change="selectCreateInstances">
@@ -489,7 +500,6 @@ onMounted(load)
           <span>已选择 {{ createInstances.length }} 条记录</span>
           <span v-if="createRecognizing">正在自动识别...</span>
           <span v-else-if="createInstances.length && !createRecognition" class="recognition-error">自动识别未完成，请重新勾选</span>
-          <span v-else-if="!createInstances.length">勾选后自动识别</span>
         </div>
         <div v-if="createRecognition" class="create-recognition-summary">
           <span><b>{{ createRecognition.recognizedTotal }}</b> 条数据已识别</span>
@@ -513,30 +523,35 @@ onMounted(load)
           </article>
         </div>
       </section>
-      <section class="create-report-section">
-        <header><span>3</span><div><strong>上传 Excel 验证计算表（可选）</strong><small>支持 XLSX/XLSM；读取已保存的公式缓存，不执行宏</small></div></header>
-        <el-upload v-model:file-list="createExcelFiles" drag accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12" :auto-upload="false" :limit="1" :on-change="selectCreateExcel" :on-remove="() => { createExcel = undefined; createExcelSource = undefined }">
-          <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-          <div class="el-upload__text">拖放验证计算表到这里，或<em>点击选择文件</em></div>
-          <template #tip><div class="el-upload__tip">仅解析验证结果计算页；原始工作簿会保留用于追溯</div></template>
-        </el-upload>
-        <div v-if="createExcelSource" class="create-recognition-summary">
-          <span><b>{{ createExcelSource.summary.impurityCount || 0 }}</b> 个杂质</span>
-          <span>{{ (createExcelSource.summary.impurityNames || []).join('、') }}</span>
-          <span v-if="createExcelSource.warnings.length"><b>{{ createExcelSource.warnings.length }}</b> 条缓存警告</span>
+      <div class="create-attachments">
+        <ProtocolUpload v-if="createVisible" v-model="createProtocol" />
+        <section class="create-report-section">
+          <header><div><strong>上传 Excel 验证计算表（可选）</strong></div></header>
+          <el-upload v-model:file-list="createExcelFiles" drag accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12" :auto-upload="false" :limit="1" :on-change="selectCreateExcel" :on-remove="() => { createExcel = undefined; createExcelSource = undefined }">
+            <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+            <div class="el-upload__text"><em>选择 Excel 文件</em></div>
+          </el-upload>
+          <div v-if="createExcelSource" class="create-recognition-summary">
+            <span><b>{{ createExcelSource.summary.impurityCount || 0 }}</b> 个杂质</span>
+            <span>{{ (createExcelSource.summary.impurityNames || []).join('、') }}</span>
+            <span v-if="createExcelSource.warnings.length"><b>{{ createExcelSource.warnings.length }}</b> 条缓存警告</span>
         </div>
       </section>
       <section class="create-report-section">
-        <header><span>2</span><div><strong>上传 PDF 谱图（可选）</strong><small>支持单个 PDF 文件；LIMS 与 PDF 至少提供一种数据源</small></div></header>
+        <header><div><strong>上传 PDF 谱图（可选）</strong></div></header>
         <el-upload v-model:file-list="createPdfFiles" drag accept=".pdf,application/pdf" :auto-upload="false" :limit="1" :on-change="selectCreatePdf" :on-remove="() => { createPdf = undefined }">
           <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-          <div class="el-upload__text">拖放 PDF 谱图到这里，或<em>点击选择文件</em></div>
-          <template #tip><div class="el-upload__tip">仅支持 PDF；报告创建后可在数据源中查看和追溯</div></template>
+          <div class="el-upload__text"><em>选择 PDF 文件</em></div>
         </el-upload>
       </section>
+      </div>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button class="hub-create-confirm" type="primary" :loading="createBusy" :disabled="createRecognizing || (!createRecognition && !createPdf && !createExcel)" @click="submitCreateReport">创建并进入工作台</el-button>
+        <div class="create-dialog-footer">
+          <div class="create-footer-actions">
+            <el-button @click="createVisible = false">取消</el-button>
+            <el-button class="hub-create-confirm" type="primary" :loading="createBusy" :disabled="!createTemplateId || createRecognizing || (!createRecognition && !createPdf && !createExcel)" @click="submitCreateReport">创建并进入工作台</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
     <el-dialog v-model="replaceVisible" title="更换数据源" width="620px" :close-on-click-modal="false">
@@ -557,3 +572,5 @@ onMounted(load)
     </el-drawer>
   </main>
 </template>
+
+<style src="./styles/create-report-dialog.css"></style>

@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from ..database_common import now_iso
+from .lims_instances import collection_storage
 
 
 class LimsCatalogRepositoryMixin:
@@ -19,18 +20,18 @@ class LimsCatalogRepositoryMixin:
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO lims_field_catalog(field_code,label,group_code,collection_code,data_type,
-                   cardinality,db_table,db_column,json_key,legacy_json_path,description,output_format,fill_rule,
+                   cardinality,json_key,legacy_json_path,description,output_format,fill_rule,
                    default_value,validation_regex,order_no,enabled,updated_at)
-                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
                    label=VALUES(label),group_code=VALUES(group_code),collection_code=VALUES(collection_code),
-                   data_type=VALUES(data_type),cardinality=VALUES(cardinality),db_table=VALUES(db_table),
-                   db_column=VALUES(db_column),json_key=VALUES(json_key),legacy_json_path=VALUES(legacy_json_path),
+                   data_type=VALUES(data_type),cardinality=VALUES(cardinality),
+                   json_key=VALUES(json_key),legacy_json_path=VALUES(legacy_json_path),
                    description=VALUES(description),output_format=VALUES(output_format),fill_rule=VALUES(fill_rule),
                    default_value=VALUES(default_value),
                    validation_regex=VALUES(validation_regex),order_no=VALUES(order_no),enabled=VALUES(enabled),updated_at=VALUES(updated_at)""",
                 (item["fieldCode"], item["label"], item["groupCode"], item["collectionCode"],
-                 item.get("dataType", "string"), item.get("cardinality", "ONE"), item["dbTable"],
-                 item["dbColumn"], item.get("jsonKey", ""), item.get("legacyJsonPath", ""),
+                 item.get("dataType", "string"), item.get("cardinality", "ONE"),
+                 item.get("jsonKey", ""), item.get("legacyJsonPath", ""),
                  item.get("description", ""), item.get("outputFormat", ""), item.get("fillRule", ""),
                  item.get("defaultValue", ""),
                  item.get("validationRegex", ""), int(item.get("orderNo", 0)),
@@ -53,13 +54,26 @@ class LimsCatalogRepositoryMixin:
             "groupLabels": group_labels.split(" / ") if group_labels else [],
             "collectionCode": collection_code,
             "dataType": row["data_type"], "cardinality": row["cardinality"],
-            "dbTable": row["db_table"], "dbColumn": row["db_column"], "jsonKey": row["json_key"],
+            "jsonKey": row["json_key"],
             "legacyJsonPath": row["legacy_json_path"], "description": row["description"],
             "outputFormat": row["output_format"], "fillRule": row.get("fill_rule"),
             "defaultValue": row["default_value"],
             "validationRegex": row["validation_regex"], "orderNo": row["order_no"],
             "enabled": bool(row["enabled"]), "updatedAt": row["updated_at"],
         }
+
+    @staticmethod
+    def _group_cardinalities(connection: Any) -> dict[str, str]:
+        return {str(row["group_code"]): str(row["cardinality"] or "ONE") for row in connection.execute(
+            "SELECT group_code,cardinality FROM system_field_groups WHERE enabled=1"
+        ).fetchall()}
+
+    @staticmethod
+    def _apply_storage(item: dict[str, Any], cardinalities: dict[str, str]) -> None:
+        """存储位置由集合的落库方式推出来，目录里不再单独存一份声明。"""
+        collection = str(item.get("collectionCode") or "")
+        storage = collection_storage(collection, cardinalities.get(collection, ""))
+        item["dbTable"], item["dbColumn"] = storage or ("", "")
 
     @staticmethod
     def _field_contract(connection: Any, field_code: str, json_key: str = "") -> tuple[str, str] | None:
@@ -108,10 +122,13 @@ class LimsCatalogRepositoryMixin:
             return None
         item = self._lims_field_to_api(row)
         with self.connect() as connection:
+            cardinalities: dict[str, str] = {}
             if self._group_tables_exist(connection):
                 contract = self._field_contract(connection, field_code, str(row["json_key"] or ""))
                 if contract:
                     item["collectionCode"], item["legacyJsonPath"] = contract
+                cardinalities = self._group_cardinalities(connection)
+        self._apply_storage(item, cardinalities)
         return item
 
     def list_lims_fields(self, include_disabled: bool = False) -> list[dict[str, Any]]:
@@ -138,6 +155,7 @@ class LimsCatalogRepositoryMixin:
                 + "ORDER BY COALESCE(grp.group_labels,f.group_code),f.order_no,f.field_code"
                 ).fetchall()
         items = [self._lims_field_to_api(row) for row in rows]
+        cardinalities: dict[str, str] = {}
         if items:
             with self.connect() as connection:
                 if self._group_tables_exist(connection):
@@ -145,6 +163,9 @@ class LimsCatalogRepositoryMixin:
                         contract = self._field_contract(connection, item["fieldCode"], str(item.get("jsonKey") or ""))
                         if contract:
                             item["collectionCode"], item["legacyJsonPath"] = contract
+                    cardinalities = self._group_cardinalities(connection)
+        for item in items:
+            self._apply_storage(item, cardinalities)
         return items
 
     def list_lims_fields_for_chapter(self, chapter_id: int) -> list[dict[str, Any]]:
@@ -165,6 +186,8 @@ class LimsCatalogRepositoryMixin:
 
     def delete_lims_field(self, field_code: str) -> bool:
         with self.connect() as connection:
+            # 先清理引用该字段的映射记录，防止产生孤儿映射
+            connection.execute("DELETE FROM admin_mapping_rules WHERE standard_field_code=%s", (field_code,))
             connection.execute("DELETE FROM system_field_rules WHERE field_code=%s", (field_code,))
             if self._group_tables_exist(connection):
                 connection.execute("DELETE FROM system_field_group_fields WHERE field_code=%s", (field_code,))

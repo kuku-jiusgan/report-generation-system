@@ -40,16 +40,19 @@ class RuntimeVersionRepositoryMixin:
             ).fetchone()
         return (json.loads(legacy["snapshot"]), legacy["compiled_template"]) if legacy else (self.snapshot(), None)
 
-    def active_runtime_template(self) -> dict[str, Any] | None:
+    def active_runtime_template(self, template_id: str | None = None) -> dict[str, Any] | None:
+        scope = "t.id=%s AND t.status='ACTIVE'" if template_id else "t.id=(SELECT active_template_id FROM admin_template_workspace WHERE id=1)"
         with self.database.connect() as connection:
             row = connection.execute(
-                """SELECT t.id AS template_id,t.code AS template_code,t.name AS template_name,v.id AS version_id,
+                f"""SELECT t.id AS template_id,t.code AS template_code,t.name AS template_name,v.id AS version_id,
                           v.version_no,v.snapshot,v.template_file FROM admin_template_versions v
                    JOIN admin_templates t ON t.id=v.template_id
-                   JOIN admin_template_workspace w ON w.active_template_id=v.template_id
-                   WHERE w.id=1 AND v.status='PUBLISHED' ORDER BY v.version_no DESC LIMIT 1"""
+                   WHERE {scope} AND v.status='PUBLISHED' ORDER BY v.version_no DESC LIMIT 1""",
+                (template_id,) if template_id else (),
             ).fetchone()
         if not row:
+            if template_id:
+                raise ValueError("所选报告模板不存在、已停用或没有已发布版本")
             return None
         item = dict(row)
         return {

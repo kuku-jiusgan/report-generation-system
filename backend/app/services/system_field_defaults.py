@@ -27,7 +27,7 @@ def ensure_system_field_defaults(database: Database) -> None:
         database.upsert_lims_field({
             "fieldCode": field_code, "label": "章节", "groupCode": "概述",
             "collectionCode": "narrative", "dataType": "richText", "cardinality": "ONE",
-            "dbTable": "system_generated_fields", "dbColumn": "value_json", "jsonKey": "chapter",
+            "jsonKey": "chapter",
             "legacyJsonPath": "$.narrative.chapter", "description": "由 AI 生成的概述章节内容",
             "outputFormat": "", "defaultValue": "", "validationRegex": "",
             "orderNo": 0, "enabled": True,
@@ -37,7 +37,7 @@ def ensure_system_field_defaults(database: Database) -> None:
         database.upsert_lims_field({
             "fieldCode": executor_code, "label": "执行单位", "groupCode": "项目信息",
             "collectionCode": "project", "dataType": "string", "cardinality": "ONE",
-            "dbTable": "system_generated_fields", "dbColumn": "value_json", "jsonKey": "executingOrganization",
+            "jsonKey": "executingOrganization",
             "legacyJsonPath": "$.project.executingOrganization", "description": "方法开发及验证执行单位",
             "outputFormat": "", "defaultValue": "", "validationRegex": "", "orderNo": 20, "enabled": True,
         })

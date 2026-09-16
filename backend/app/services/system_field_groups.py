@@ -24,7 +24,7 @@ GROUP_LABELS = {
 }
 
 _PATH_PATTERN = re.compile(r"^\$\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
-_SOURCE_TYPES = {"EXCEL", "LIMS"}
+_SOURCE_TYPES = {"EXCEL", "LIMS", "PROTOCOL"}
 
 
 def _default_item_path(group_code: str) -> str:
@@ -72,13 +72,25 @@ def _validate_group_contract(item: dict[str, Any], fields: list[dict[str, Any]] 
         raise ValueError("标准数据路径必须是形如 $.lod 的 JSONPath，不能包含 [*]")
     mappings = _decode_source_mappings(item.get("sourceMappings", []))
     field_codes = {str(field.get("fieldCode")) for field in (fields or [])}
-    seen_fields: set[str] = set()
+    seen_fields: set[tuple[str, str]] = set()
     for mapping in mappings:
         if not isinstance(mapping, dict):
             raise ValueError("编组来源映射的每一项必须是对象")
         source_type = str(mapping.get("sourceType") or "").upper()
         if source_type not in _SOURCE_TYPES:
-            raise ValueError("编组来源类型只能是 EXCEL 或 LIMS")
+            raise ValueError("编组来源类型只能是 EXCEL、LIMS 或 PROTOCOL")
+        if source_type == "PROTOCOL":
+            from .protocol_rules import validate_protocol_locator
+            from .protocol_row_expansion import validate_row_expansion
+            validate_protocol_locator(mapping)
+            validate_row_expansion(mapping, item, fields or [])
+            if not mapping.get("headerPattern"):
+                raise ValueError("方案来源映射必须配置表头正则")
+            if cardinality != "MANY":
+                raise ValueError("方案明细来源映射只能用于多行编组")
+            if sum(entry.get("sourceType") == "PROTOCOL" for entry in mappings) != 1:
+                raise ValueError("同一编组只能配置一条方案来源映射")
+        mapping["sourceType"] = source_type
         columns = mapping.get("columnMappings", mapping.get("fieldMappings", mapping.get("columns", [])))
         if not isinstance(columns, list):
             raise ValueError("编组来源映射的列映射必须是数组")
@@ -91,9 +103,14 @@ def _validate_group_contract(item: dict[str, Any], fields: list[dict[str, Any]] 
                 raise ValueError(f"来源映射字段不属于当前编组：{field_code}")
             if not column_pattern:
                 raise ValueError(f"字段 {field_code} 的来源列匹配条件不能为空")
-            if field_code in seen_fields:
+            if source_type == "PROTOCOL":
+                try:
+                    re.compile(column_pattern)
+                except re.error as error:
+                    raise ValueError(f"方案列正则无效：{error}") from error
+            if (source_type, field_code) in seen_fields:
                 raise ValueError(f"来源映射字段重复：{field_code}")
-            seen_fields.add(field_code)
+            seen_fields.add((source_type, field_code))
     return item_path, "", mappings
 
 

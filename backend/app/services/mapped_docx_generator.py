@@ -55,8 +55,10 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
         )
         if isinstance(value, list) and len(value) == 1:
             value = value[0]
-        if value is not None and not isinstance(value, (dict, list)):
-            values[tag] = format_value(value, mapping)
+        if not isinstance(value, (dict, list)):
+            formatted = format_value(value, mapping)
+            if value is not None or formatted:
+                values[tag] = formatted
     # 控件写回报告固定字段的对应关系来自映射规则的“报告字段绑定”，
     # 不再依赖后端常量表，设计器里改了就直接生效。
     for mapping in mappings:
@@ -155,8 +157,9 @@ def build_mapped_docx(compiled_template: Path, output: Path, mappings: list[dict
     roots = {name: etree.fromstring(parts[name][1]) for name in xml_parts}
     active_mappings = [item for item in mappings if item.get("enabled", True)]
     # Keep the designer's original content when a newly created report has no
-    # value for a mapped field. Direct fills replace controls that actually
-    # have data; clearing every control here made a blank report erase its
+    # value for a mapped field and no explicit empty-value replacement rule.
+    # Direct fills apply configured empty rules as well as actual data;
+    # clearing every control here made a blank report erase its
     # template headings, names and example/default text before the editor
     # opened.
     layout = TableLayoutRules(table_rules)

@@ -1,6 +1,4 @@
-import hashlib
 import io
-import json
 import logging
 import shutil
 import subprocess
@@ -32,13 +30,17 @@ from .schemas import (
 )
 logger = logging.getLogger(__name__)
 from .services.mapped_docx_generator import build_mapped_docx
+from .services.docx_export import export_docx_bytes, export_docx_response, write_export_docx
 from .services.system_field_resolver import resolve_system_fields
+from .services.standard_payloads import active_standard_payload
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
 from .services.template_block_rules import apply_template_block_rules
 from .services.excel_report_source import apply_excel_source, apply_pdf_source, build_source_document
 from .services.rule_admin import RuleAdminRepository
-from .services.template_compiler import compile_template
+from .services.protocol_report_source import refresh_protocol_source
+from .services.protocol_document import apply_protocol_document
+from .services.report_template_runtime import resolve_runtime_template
 from .source_api import create_source_router
 from .report_utils import (
     binding_label, default_report_data, flatten_values, manual_edit_locked, resolved_report_title,
@@ -118,69 +120,8 @@ def _apply_content_block_rules(snapshot: dict) -> list[dict]:
     )
 
 
-def _compile_failure_message(report: dict) -> str:
-    """把编译错误摊开写进异常，光说"N 个错误"排查时等于没说。"""
-    errors = report.get("errors", [])
-    details = "；".join(
-        f"{item.get('locationId') or item.get('controlTag') or item.get('code')}"
-        f"（{item.get('fieldCode') or item.get('code')}）：{item.get('message', '')}"
-        for item in errors[:5]
-    )
-    more = f"，另有 {len(errors) - 5} 个错误" if len(errors) > 5 else ""
-    return (f"运行时模板编译失败：{len(errors)} 个错误。{details}{more}。"
-            f"请在模板设计器中修正这些字段的 Word 位置，或停用不再使用的映射。")
-
-
-def runtime_template_and_mappings() -> tuple[Path, list[dict], list[dict], dict[str, str]]:
-    active = rule_admin.active_runtime_template()
-    if active:
-        snapshot = active["snapshot"]
-        # 表格布局是设计器的当前配置；重新生成不能继续使用发布快照中的旧布局。
-        snapshot = {**snapshot, "tableRules": rule_admin.list_table_rules()}
-        published_template = active.get("templateFile")
-    else:
-        snapshot, published_template = rule_admin.active_runtime_rules()
-        snapshot = {**snapshot, "tableRules": rule_admin.list_table_rules()}
-    mappings = _apply_content_block_rules(snapshot)
-    if published_template:
-        candidate = Path(published_template)
-        if candidate.exists():
-            revision = hashlib.sha256(candidate.read_bytes()).hexdigest()
-            configuration = hashlib.sha256(json.dumps(
-                {"mappings": mappings, "tableRules": snapshot["tableRules"]},
-                ensure_ascii=False, sort_keys=True, default=str,
-            ).encode("utf-8")).hexdigest()
-            output = settings.template_path.parent / "compiled" / f"runtime-{revision[:12]}-{configuration[:12]}.docx"
-            if not output.exists():
-                report = compile_template(candidate, output, mappings, snapshot["tableRules"])
-                if not report["valid"]:
-                    raise RuntimeError(_compile_failure_message(report))
-            return output, mappings, snapshot["tableRules"], {
-                "template_id": str(active.get("templateId", "")) if active else "",
-                "template_name": str(active.get("templateName", "")) if active else "",
-                "template_code": str(active.get("templateCode", "")) if active else "",
-                "template_catalog_version_id": str(active.get("versionId", "")) if active else "",
-                "template_version": f"V{active['versionNo']}" if active else "V1.0",
-                "template_revision": revision,
-            }
-    # 走到这里说明模板库里没有可用的已发布版本。以前会静默拿基座模板顶上，
-    # 生成出来的报告外观相近却不是用户配的那套模板，很难一眼看出来——直接拦住。
-    workspace = rule_admin.active_workspace()
-    if workspace:
-        raise RuntimeError(
-            f"当前模板「{workspace.get('templateName') or ''}」的 V{workspace.get('versionNo')} 版本还是"
-            f"{'草稿' if workspace.get('versionStatus') == 'DRAFT' else workspace.get('versionStatus')}状态，"
-            f"运行时只使用已发布版本。请在模板设计器中发布该版本后再生成报告。"
-        )
-    output = settings.template_path.parent / "compiled" / "runtime-report-template.docx"
-    report = compile_template(settings.template_path, output, mappings, snapshot["tableRules"])
-    if not report["valid"]:
-        raise RuntimeError(_compile_failure_message(report))
-    return output, mappings, snapshot["tableRules"], {
-        "template_name": "系统基座模板",
-        "template_version": "V1.0",
-        "template_revision": hashlib.sha256(output.read_bytes()).hexdigest(),
-    }
+def runtime_template_and_mappings(template_id: str | None = None):
+    return resolve_runtime_template(settings, rule_admin, _apply_content_block_rules, template_id)
 
 
 def record_generation(report_id: str, data: dict, phase: str, actor: str = "",
@@ -208,15 +149,13 @@ def record_generation(report_id: str, data: dict, phase: str, actor: str = "",
 
 def render_report_word(item: dict, data: dict, payload: dict | None = None,
                        output_suffix: str = "", phase: str = "", actor: str = "") -> str:
-    template, mappings, table_rules, template_meta = runtime_template_and_mappings()
+    template, mappings, table_rules, template_meta = runtime_template_and_mappings(data.get("template_id") or None)
     data.update(template_meta)
     output_name = (f"report-{item['id']}-{output_suffix}.docx" if output_suffix
                    else f"report-{item['id']}-working.docx")
+    refresh_protocol_source(database, settings, data)
     source_payloads = data.get("source_payloads", {})
-    active_payload = payload or next(
-        (source_payloads.get(name) for name in ("EXCEL", "LIMS", "PDF")
-         if isinstance(source_payloads.get(name), dict)), {}
-    )
+    active_payload = payload or active_standard_payload(data)
     apply_group_contracts(active_payload, list_system_field_groups(database))
     if not payload:
         for source_name in ("EXCEL", "LIMS", "PDF"):
@@ -313,7 +252,11 @@ def batch_export_reports(payload: dict, user: dict = Depends(auth.require("REPOR
                 name = f"{base}-{counter}.docx"
                 counter += 1
             used_names.add(name)
-            output.write(path, name)
+            try:
+                output.writestr(name, export_docx_bytes(path))
+            except Exception as error:
+                logger.exception("批量报告导出失败 report_id=%s", report_id)
+                raise HTTPException(422, f"批量报告导出失败：{error}") from error
     archive.seek(0)
     return StreamingResponse(
         archive, media_type="application/zip",
@@ -334,7 +277,7 @@ def personal_report_generations(page: int = 1, page_size: int = 100,
 
 @app.get(f"{settings.api_prefix}/report-generations/{{generation_id}}/file")
 def download_generation(generation_id: str,
-                        user: dict = Depends(auth.require("REPORT_DOWNLOAD"))) -> FileResponse:
+                        user: dict = Depends(auth.require("REPORT_DOWNLOAD"))) -> Response:
     generation = database.get_generation(generation_id)
     if not generation or generation.get("generated_by") != user["id"] or generation.get("status") != "SUCCESS":
         raise HTTPException(404, "导出记录不存在")
@@ -342,11 +285,13 @@ def download_generation(generation_id: str,
     path = (settings.reports_dir / output_name).resolve()
     if not output_name or path.parent != settings.reports_dir.resolve() or not path.is_file():
         raise HTTPException(404, "导出文件不存在")
-    return FileResponse(
-        path,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=f"{generation['title']}.docx",
-    )
+    return export_docx_response(path, generation["title"])
+
+
+@app.get(f"{settings.api_prefix}/report-templates")
+def list_report_templates(user: dict = Depends(auth.require("REPORT_CREATE"))) -> list[dict]:
+    return [item for item in rule_admin.list_templates()
+            if item["status"] == "ACTIVE" and item["publishedVersion"] is not None]
 
 
 @app.post(f"{settings.api_prefix}/reports", response_model=ReportTask)
@@ -355,12 +300,19 @@ def create_report(request: CreateReportRequest,
     report_id = ""
     try:
         source = required_source(request.source_document_id) if request.source_document_id else None
+        if source and source.get("source_type") != "PDF":
+            raise HTTPException(422, "PDF 数据源类型无效")
         excel_source = required_source(request.excel_document_id) if request.excel_document_id else None
+        protocol_source = required_source(request.protocol_document_id) if request.protocol_document_id else None
+        if protocol_source and protocol_source.get("source_type") != "PROTOCOL":
+            raise HTTPException(422, "方案文件类型无效，请上传 DOCX 格式的 Word 方案")
         if excel_source and excel_source.get("source_type") != "EXCEL":
             raise HTTPException(422, "Excel 数据源类型无效")
         data = request.data.model_dump() if request.data else default_report_data()
-        *_, template_meta = runtime_template_and_mappings()
+        *_, template_meta = runtime_template_and_mappings(request.template_id)
         data.update(template_meta)
+        if protocol_source:
+            apply_protocol_document(data, protocol_source, settings.api_prefix)
         if source:
             apply_pdf_source(data, source)
         if excel_source:
@@ -369,12 +321,9 @@ def create_report(request: CreateReportRequest,
             source_payload = data.get("source_payloads", {}).get(source_name)
             if isinstance(source_payload, dict):
                 apply_group_contracts(source_payload, list_system_field_groups(database))
+        refresh_protocol_source(database, settings, data)
         # 在报告和首条生成历史入库前解析系统字段，确保后台详情反映本次提取结果。
-        active_payload = next(
-            (data.get("source_payloads", {}).get(name) for name in ("EXCEL", "LIMS", "PDF")
-             if isinstance(data.get("source_payloads", {}).get(name), dict)),
-            {},
-        )
+        active_payload = active_standard_payload(data)
         resolve_system_fields(database.list_lims_fields(), database.list_system_field_rules(),
                               active_payload, data)
         if not data["project_name"] and data["sample"]:
@@ -524,7 +473,7 @@ def generate_report(report_id: str, user: dict = Depends(auth.require("REPORT_GE
                                                             "original_values": item["resolved_data"].get("original_values", {})},
                                     "generation_context": {"phase": "导出 Word", "template_revision": item["resolved_data"].get("template_revision", "")}})
         output_name = f"report-{report_id}-export-{generation_id[:12]}.docx"
-        shutil.copy2(working_path, settings.reports_dir / output_name)
+        write_export_docx(working_path, settings.reports_dir / output_name)
     except Exception as error:
         logger.exception("报告生成失败 report_id=%s", report_id)
         if "generation_id" in locals():

@@ -35,7 +35,7 @@ def ensure_lims_catalog_defaults(database: Any) -> None:
             database.upsert_lims_field({
                 "fieldCode": field_code, "label": label, "groupCode": "验证结果汇总",
                 "collectionCode": "validationSummary", "dataType": data_type, "cardinality": "MANY",
-                "dbTable": "lims_standard_records", "dbColumn": "data_json", "jsonKey": json_key,
+                "jsonKey": json_key,
                 "legacyJsonPath": f"$.validationSummary[*].{json_key}", "enabled": True,
             })
         _ensure_lims_rule(database, field_code, f"$.validationSummary[*].{json_key}")
@@ -54,7 +54,7 @@ def _ensure_limit_calculation_fields(database: Any) -> None:
             database.upsert_lims_field({
                 "fieldCode": field_code, "label": label, "groupCode": "杂质信息 · 限度计算",
                 "collectionCode": "limit", "dataType": data_type, "cardinality": "MANY",
-                "dbTable": "lims_standard_records", "dbColumn": "data_json", "jsonKey": json_key,
+                "jsonKey": json_key,
                 "legacyJsonPath": f"$.limit[*].{json_key}", "enabled": True,
             })
         _ensure_lims_rule(database, field_code, f"$.limit[*].{json_key}")

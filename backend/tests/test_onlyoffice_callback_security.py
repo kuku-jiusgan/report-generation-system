@@ -101,7 +101,7 @@ def build_env(tmp_path: Path, secret: str = SECRET):
             raise HTTPException(404, "报告不存在")
         return row
 
-    def runtime_template_and_mappings():
+    def runtime_template_and_mappings(template_id: str | None = None):
         return settings.template_path, [], [], {"template_revision": state["revision"]}
 
     rendered: list[str] = []

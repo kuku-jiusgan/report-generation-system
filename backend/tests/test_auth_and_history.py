@@ -65,13 +65,16 @@ class AuthenticationAndHistoryTest(unittest.TestCase):
         timestamp = now_iso()
         report = self.database.create_report({
             "id": uuid.uuid4().hex, "title": "历史报告", "status": "DATA_REVIEW",
-            "resolved_data": {"report_no": "R-001"}, "created_at": timestamp, "updated_at": timestamp,
+            "resolved_data": {"report_no": "R-001", "source_payloads": {"LIMS": {"raw": "x" * 10000}}},
+            "created_at": timestamp, "updated_at": timestamp,
             "created_by": user["id"], "updated_by": user["id"],
         })
         version = self.database.create_version(report["id"], report["resolved_data"], "生成")
         self.database.create_generation({
             "id": "success", "report_id": report["id"], "version_id": version["id"],
             "generated_by": user["id"], "status": "SUCCESS", "output_name": "one.docx",
+            "generation_snapshot": {"resolved_data": report["resolved_data"]},
+            "generation_context": {"phase": "生成", "inputs": "x" * 10000},
         })
         self.database.create_generation({
             "id": "failed", "report_id": report["id"], "version_id": version["id"],
@@ -80,6 +83,13 @@ class AuthenticationAndHistoryTest(unittest.TestCase):
         page = self.database.list_generations(query="R-001")
         self.assertEqual(2, page["total"])
         self.assertEqual({"SUCCESS", "FAILED"}, {item["status"] for item in page["items"]})
+        success = next(item for item in page["items"] if item["id"] == "success")
+        self.assertEqual({"report_no": "R-001"}, success["resolved_data"])
+        self.assertEqual({"phase": "生成"}, success["generation_context"])
+        self.assertNotIn("generation_snapshot", success)
+        detail = self.database.get_generation("success")
+        self.assertEqual(report["resolved_data"], detail["generation_snapshot"]["resolved_data"])
+        self.assertEqual("x" * 10000, detail["generation_context"]["inputs"])
 
     def test_generation_date_filter_uses_utc_timestamps(self) -> None:
         user = self.create_report_user("datefilter")

@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from .auth import AuthManager, PERMISSIONS
 from .config import Settings
 from .database import Database
+from .services.ai_field_generator import AiGenerationError
+from .services.ai_report_context import report_ai_context
 
 
 class CreateUserRequest(BaseModel):
@@ -17,6 +19,12 @@ class CreateUserRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=8, max_length=256)
     role_code: str
+
+
+class ReportAiContextRequest(BaseModel):
+    config: dict[str, Any]
+    fieldCode: str = ""
+    recordIndex: int | None = Field(default=None, ge=0)
 
 
 class UpdateUserRequest(BaseModel):
@@ -138,6 +146,22 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
         if not item:
             raise HTTPException(404, "生成记录不存在")
         return item
+
+    @router.post("/report-history/{generation_id}/ai-context")
+    def import_report_ai_context(generation_id: str, payload: ReportAiContextRequest,
+                                 actor: dict[str, Any] = Depends(auth.require("REPORT_HISTORY_VIEW"))) -> dict[str, Any]:
+        item = database.get_generation(generation_id)
+        if not item:
+            raise HTTPException(404, "生成记录不存在")
+        try:
+            field = database.get_lims_field(payload.fieldCode) if payload.fieldCode else None
+            if payload.fieldCode and not field:
+                raise HTTPException(404, "AI 目标标准字段不存在")
+            return report_ai_context(item, payload.config,
+                                     str((field or {}).get("collectionCode") or ""), payload.recordIndex, field,
+                                     database.list_lims_fields(True))
+        except AiGenerationError as error:
+            raise HTTPException(422, str(error)) from error
 
     @router.get("/report-history/{generation_id}/file")
     def download_history_file(generation_id: str,

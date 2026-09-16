@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .auth import AuthManager
 from .config import Settings
@@ -19,6 +19,7 @@ from .onlyoffice_callback import assert_document_server_url, callback_status, ve
 from .report_utils import has_custom_report_title, resolved_report_title
 from .services.rule_admin import RuleAdminRepository
 from .services.word_sync import read_bound_values
+from .services.docx_export import export_docx_response
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def create_report_word_router(
     database: Database, settings: Settings, auth: AuthManager, rule_admin: RuleAdminRepository,
     required_report: Callable[[str], dict[str, Any]],
     required_owned_report: Callable[[str, dict[str, Any]], dict[str, Any]],
-    runtime_template_and_mappings: Callable[[], tuple[Path, list[dict], list[dict], dict[str, str]]],
+    runtime_template_and_mappings: Callable[..., tuple[Path, list[dict], list[dict], dict[str, str]]],
     render_report_word: Callable[..., str],
     require_automatic_edit_allowed: Callable[[dict[str, Any]], None],
     apply_content_block_rules: Callable[[dict], list[dict]],
@@ -41,7 +42,7 @@ def create_report_word_router(
     _apply_content_block_rules = apply_content_block_rules
     @router.get(f"{settings.api_prefix}/reports/{{report_id}}/file")
     def download_report(report_id: str, document_token: str = "",
-                        user: dict | None = Depends(auth.optional_user)) -> FileResponse:
+                        user: dict | None = Depends(auth.optional_user)) -> Response:
         item = required_report(report_id)
         signed_access = False
         if document_token and settings.onlyoffice_jwt_secret:
@@ -60,6 +61,8 @@ def create_report_word_router(
         path = settings.reports_dir / f"report-{report_id}-working.docx"
         if not path.exists():
             raise HTTPException(404, "报告文件不存在")
+        if not signed_access:
+            return export_docx_response(path, item["title"])
         return FileResponse(
             path,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -72,7 +75,7 @@ def create_report_word_router(
         path = settings.reports_dir / working_name
         previous_name = item.get("output_name")
         previous_path = settings.reports_dir / previous_name if previous_name else None
-        *_, template_meta = runtime_template_and_mappings()
+        *_, template_meta = runtime_template_and_mappings(item["resolved_data"].get("template_id") or None)
         template_changed = item["resolved_data"].get("template_revision") != template_meta["template_revision"]
         metadata_changed = any(item["resolved_data"].get(key) != value for key, value in template_meta.items())
         if template_changed and not item.get("word_edit_locked"):
@@ -103,8 +106,7 @@ def create_report_word_router(
 
 
     def sync_word_fields(item: dict, path: Path) -> dict:
-        snapshot, _ = rule_admin.active_runtime_rules()
-        mappings = _apply_content_block_rules(snapshot)
+        _, mappings, *_ = runtime_template_and_mappings(item["resolved_data"].get("template_id") or None)
         bound_values, canonical_values = read_bound_values(path, mappings)
         data = dict(item["resolved_data"])
         old_word = data.get("source_payloads", {}).get("WORD", {}).get("boundValues", {})
@@ -220,8 +222,8 @@ def create_report_word_router(
             with urllib.request.urlopen(payload["url"], timeout=60) as response, temp_path.open("wb") as target:
                 target.write(response.read())
             # Validate and extract controls before replacing the known-good working file.
-            snapshot, _ = rule_admin.active_runtime_rules()
-            read_bound_values(temp_path, _apply_content_block_rules(snapshot))
+            _, mappings, *_ = runtime_template_and_mappings(item["resolved_data"].get("template_id") or None)
+            read_bound_values(temp_path, mappings)
             temp_path.replace(output)
             updated = sync_word_fields(item, output)
             database.create_version(report_id, updated["resolved_data"], "ONLYOFFICE 自动保存")

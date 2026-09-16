@@ -155,8 +155,14 @@ class ReportRepositoryMixin:
         return self._decode(row, ("resolved_data", "generation_snapshot", "generation_context"))
 
     @staticmethod
-    def _generation_select() -> str:
-        return """SELECT g.*,r.title,r.status AS report_status,r.resolved_data,
+    def _generation_select(*, summary: bool = False) -> str:
+        columns = "g.*,r.resolved_data"
+        if summary:
+            columns = """g.id,g.report_id,g.version_id,g.generated_by,g.status,g.output_name,
+                g.error_message,g.generated_at,g.legacy,
+                JSON_OBJECT('report_no',JSON_EXTRACT(r.resolved_data,'$.report_no')) AS resolved_data,
+                JSON_OBJECT('phase',JSON_EXTRACT(g.generation_context,'$.phase')) AS generation_context"""
+        return f"""SELECT {columns},r.title,r.status AS report_status,
                   u.username,u.display_name,v.version_no FROM report_generation_history g
                   JOIN reports r ON r.id=g.report_id LEFT JOIN auth_users u ON u.id=g.generated_by
                   LEFT JOIN report_versions v ON v.id=g.version_id"""
@@ -209,8 +215,8 @@ class ReportRepositoryMixin:
                 f"SELECT COUNT(*) FROM report_generation_history g JOIN reports r ON r.id=g.report_id {clause}", params,
             ).fetchone()[0])
             rows = connection.execute(
-                f"{self._generation_select()} {clause} ORDER BY g.generated_at DESC LIMIT %s OFFSET %s",
+                f"{self._generation_select(summary=True)} {clause} ORDER BY g.generated_at DESC LIMIT %s OFFSET %s",
                 (*params, page_size, (page - 1) * page_size),
             ).fetchall()
         return {"total": total, "page": page, "pageSize": page_size,
-                "items": [self._decode(row, ("resolved_data", "generation_snapshot", "generation_context")) for row in rows]}
+                "items": [self._decode(row, ("resolved_data", "generation_context")) for row in rows]}

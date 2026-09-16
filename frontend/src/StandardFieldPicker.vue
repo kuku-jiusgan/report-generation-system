@@ -16,8 +16,11 @@ const filtered = computed(() => {
 const groupDisplay = (field: StandardField) => field.groupLabels?.length
   ? field.groupLabels.join(' / ')
   : field.groupLabel || field.groupCode || '未分组'
-const dbLocation = (field: StandardField) =>
-  `${field.dbTable}.${field.dbColumn}${field.jsonKey ? ` → ${field.jsonKey}` : ''}`
+// 存储位置由字段所属集合的落库方式推出来；推不出来说明该集合不落库，没有证据可查。
+const dbLocation = (field: StandardField) => {
+  const key = field.jsonKey ? ` → ${field.jsonKey}` : ''
+  return field.dbTable ? `${field.dbTable}.${field.dbColumn}${key}` : `不落库${key}`
+}
 
 function choose(field: StandardField) {
   emit('select', field)

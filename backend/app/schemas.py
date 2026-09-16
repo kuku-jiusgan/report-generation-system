@@ -83,9 +83,11 @@ class QueryLimsRequest(BaseModel):
 
 
 class CreateReportRequest(BaseModel):
+    template_id: str | None = Field(default=None, min_length=1)
     title: str | None = None
     source_document_id: str | None = None
     excel_document_id: str | None = None
+    protocol_document_id: str | None = Field(default=None, min_length=1)
     data: ReportData | None = None
 
 

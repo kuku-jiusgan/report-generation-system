@@ -1,6 +1,7 @@
+import type { AdminTemplate } from './admin-api'
 import axios from 'axios'
 
-export type SourceType = 'LIMS' | 'PDF' | 'EXCEL' | 'MANUAL' | 'MANUAL_WORD' | 'CALCULATED'
+export type SourceType = 'LIMS' | 'PDF' | 'EXCEL' | 'PROTOCOL' | 'MANUAL' | 'MANUAL_WORD' | 'CALCULATED'
 
 export interface SourceRef {
   type: SourceType
@@ -118,7 +119,7 @@ export interface ReportGeneration {
   error_message?: string
   generated_at: string
   title: string
-  resolved_data: ReportData
+  resolved_data: { report_no: string | null }
 }
 
 export interface ReportGenerationPage {
@@ -182,6 +183,24 @@ export async function uploadExcel(file: File, onProgress?: (percent: number) => 
   return uploadPdf(file, onProgress)
 }
 
+export async function uploadProtocol(file: File) {
+  return uploadPdf(file)
+}
+
+export async function downloadProtocolDocument(data: ReportData) {
+  const document = data.source_payloads?.PROTOCOL_DOCUMENT
+  if (!document || typeof document.id !== 'string' || typeof document.fileName !== 'string') {
+    throw new Error('报告方案附件信息无效')
+  }
+  const blob = (await http.get<Blob>(`/source-documents/${encodeURIComponent(document.id)}/preview`, { responseType: 'blob' })).data
+  const url = URL.createObjectURL(blob)
+  const link = window.document.createElement('a')
+  link.href = url
+  link.download = document.fileName
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 export async function extractPdf(id: string) {
   return (await http.post<SourceDocument>(`/source-documents/${id}/extract`)).data
 }
@@ -190,9 +209,13 @@ export async function extractExcel(id: string) {
   return extractPdf(id)
 }
 
-export async function createReport(sourceDocumentId?: string, excelDocumentId?: string) {
+export async function listReportTemplates() {
+  return (await http.get<AdminTemplate[]>('/report-templates')).data
+}
+
+export async function createReport(sourceDocumentId?: string, excelDocumentId?: string, templateId?: string, protocolDocumentId?: string) {
   return (await http.post<ReportTask>('/reports', {
-    source_document_id: sourceDocumentId, excel_document_id: excelDocumentId,
+    source_document_id: sourceDocumentId, excel_document_id: excelDocumentId, template_id: templateId, protocol_document_id: protocolDocumentId,
   })).data
 }
 

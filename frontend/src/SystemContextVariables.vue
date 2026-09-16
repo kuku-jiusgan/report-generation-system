@@ -5,7 +5,7 @@ import type { StandardField } from './admin-api'
 
 /** 上下文变量：AI 提示词和计算规则的文本模板共用同一套取值方式。 */
 export type ContextVariable = {
-  fieldCode?: string; groupCode?: string; required: boolean; mode: 'FIRST' | 'JOIN_UNIQUE' | 'COUNT_UNIQUE' | 'CURRENT_RECORD';
+  fieldCode?: string; groupCode?: string; required: boolean; mode: 'ALL' | 'FIRST' | 'JOIN_UNIQUE' | 'COUNT_UNIQUE' | 'CURRENT_RECORD';
   separator: string; suffix: string; defaultValue: string; previewValue?: string
 }
 
@@ -13,10 +13,15 @@ const props = defineProps<{ fields: StandardField[]; groups?: Array<{ groupCode:
 const emit = defineEmits<{ insert: [code: string] }>()
 const variables = defineModel<ContextVariable[]>({ required: true })
 
-const modes = [
+const fieldModes = [
+  { value: 'ALL', label: '全部信息' },
   { value: 'FIRST', label: '取第一个值' },
   { value: 'JOIN_UNIQUE', label: '列表去重拼接' },
   { value: 'COUNT_UNIQUE', label: '去重计数' },
+  { value: 'CURRENT_RECORD', label: '当前记录' },
+]
+const groupModes = [
+  { value: 'ALL', label: '全部信息' },
   { value: 'CURRENT_RECORD', label: '当前记录' },
 ]
 
@@ -54,15 +59,21 @@ function removeVariable(index: number) {
 function getVariableCode(item: ContextVariable) {
   return item.groupCode || item.fieldCode || ''
 }
+function getVariableMode(item: ContextVariable) {
+  // 编组历史配置中的 FIRST/JOIN_UNIQUE/COUNT_UNIQUE 实际均传递全部数据。
+  return item.groupCode && item.mode !== 'CURRENT_RECORD' ? 'ALL' : item.mode
+}
 function setVariableCode(item: ContextVariable, code: string) {
   const option = selectOptions.value.find(opt => opt.code === code)
   if (option?.type === 'group') {
     item.groupCode = code
     item.fieldCode = ''
+    item.mode = 'ALL'
   } else {
     item.fieldCode = code
     item.groupCode = ''
   }
+  item.previewValue = ''
 }
 </script>
 
@@ -73,18 +84,18 @@ function setVariableCode(item: ContextVariable, code: string) {
       <el-select :model-value="getVariableCode(item)" @update:model-value="setVariableCode(item, $event)" filterable placeholder="选择编组或字段">
         <el-option v-for="option in selectOptions" :key="option.code" :label="option.label" :value="option.code" />
       </el-select>
-      <el-select v-model="item.mode">
-        <el-option v-for="mode in modes" :key="mode.value" :label="mode.label" :value="mode.value" />
+      <el-select :model-value="getVariableMode(item)" @update:model-value="item.mode = $event" aria-label="上下文取值方式">
+        <el-option v-for="mode in (item.groupCode ? groupModes : fieldModes)" :key="mode.value" :label="mode.label" :value="mode.value" />
       </el-select>
-      <el-input v-if="item.mode === 'JOIN_UNIQUE'" v-model="item.separator" placeholder="连接符" />
-      <el-input v-if="item.mode !== 'COUNT_UNIQUE' && item.mode !== 'CURRENT_RECORD'" v-model="item.suffix" placeholder="每个值的后缀" />
+      <el-input v-if="!item.groupCode && item.mode === 'JOIN_UNIQUE'" v-model="item.separator" placeholder="连接符" />
+      <el-input v-if="!item.groupCode && ['FIRST', 'JOIN_UNIQUE'].includes(item.mode)" v-model="item.suffix" placeholder="每个值的后缀" />
       <el-input v-model="item.defaultValue" placeholder="缺失默认值" />
       <el-checkbox v-model="item.required">必填</el-checkbox>
       <el-button v-if="insertLabel" link type="primary" @click="emit('insert', getVariableCode(item))">{{ insertLabel }}</el-button>
       <el-button link type="danger" :icon="Delete" @click="removeVariable(index)" />
     </div>
     <small class="context-hint">
-      编组会传递整个编组的数据（对象或数组），单字段传递字段值。取值方式决定成组字段怎么拼成一句话：去重拼接得到"1.4%、0.3%、0.5%"，取值全相同时自动收敛成一个；去重计数得到条数；<strong>当前记录</strong>用于AI字段在编组内部，按每条记录生成（如每个杂质生成一个结论）。
+      编组默认传递<strong>全部信息</strong>，包含所有记录及其下层数据；单字段选择<strong>全部信息</strong>时传递该字段的完整值，保留重复值和下层数据。<strong>当前记录</strong>只传递当前一条记录，用于逐条生成结论。单字段还可以取第一个值、去重拼接或去重计数。AI 上下文会排除正在生成的目标字段自身。
     </small>
   </div>
 </template>

@@ -81,11 +81,20 @@ export interface SystemGroupColumnMapping {
 }
 
 export interface SystemGroupSourceMapping {
-  sourceType: 'EXCEL' | 'LIMS';
+  sourceType: 'EXCEL' | 'LIMS' | 'PROTOCOL';
+  endPattern?: string;
+  rowPattern?: string;
   sectionPattern?: string;
   worksheetPattern?: string;
   headerPattern?: string;
+  rowExpansion?: ProtocolRowExpansion;
   columnMappings: SystemGroupColumnMapping[];
+}
+
+export interface ProtocolRowExpansion {
+  valueScope: 'PER_PARENT_ROW';
+  levelKey: string;
+  parentFieldCode: string;
 }
 
 export interface SystemFieldGroup {
@@ -323,6 +332,11 @@ export interface GenerationHistoryPage {
   total: number; page: number; pageSize: number; items: GenerationHistoryItem[];
 }
 
+export interface ReportAiContext {
+  values: Record<string, unknown>; context: Record<string, string>; missing: string[];
+  records: Record<string, unknown>[]; currentRecord: Record<string, unknown> | null; requiresCurrentRecord: boolean;
+}
+
 const limsHttp = axios.create({ baseURL: "/api/v1/lims", timeout: 120000 });
 limsHttp.interceptors.response.use(undefined, (error) => {
   if (error.response?.status === 401) window.dispatchEvent(new Event("auth-expired"));
@@ -349,6 +363,8 @@ export const adminApi = {
     (await http.get<GenerationHistoryPage>('/report-history', { params })).data,
   reportHistoryDetail: async (id: string) =>
     (await http.get<GenerationHistoryItem>(`/report-history/${id}`)).data,
+  reportAiContext: async (id: string, config: Record<string, unknown>, fieldCode?: string, recordIndex?: number) =>
+    (await http.post<ReportAiContext>(`/report-history/${id}/ai-context`, { config, fieldCode, recordIndex })).data,
   reportHistoryDownloadUrl: (id: string) => `/api/v1/admin/report-history/${id}/file`,
   templates: async () => (await http.get<AdminTemplate[]>("/templates")).data,
   createTemplate: async (data: {

@@ -18,6 +18,7 @@ import {
 } from './lims-api'
 import type { AuthUser } from './auth-api'
 import { useReportChapterTree, type ReportTreeNode } from './composables/useReportChapterTree'
+import ProtocolAttachment from './ProtocolAttachment.vue'
 import { useReportWordEditor } from './composables/useReportWordEditor'
 
 const props = defineProps<{ sessionUser: AuthUser; initialReportId?: string }>()
@@ -72,7 +73,7 @@ const limsCollectionLabels: Record<string, string> = {
 }
 
 const sourceLabels: Record<SourceType, string> = {
-  LIMS: 'LIMS', PDF: 'PDF', EXCEL: 'Excel', MANUAL: '人工', MANUAL_WORD: 'Word 人工编辑', CALCULATED: '计算',
+  LIMS: 'LIMS', PDF: 'PDF', EXCEL: 'Excel', PROTOCOL: '方案', MANUAL: '人工', MANUAL_WORD: 'Word 人工编辑', CALCULATED: '计算',
 }
 
 function readField(code: string): string {
@@ -465,12 +466,13 @@ onMounted(() => {
             </el-upload>
             <el-progress v-if="busy.upload" :percentage="uploadPercent" :show-text="false" :stroke-width="3" />
           </div>
+          <ProtocolAttachment :data="report.resolved_data" />
           <el-tree :data="chapterTreeData" node-key="id" :expand-on-click-node="true"
             highlight-current class="lims-data-tree chapter-source-tree" @node-click="selectLimsTreeNode">
             <template #default="{ data }">
               <span class="lims-tree-node" :class="{ directory: data.children?.length, field: !data.children?.length }">
                 <span>{{ data.label }}</span><small v-if="!data.children?.length">{{ data.value || '' }}</small>
-                <i v-if="data.sourceType" class="tree-source-mark" :class="data.sourceType.toLowerCase()">{{ data.sourceType }}</i>
+                <i v-if="data.sourceType" class="tree-source-mark" :class="data.sourceType.toLowerCase()">{{ sourceLabels[data.sourceType as SourceType] || '其他来源' }}</i>
               </span>
             </template>
           </el-tree>

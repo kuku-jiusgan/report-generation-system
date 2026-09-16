@@ -3,6 +3,35 @@ import json
 from typing import Any
 
 from ..database_common import now_iso
+from ..services.lims_normalizer import COLLECTION_ORDER
+
+
+# 归一化载荷里不成行的段（project、document，以及基数为 ONE 的编组）整段存这一列。
+# 记录型集合（samples、weighings……）仍然一行一条存在 lims_standard_records。
+# 过去这些段只被投影成 project_id/project_name/document_code/document_version 四个列，
+# 键名写死在代码里，段里其余的键落库时就丢了——客户名称走 `$.project.clientName`，
+# 原始数据里有值，存完却取不到，生成报告时整个字段是空的。
+SECTION_COLUMN = "sections_json"
+
+# 导入时一行一条写进 lims_standard_records 的集合。
+RECORD_COLLECTIONS = frozenset({"approval", *COLLECTION_ORDER})
+
+
+def collection_storage(collection_code: str, cardinality: str) -> tuple[str, str] | None:
+    """某个集合的数据落在哪张表哪一列，没落库的返回 None。
+
+    字段的证据位置由它所属集合的落库方式决定，不逐字段声明——声明和实际存法是两份东西，
+    迟早会对不上：客户名称的集合是 project（不成行的段），声明却写着"一行一条存在
+    lims_standard_records"，而 project 从来没有记录行，取值预览因此永远是 0 条。
+
+    基数为 ONE 的编组是不成行的段，整段存在段列里；其余集合（例如溶液视图，读取时才从
+    solutions 派生）根本不落库，没有自己的证据可查。
+    """
+    if collection_code in RECORD_COLLECTIONS:
+        return "lims_standard_records", "data_json"
+    if str(cardinality or "").upper() == "ONE":
+        return "lims_experiments", SECTION_COLUMN
+    return None
 
 
 class LimsInstanceRepositoryMixin:
@@ -42,22 +71,25 @@ class LimsInstanceRepositoryMixin:
     def _upsert_experiment(connection: Any, import_id: str, instance_id: str,
                            raw: dict[str, Any], normalized: dict[str, Any]) -> None:
         project, document = normalized.get("project", {}), normalized.get("document", {})
+        # 段的形状决定存法：字典是不成行的段，整段存进 sections_json；列表是记录型集合，走标准记录表。
+        sections = {key: value for key, value in normalized.items() if isinstance(value, dict)}
         connection.execute(
-            """INSERT INTO lims_experiments(import_id,instance_id,project_id,project_name,document_code,
+            f"""INSERT INTO lims_experiments(import_id,instance_id,project_id,project_name,document_code,
                document_version,title,experiment_version,created_by,created_at_source,approved_by,
-               approved_at_source,raw_payload,normalized_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               approved_at_source,raw_payload,{SECTION_COLUMN},normalized_at)
+               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON DUPLICATE KEY UPDATE project_id=VALUES(project_id),
                project_name=VALUES(project_name),document_code=VALUES(document_code),
                document_version=VALUES(document_version),title=VALUES(title),
                experiment_version=VALUES(experiment_version),created_by=VALUES(created_by),
                created_at_source=VALUES(created_at_source),approved_by=VALUES(approved_by),
                approved_at_source=VALUES(approved_at_source),raw_payload=VALUES(raw_payload),
-               normalized_at=VALUES(normalized_at)""",
+               {SECTION_COLUMN}=VALUES({SECTION_COLUMN}),normalized_at=VALUES(normalized_at)""",
             (import_id, instance_id, raw.get("projectId"), project.get("name") or "",
              document.get("code") or "", document.get("version") or "", raw.get("title") or "",
              str(raw.get("version") or ""), raw.get("createdBy") or "", raw.get("createdTime"),
              raw.get("approvedBy") or "", raw.get("approvedTime"),
-             json.dumps(raw, ensure_ascii=False), now_iso()),
+             json.dumps(raw, ensure_ascii=False), json.dumps(sections, ensure_ascii=False), now_iso()),
         )
 
     @classmethod
@@ -111,8 +143,8 @@ class LimsInstanceRepositoryMixin:
     def get_lims_normalized_payload(self, import_id: str, instance_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             experiment = connection.execute(
-                """SELECT project_id,project_name,document_code,document_version,title,
-                          experiment_version,created_by,created_at_source FROM lims_experiments
+                f"""SELECT project_id,title,experiment_version,created_by,created_at_source,
+                          {SECTION_COLUMN} FROM lims_experiments
                    WHERE import_id=%s AND instance_id=%s""", (import_id, instance_id),
             ).fetchone()
             if not experiment:
@@ -137,8 +169,8 @@ class LimsInstanceRepositoryMixin:
     @staticmethod
     def _normalized_header(experiment: Any, instance_id: str, unmatched: list[Any]) -> dict[str, Any]:
         return {
-            "project": {"id": experiment["project_id"] or "", "name": experiment["project_name"] or ""},
-            "document": {"code": experiment["document_code"] or "", "version": experiment["document_version"] or ""},
+            # 段整段还原，键名不在这里写死：段里存了什么键就还回什么键。
+            **json.loads(experiment[SECTION_COLUMN] or "{}"),
             "approval": [], "instances": [{
                 "instanceId": instance_id, "title": experiment["title"] or "",
                 "projectId": experiment["project_id"] or "", "version": experiment["experiment_version"] or "",

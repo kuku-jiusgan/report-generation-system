@@ -8,10 +8,12 @@ from ..services.rule_admin import RuleAdminRepository
 from ..services.calculation_engine import CalculationError, validate_calculation
 from ..services.docx_control_index import control_locations, describe_binding
 from ..services.ai_field_generator import AiGenerationError, generate_ai_text, render_ai_prompt
+from ..services.ai_context_inputs import prepare_ai_context
 from ..services.ai_service_config import load_ai_service_config, save_ai_service_config
 from ..services.system_field_groups import assign_field_to_group, assign_group_to_chapter, delete_system_field_group, list_system_field_groups, move_field_ownership, remove_field_from_group, reorder_group_fields, save_system_field_group, sync_group_field_paths
 from ..services.system_field_group_levels import delete_group_level, move_field_to_level, save_group_level, structure_preview
 from ..services.excel_standard_path import excel_target_path
+from ..services.protocol_rules import validate_protocol_conflicts
 
 
 CHAPTER_FIELD_PREFIXES = {
@@ -109,7 +111,7 @@ def _validate_standard_field(
         raise HTTPException(409, "标准字段编码已存在")
     defaults = {
         "groupCode": "未分类", "collectionCode": "custom", "dataType": "string",
-        "cardinality": "ONE", "dbTable": "system_generated_fields", "dbColumn": "value_json",
+        "cardinality": "ONE",
         "jsonKey": field_code.rsplit(".", 1)[-1], "legacyJsonPath": f"$.custom.{field_code.rsplit('.', 1)[-1]}",
         "description": "", "outputFormat": "", "defaultValue": "", "validationRegex": "",
         "orderNo": 0, "enabled": True,
@@ -124,7 +126,7 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
     if not str(item.get("name") or "").strip():
         raise HTTPException(422, "规则名称不能为空")
     source_type = str(item.get("sourceType") or "LIMS").upper()
-    if source_type not in {"LIMS", "AI", "EXCEL", "PDF", "CALCULATED"}:
+    if source_type not in {"LIMS", "AI", "EXCEL", "PDF", "CALCULATED", "PROTOCOL"}:
         raise HTTPException(422, f"不支持的系统字段来源：{source_type}")
     config = item.get("config") if isinstance(item.get("config"), dict) else {}
     if source_type == "EXCEL":
@@ -204,7 +206,16 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
                    if name.strip() not in variable_codes]
         if unknown:
             raise HTTPException(422, f"AI 提示词引用了未配置的字段或编组：{', '.join(unknown)}")
-    return {**item, "fieldCode": field_code, "sourceType": source_type, "config": config}
+    validated = {**item, "fieldCode": field_code, "sourceType": source_type, "config": config}
+    current_rules = [rule for rule in repository.database.list_system_field_rules()
+                     if not item.get("id") or rule.get("id") != item["id"]]
+    if source_type == "PROTOCOL" or any(rule.get("sourceType") == "PROTOCOL" for rule in current_rules):
+        try:
+            validate_protocol_conflicts(repository.database.list_lims_fields(True),
+                [*current_rules, validated], list_system_field_groups(repository.database))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+    return validated
 
 
 def _resolve_standard_field(repository: RuleAdminRepository, item: dict[str, Any]) -> None:
@@ -443,7 +454,7 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
     @router.post("/system-fields/{field_code:path}/rules")
     def create_system_field_rule(field_code: str, item: dict[str, Any]) -> dict[str, Any]:
         return repository.database.save_system_field_rule(
-            _validate_system_rule(repository, {**item, "fieldCode": field_code}),
+            _validate_system_rule(repository, {**item, "fieldCode": field_code, "id": None}),
         )
 
     @router.put("/system-field-rules/{rule_id}")
@@ -461,7 +472,7 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
                 if "fieldCode" not in item:
                     item["fieldCode"] = existing["fieldCode"]
 
-            validated = _validate_system_rule(repository, item)
+            validated = _validate_system_rule(repository, {**item, "id": rule_id})
             return repository.database.save_system_field_rule(validated, rule_id)
         except KeyError as error:
             raise HTTPException(404, f"系统字段规则不存在: {error}") from error
@@ -476,11 +487,20 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
     def preview_ai_rule(item: dict[str, Any]) -> dict[str, Any]:
         config = item.get("config") if isinstance(item.get("config"), dict) else {}
         values = item.get("values") if isinstance(item.get("values"), dict) else {}
+        current_record = item.get("currentRecord")
+        if current_record is not None and not isinstance(current_record, dict):
+            raise HTTPException(422, "AI 测试当前记录必须是对象")
         try:
-            prompt, context = render_ai_prompt(config, values)
+            field_code = str(item.get("fieldCode") or "")
+            field = repository.database.get_lims_field(field_code) if field_code else None
+            if field_code and not field:
+                raise HTTPException(404, "AI 目标标准字段不存在")
+            values, current_record = prepare_ai_context(config, values, current_record, field)
+            context_fields = repository.database.list_lims_fields(True)
+            prompt, context = render_ai_prompt(config, values, current_record, context_fields)
             output = generate_ai_text(
                 str(item.get("fieldCode") or "preview"),
-                {"id": item.get("ruleId"), "config": config}, values,
+                {"id": item.get("ruleId"), "config": config}, values, current_record, context_fields,
             ) if item.get("execute") else ""
             return {"success": True, "prompt": prompt, "context": context, "output": output}
         except AiGenerationError as error:

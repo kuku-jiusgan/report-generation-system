@@ -1,6 +1,8 @@
 import json
 from typing import Any
 
+from .lims_instances import SECTION_COLUMN
+
 
 class LimsEvidenceRepositoryMixin:
     """LIMS field evidence, source reconstruction and preview queries."""
@@ -106,13 +108,8 @@ class LimsEvidenceRepositoryMixin:
         raw = json.loads(experiment["raw_payload"] or "{}")
         json_key = str(field.get("jsonKey") or "")
         groups: dict[str, dict[str, Any]] = {}
-        scalar_columns = {
-            "project_id", "project_name", "document_code", "document_version", "title",
-            "experiment_version", "created_by", "created_at_source", "approved_by", "approved_at_source",
-        }
-        db_column = str(field.get("dbColumn") or "")
-        if field.get("dbTable") == "lims_experiments" and db_column in scalar_columns:
-            value = experiment[db_column]
+        if field.get("dbTable") == "lims_experiments":
+            value = self._section_value(experiment[SECTION_COLUMN], field)
             if value is not None and str(value).strip():
                 raw_collection = raw.get(str(field.get("collectionCode") or ""))
                 source_items = list(raw_collection) if isinstance(raw_collection, list) else (
@@ -209,12 +206,12 @@ class LimsEvidenceRepositoryMixin:
         limit = max(1, min(int(limit), 50))
         selected_instances = {str(value) for value in (instance_ids or []) if str(value)}
         db_table = str(field.get("dbTable") or "")
-        db_column = str(field.get("dbColumn") or "")
         if db_table == "lims_experiments":
-            return self._preview_experiment_field(field, db_column, selected_instances, limit)
-        if db_table != "lims_standard_records" or db_column != "data_json":
-            return {"fieldCode": field["fieldCode"], "total": 0, "items": [], "storageSupported": False}
-        return self._preview_standard_field(field, selected_instances, limit)
+            return self._preview_section_field(field, selected_instances, limit)
+        if db_table == "lims_standard_records":
+            return self._preview_standard_field(field, selected_instances, limit)
+        # 集合不落库（例如读取时才从 solutions 派生的溶液视图），没有证据可查。
+        return {"fieldCode": field["fieldCode"], "total": 0, "items": [], "storageSupported": False}
 
     def preview_lims_group(self, group: dict[str, Any], limit: int = 12,
                            instance_ids: list[str] | None = None) -> dict[str, Any]:
@@ -252,31 +249,42 @@ class LimsEvidenceRepositoryMixin:
                     item["evidence"]["itemCount"] for item in filtered),
                 "options": options, "items": items, "storageSupported": True}
 
-    def _preview_experiment_field(self, field: dict[str, Any], db_column: str,
-                                  selected: set[str], limit: int) -> dict[str, Any]:
-        allowed = {"project_id", "project_name", "document_code", "document_version", "title",
-                   "experiment_version", "created_by", "created_at_source", "approved_by", "approved_at_source"}
-        if db_column not in allowed:
-            return {"fieldCode": field["fieldCode"], "total": 0, "items": [], "storageSupported": False}
+    @classmethod
+    def _section_value(cls, stored: Any, field: dict[str, Any]) -> Any:
+        """不成行的段整段存在段列里，按段名和字段键名往里取两层。
+
+        键名留空时回退到字段编码的末段，与字段目录推导标准数据路径时用的规则一致
+        （`_field_contract`）；否则 `$.document.code` 这类字段会把整段取回来。
+        """
+        key = str(field.get("jsonKey") or "").strip() or str(field.get("fieldCode") or "").rsplit(".", 1)[-1]
+        sections = cls._json_path_value(json.loads(stored or "{}"), str(field.get("collectionCode") or ""))
+        return cls._json_path_value(sections, key)
+
+    def _preview_section_field(self, field: dict[str, Any],
+                               selected: set[str], limit: int) -> dict[str, Any]:
         with self.connect() as connection:
             rows = connection.execute(
                 f"""SELECT e.import_id,e.instance_id,e.project_name,e.title,e.normalized_at,
-                           i.file_name,i.created_at,e.{db_column} AS preview_value FROM lims_experiments e
-                    JOIN lims_imports i ON i.id=e.import_id WHERE e.{db_column} IS NOT NULL
-                    AND trim(CAST(e.{db_column} AS TEXT))<>'' ORDER BY i.created_at DESC,e.normalized_at DESC"""
+                           i.file_name,i.created_at,e.{SECTION_COLUMN} AS preview_value FROM lims_experiments e
+                    JOIN lims_imports i ON i.id=e.import_id WHERE e.{SECTION_COLUMN} IS NOT NULL
+                    ORDER BY i.created_at DESC,e.normalized_at DESC"""
             ).fetchall()
-        unique: dict[str, Any] = {}
+        unique: dict[str, tuple[Any, Any]] = {}
         for row in rows:
-            unique.setdefault(str(row["instance_id"]), row)
-        filtered = [row for key, row in unique.items() if not selected or key in selected]
+            # 段列里整段都在，取不到这个字段的键说明这条实验没有该字段，不算一条命中。
+            value = self._section_value(row["preview_value"], field)
+            if value is None or value == "" or value == []:
+                continue
+            unique.setdefault(str(row["instance_id"]), (row, value))
+        filtered = [pair for key, pair in unique.items() if not selected or key in selected]
         items = [{"importId": row["import_id"], "instanceId": row["instance_id"],
                   "projectName": row["project_name"], "experimentTitle": row["title"],
                   "fileName": row["file_name"], "collectionCode": field.get("collectionCode") or "",
-                  "recordKey": "", "value": row["preview_value"], "evidence": {},
-                  "normalizedAt": row["normalized_at"]} for row in filtered[:limit]]
+                  "recordKey": "", "value": value, "evidence": {},
+                  "normalizedAt": row["normalized_at"]} for row, value in filtered[:limit]]
         options = [{"instanceId": row["instance_id"], "experimentTitle": row["title"],
                     "projectName": row["project_name"], "normalizedAt": row["normalized_at"],
-                    "recognizedCount": 1} for row in unique.values()]
+                    "recognizedCount": 1} for row, _ in unique.values()]
         return {"fieldCode": field["fieldCode"], "total": len(filtered), "recognizedTotal": len(filtered),
                 "availableTotal": len(unique), "options": options, "items": items, "storageSupported": True}
 

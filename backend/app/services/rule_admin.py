@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..database import Database, now_iso
+from ..repositories.lims_instances import SECTION_COLUMN, collection_storage
 from .template_catalog_repository import TemplateCatalogRepositoryMixin
 from .content_block_repository import ContentBlockRepositoryMixin
 from .mapping_validation_repository import MappingValidationRepositoryMixin
@@ -122,17 +123,22 @@ class RuleAdminRepository(
             rows = connection.execute(
                 """SELECT r.id,r.field_code,r.name,r.config,
                           COALESCE(gf.group_code, f.collection_code) AS collection_code,
-                          f.json_key,f.db_table,f.db_column
+                          f.json_key,g.cardinality
                    FROM system_field_rules r
                    JOIN lims_field_catalog f ON f.field_code=r.field_code
                    LEFT JOIN (
                      SELECT field_code,MIN(group_code) AS group_code
                      FROM system_field_group_fields GROUP BY field_code
                    ) gf ON gf.field_code=f.field_code
+                   LEFT JOIN system_field_groups g
+                     ON BINARY g.group_code=BINARY COALESCE(gf.group_code, f.collection_code)
                    WHERE r.source_type='LIMS'"""
             ).fetchall()
             for row in rows:
                 collection = str(row["collection_code"] or "")
+                # 段内字段读的是实验实例上的段列，不像记录型集合那样一行一条
+                stored_in_section = collection_storage(
+                    collection, str(row["cardinality"] or "")) == ("lims_experiments", SECTION_COLUMN)
                 config = json.loads(row["config"] or "{}")
                 section_pattern = str(config.get("sectionPattern") or "")
                 header_pattern = str(config.get("headerPattern") or "")
@@ -172,9 +178,9 @@ class RuleAdminRepository(
                     }
                     if name in {"已有标准数据路径", "Existing normalized path"}:
                         name = "结构化 UNITBODY → 标准字段"
-                elif row["db_table"] == "lims_experiments":
+                elif stored_in_section:
                     generated = {
-                        "parser": "INSTANCE_FIELD", "inputField": row["db_column"],
+                        "parser": "INSTANCE_FIELD", "inputField": SECTION_COLUMN,
                         "outputCollection": collection, "outputField": row["json_key"] or "",
                     }
                 else:
