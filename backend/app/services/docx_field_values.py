@@ -233,28 +233,36 @@ def row_calculated_values(
     return values
 
 
+def _fill_rule_directives(mapping: dict[str, Any]) -> list[str]:
+    """标准字段规则与 Word 映射规则共同生效；同类指令由靠后的映射规则覆盖。"""
+    directives: list[str] = []
+    for key in ("standardFieldFillRule", "fillRule"):
+        directives.extend(part.strip() for part in str(mapping.get(key) or "").split(";") if part.strip())
+    return directives
+
+
 def format_value(value: Any, mapping: dict[str, Any], use_empty_rule: bool = True) -> str:
-    # 填充规则优先从映射规则取，如果没有则从标准字段取
-    fill_rule = str(mapping.get("fillRule") or mapping.get("standardFieldFillRule") or "")
+    directives = _fill_rule_directives(mapping)
 
     if value in (None, ""):
-        return "-" if use_empty_rule and "EMPTY_AS_DASH" in fill_rule else ""
-    if fill_rule == "VERSION_2_DIGITS":
+        return "-" if use_empty_rule and "EMPTY_AS_DASH" in directives else ""
+    formatted: str | None = None
+    if "VERSION_2_DIGITS" in directives:
         try:
-            return f"{int(value):02d}"
+            formatted = f"{int(value):02d}"
         except (TypeError, ValueError):
             pass
+
+    output_format = str(mapping.get("standardFieldOutputFormat") or "")
+    if formatted is None and output_format.isdigit() and mapping.get("standardFieldDataType") in {"decimal", "number"}:
+        try:
+            formatted = f"{float(value):.{int(output_format)}f}"
+        except (TypeError, ValueError):
+            pass
+    formatted = formatted if formatted is not None else str(value)
 
     # APPEND_SUFFIX:后缀文字 — 在字段值后面拼接固定文字
     # ponytail: 解决 Word 控件无法包裹部分文本的限制；用于表标题等场景
-    if fill_rule.startswith("APPEND_SUFFIX:"):
-        suffix = fill_rule[len("APPEND_SUFFIX:"):]
-        return f"{value}{suffix}"
-
-    output_format = str(mapping.get("standardFieldOutputFormat") or "")
-    if output_format.isdigit() and mapping.get("standardFieldDataType") in {"decimal", "number"}:
-        try:
-            return f"{float(value):.{int(output_format)}f}"
-        except (TypeError, ValueError):
-            pass
-    return str(value)
+    suffixes = [item.removeprefix("APPEND_SUFFIX:") for item in directives
+                if item.startswith("APPEND_SUFFIX:")]
+    return formatted + (suffixes[-1] if suffixes else "")

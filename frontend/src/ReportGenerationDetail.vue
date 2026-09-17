@@ -85,7 +85,7 @@ const selectedGroupJson = computed(() => {
   if (!selectedGroup.value) return undefined
   const payloads = resolved.value.source_payloads
   if (!payloads || typeof payloads !== 'object') return undefined
-  const path = selectedGroup.value.itemPath || `$.${selectedGroup.value.groupCode}`
+  const path = `$.${selectedGroup.value.groupCode}`
   if (selectedGroup.value.fields.some(field => fieldSources.value[field.fieldCode]?.type === 'PROTOCOL')) return readValueAtPath(payloads.PROTOCOL, path)
   for (const sourceType of ['EXCEL', 'LIMS', 'PDF']) {
     const value = readValueAtPath(payloads[sourceType], path)
@@ -179,7 +179,7 @@ function format(value: unknown): string {
         <template v-else-if="selectedGroup">
           <h4>{{ selectedGroup.label }} <small>{{ selectedGroup.groupCode }}</small></h4>
           <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="标准 JSON 路径">{{ selectedGroup.itemPath || `$.${selectedGroup.groupCode}` }}</el-descriptions-item>
+            <el-descriptions-item label="标准 JSON 路径">{{ `$.${selectedGroup.groupCode}` }}</el-descriptions-item>
           </el-descriptions>
           <pre class="group-json">{{ selectedGroupJson === undefined ? '-' : JSON.stringify(selectedGroupJson, null, 2) }}</pre>
         </template>

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.app.services.lims_normalizer import COLLECTION_ORDER
+from backend.app.services.lims_normalizer import COLLECTION_ORDER, record_collection_codes
 from backend.tests.database_helpers import make_test_database
 
 
@@ -73,6 +73,20 @@ class LimsSingularSectionsTest(unittest.TestCase):
         samples = self._round_trip()["samples"]
         self.assertEqual(len(samples), 1)
         self.assertEqual(samples[0]["sampleName"], "某物")
+
+    def test_configured_many_group_survives_round_trip(self) -> None:
+        normalized = _normalized()
+        normalized["custom_1789633006443"] = [{"field_001": "供试品溶液", "field_002": "按方案配制"}]
+        groups = [{
+            "groupCode": "custom_1789633006443", "cardinality": "MANY", "enabled": True,
+        }]
+
+        self.database.replace_lims_instance(
+            "imp1", RAW, normalized, record_collection_codes(groups),
+        )
+
+        payload = self.database.get_lims_normalized_payload("imp1", "T0001")
+        self.assertEqual(payload["custom_1789633006443"][0]["field_001"], "供试品溶液")
 
 
 if __name__ == "__main__":

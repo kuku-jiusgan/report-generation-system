@@ -37,20 +37,24 @@ def create_report_lims_router(
         if not imported:
             raise HTTPException(404, "LIMS 导入记录不存在")
         try:
+            groups = list_system_field_groups(database)
             instances = []
             for instance_id in request.instance_ids:
                 payload = database.get_lims_normalized_payload(request.import_id, instance_id)
                 if payload is None:
                     raise KeyError(instance_id)
                 instances.append(payload)
-            recognition = merge_instances(instances, request.conflict_resolutions, normalized=True)
+            recognition = merge_instances(
+                instances, request.conflict_resolutions,
+                fields=database.list_lims_fields(True), groups=groups, normalized=True,
+            )
             if recognition["unresolvedConflictCount"]:
                 raise HTTPException(409, {
                     "message": "存在未处理的 LIMS 数据冲突",
                     "conflicts": recognition["conflicts"],
                 })
             payload = recognition["payload"]
-            apply_group_contracts(payload, list_system_field_groups(database))
+            apply_group_contracts(payload, groups)
         except KeyError as error:
             raise HTTPException(404, f"LIMS 实验记录不存在：{error.args[0]}") from error
         except HTTPException:

@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from .excel_rule_engine import ExcelRuleError, WorkbookValues
-from .excel_chart_extractor import ExcelChartError, extract_residual_chart_values
+from .excel_chart_extractor import (
+    ExcelChartError,
+    extract_regression_chart_values,
+    extract_residual_chart_values,
+)
 from .excel_standard_path import excel_target_path
 from .payload_paths import PayloadPathError, path_depth, set_payload_path
 
@@ -12,6 +16,16 @@ from .payload_paths import PayloadPathError, path_depth, set_payload_path
 def _cell(reader: WorkbookValues, config: dict[str, Any]) -> Any:
     return reader.read(str(config.get("sheet") or ""), int(config.get("row", 0)),
                        int(config.get("column", 0)), bool(config.get("required")))
+
+
+def _merged_cell(reader: WorkbookValues, sheet: str, row: int, column: int,
+                 required: bool) -> Any:
+    if sheet not in reader.values.sheetnames:
+        raise ExcelRuleError(f"缺少必填工作表：{sheet}")
+    for merged in reader.values[sheet].merged_cells.ranges:
+        if merged.min_row <= row <= merged.max_row and merged.min_col <= column <= merged.max_col:
+            return reader.read(sheet, merged.min_row, merged.min_col, required)
+    return reader.read(sheet, row, column, required)
 
 
 def _repeat_count(reader: WorkbookValues, config: dict[str, Any]) -> int:
@@ -35,15 +49,7 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
     for repeat_index in range(count):
         mode = str(config.get("valueMode") or "CELL")
         if mode.startswith("LINEAR_"):
-            value = _linear_statistic(reader, config, repeat_index, mode)
-            if config.get("broadcastRepeat"):
-                x_row = int(config.get("xRow", 1)) + repeat_index * int(config.get("rowStep", 0))
-                y_row = int(config.get("yRow", 1)) + repeat_index * int(config.get("rowStep", 0))
-                count = _horizontal_count(reader, config, x_row, int(config.get("startColumn", 1)), y_row)
-                values.extend([value] * count)
-            else:
-                values.append(value)
-            continue
+            raise ExcelRuleError("线性汇总字段必须直接读取 Excel 单元格，不能使用回归计算模式")
         if mode == "HORIZONTAL_CELL":
             row = row_start + repeat_index * int(config.get("rowStep", 0))
             start = int(config.get("startColumn", 1))
@@ -61,48 +67,29 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
                                     int(source.get("row", 0)) + repeat_index * int(source.get("rowStep", 0)),
                                     int(source.get("column", 0)) + repeat_index * int(source.get("columnStep", 0)),
                                     bool(config.get("required")))
+            elif mode == "CELL_PAIR":
+                columns = config.get("pairColumns") or []
+                if len(columns) != 2:
+                    raise ExcelRuleError("双单元格 Excel 规则必须配置两个 pairColumns")
+                source_row = row + repeat_index * int(config.get("rowStep", 0))
+                pair = [reader.read(str(config.get("sheet") or ""), source_row, int(column),
+                                    bool(config.get("required"))) for column in columns]
+                value = (str(config.get("pairSeparator", "～")).join(str(item) for item in pair)
+                         if all(item not in (None, "") for item in pair) else None)
             else:
-                value = reader.read(str(config.get("sheet") or ""),
-                                    row + repeat_index * int(config.get("rowStep", 0)) + int(config.get("rowOffset", 0)),
-                                    int(config.get("startColumn", 1)) + repeat_index * int(config.get("columnStep", 0))
-                                    + int(config.get("columnOffset", 0)), bool(config.get("required")))
+                sheet = str(config.get("sheet") or "")
+                source_row = row + repeat_index * int(config.get("rowStep", 0)) + int(config.get("rowOffset", 0))
+                column = (int(config.get("startColumn", 1)) + repeat_index * int(config.get("columnStep", 0))
+                          + int(config.get("columnOffset", 0)))
+                if mode == "MERGED_CELL":
+                    value = _merged_cell(reader, sheet, source_row, column, bool(config.get("required")))
+                else:
+                    value = reader.read(sheet, source_row, column, bool(config.get("required")))
             repeat_value = int(config.get("broadcastRepeat", 1))
             if repeat_value < 1 or repeat_value > 1000:
                 raise ExcelRuleError("重复值展开次数无效")
             values.extend([value] * repeat_value)
     return values
-
-
-def _linear_statistic(reader: WorkbookValues, config: dict[str, Any], repeat_index: int,
-                      mode: str) -> Any:
-    sheet = str(config.get("sheet") or "")
-    row_step = int(config.get("rowStep", 0))
-    column = int(config.get("startColumn", 1))
-    x_row = int(config.get("xRow", 1)) + repeat_index * row_step
-    y_row = int(config.get("yRow", 1)) + repeat_index * row_step
-    count = _horizontal_count(reader, config, x_row, column, y_row)
-    pairs = [(reader.read(sheet, x_row, column + offset), reader.read(sheet, y_row, column + offset))
-             for offset in range(count)]
-    numeric = [(float(x), float(y)) for x, y in pairs if x not in (None, "") and y not in (None, "")]
-    if len(numeric) < 2:
-        return None
-    xs, ys = zip(*numeric)
-    x_mean, y_mean = sum(xs) / len(xs), sum(ys) / len(ys)
-    denominator = sum((value - x_mean) ** 2 for value in xs)
-    if not denominator:
-        return None
-    slope = sum((x - x_mean) * (y - y_mean) for x, y in numeric) / denominator
-    intercept = y_mean - slope * x_mean
-    if mode == "LINEAR_EQUATION":
-        sign = "+" if intercept >= 0 else "-"
-        return f"y = {slope:.4f}x {sign} {abs(intercept):.4f}"
-    fitted = [slope * x + intercept for x in xs]
-    residual = sum((y - estimate) ** 2 for y, estimate in zip(ys, fitted))
-    total = sum((y - y_mean) ** 2 for y in ys)
-    if mode == "LINEAR_R2":
-        return round(1 - residual / total, 6) if total else 1.0
-    center = ys[len(ys) // 2]
-    return round(abs(intercept) / center * 100, 2) if center else None
 
 
 def _horizontal_count(reader: WorkbookValues, config: dict[str, Any], row: int,
@@ -183,6 +170,27 @@ def _generated_sequences(payload: dict[str, Any], fields: dict[str, dict[str, An
     return result
 
 
+def _seed_collection_path(payload: dict[str, Any], item_path: str, count: int) -> None:
+    parts = [part for part in item_path.removeprefix("$").lstrip(".").split(".") if part]
+    if not parts:
+        raise PayloadPathError("编组集合路径不能为空")
+    owner = payload
+    for part in parts[:-1]:
+        child = owner.get(part)
+        if child is None:
+            child = {}
+            owner[part] = child
+        if not isinstance(child, dict):
+            raise PayloadPathError(f"编组集合路径冲突：{item_path}")
+        owner = child
+    key = parts[-1]
+    existing = owner.get(key)
+    if existing is None:
+        owner[key] = [{} for _ in range(count)]
+    elif not isinstance(existing, list) or len(existing) != count:
+        raise PayloadPathError(f"编组 {item_path} 的外层记录数与 Excel 重复次数不一致")
+
+
 def _seed_group_collections(reader: WorkbookValues, payload: dict[str, Any],
                             pending: list[tuple[str, str, Any]],
                             fields: dict[str, dict[str, Any]],
@@ -201,17 +209,12 @@ def _seed_group_collections(reader: WorkbookValues, payload: dict[str, Any],
             count = _repeat_count(reader, config)
         except (ExcelRuleError, TypeError, ValueError):
             continue
-        sizes[group_code] = max(sizes.get(group_code, 0), count)
-    for group_code, count in sizes.items():
+        item_path = f"$.{group_code}"
+        sizes[item_path] = max(sizes.get(item_path, 0), count)
+    for item_path, count in sizes.items():
         if count < 1:
             continue
-        existing = payload.get(group_code)
-        if existing is None:
-            payload[group_code] = [{} for _ in range(count)]
-        elif not isinstance(existing, list) or len(existing) != count:
-            raise PayloadPathError(
-                f"编组 {group_code} 的外层记录数与 Excel 重复次数不一致"
-            )
+        _seed_collection_path(payload, item_path, count)
 
 
 def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[dict[str, Any]],
@@ -237,6 +240,8 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
             try:
                 if config.get("mode") == "CHART_IMAGE":
                     value = extract_residual_chart_values(path, int(config.get("pointsPerTest", 5)))
+                elif config.get("mode") == "LINEAR_REGRESSION_CHART":
+                    value = extract_regression_chart_values(path, int(config.get("pointsPerTest", 1)))
                 else:
                     value = _cell(reader, config) if config.get("mode") == "FIXED_CELL" else _repeat_values(reader, config)
             except (ExcelRuleError, ExcelChartError, KeyError, TypeError, ValueError) as error:
@@ -273,12 +278,10 @@ def _apply_group_source_mappings(reader: WorkbookValues, payload: dict[str, Any]
     for group in groups:
         if not group.get("enabled", True):
             continue
-        item_path = str(group.get("itemPath") or "").strip()
+        payload_key = str(group.get("groupCode") or "").strip()
+        item_path = f"$.{payload_key}" if payload_key else ""
         mappings = group.get("sourceMappings") or []
         if not item_path or str(group.get("cardinality") or "ONE").upper() != "MANY":
-            continue
-        payload_key = str(group.get("groupCode") or "").strip()
-        if not payload_key:
             continue
         for mapping in mappings:
             if str(mapping.get("sourceType") or "").upper() != "EXCEL":

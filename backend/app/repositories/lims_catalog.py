@@ -79,7 +79,7 @@ class LimsCatalogRepositoryMixin:
     def _field_contract(connection: Any, field_code: str, json_key: str = "") -> tuple[str, str] | None:
         """根据正式编组关系推导集合编码和完整标准路径。"""
         row = connection.execute(
-            """SELECT gf.group_code,gf.level_key,g.cardinality,g.item_path,l.kind
+            """SELECT gf.group_code,gf.level_key,g.cardinality,l.kind
                FROM system_field_group_fields gf
                JOIN system_field_groups g ON BINARY g.group_code=BINARY gf.group_code
                LEFT JOIN system_field_group_levels l
@@ -90,7 +90,7 @@ class LimsCatalogRepositoryMixin:
         if not row:
             return None
         group_code = str(row["group_code"] or "").strip()
-        collection = str(row["item_path"] or "").strip() or f"$.{group_code}"
+        collection = f"$.{group_code}"
         prefix = f"{collection}[*]" if str(row["cardinality"] or "ONE").upper() == "MANY" else collection
         level_key = str(row["level_key"] or "").strip()
         if level_key:

@@ -165,3 +165,55 @@ def test_matrix_image_control_is_embedded_as_drawing() -> None:
     assert cell.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val='repeat.t20.residualChart']//w:drawing", namespaces=NS)
     assert "word/media/" in "".join(parts)
     assert "rId1" in etree.tostring(etree.fromstring(parts["word/_rels/document.xml.rels"][1])).decode()
+
+
+def test_matrix_image_preserves_template_size_and_centering() -> None:
+    document = _matrix_document(row_count=10)
+    control = document.xpath(
+        ".//w:sdt[w:sdtPr/w:tag/@w:val='repeat.t20.residualChart']", namespaces=NS,
+    )[0]
+    paragraph = control.find(f"{W}sdtContent/{W}p")
+    properties = etree.Element(W + "pPr")
+    etree.SubElement(properties, W + "jc", {W + "val": "center"})
+    paragraph.insert(0, properties)
+    run = paragraph.find(W + "r")
+    drawing = etree.SubElement(run, W + "drawing")
+    inline = etree.SubElement(
+        drawing, "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}inline",
+    )
+    etree.SubElement(
+        inline, "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}extent",
+        cx="3520800", cy="2246400",
+    )
+    graphic = etree.SubElement(
+        inline, "{http://schemas.openxmlformats.org/drawingml/2006/main}graphic",
+    )
+    blip = etree.SubElement(
+        graphic, "{http://schemas.openxmlformats.org/drawingml/2006/main}blip",
+    )
+    blip.set(
+        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed", "rIdTemplate",
+    )
+
+    records = [{"residualChart": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}]
+    _fill_matrix_table(document, "T20", records, LINEARITY_LAYOUT)
+    content_types = etree.fromstring(b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+    rels = etree.fromstring(b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+    parts = {
+        "[Content_Types].xml": (ZipInfo("[Content_Types].xml"), etree.tostring(content_types)),
+        "word/_rels/document.xml.rels": (ZipInfo("word/_rels/document.xml.rels"), etree.tostring(rels)),
+    }
+
+    embed_image_controls(parts, {"word/document.xml": document}, [{
+        "dataType": "image", "controlTag": "repeat.t20.residualChart", "fillRule": "IMAGE_FIT_WIDE",
+    }])
+
+    assert control.xpath("string(.//w:pPr/w:jc/@w:val)", namespaces=NS) == "center"
+    extent = control.xpath(
+        ".//*[local-name()='extent' and namespace-uri()='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing']",
+    )[0]
+    assert (extent.get("cx"), extent.get("cy")) == ("3520800", "2246400")
+    assert control.xpath(
+        "string(.//*[local-name()='blip']/@*[local-name()='embed'])",
+    ) == "rId1"
+    assert not control.xpath(".//w:t", namespaces=NS)

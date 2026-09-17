@@ -35,7 +35,15 @@ class MappingValidationRepositoryMixin:
             block = connection.execute(
                 "SELECT title FROM admin_content_blocks WHERE id=%s", (block_id,),
             ).fetchone() if block_id else None
-            label = str(result.get("wordLabel") or (existing or {}).get("word_label") or "").strip()
+            standard_code = str(
+                result.get("standardFieldCode", (existing or {}).get("standard_field_code", "")) or ""
+            ).strip()
+            standard = self.database.get_lims_field(standard_code) if standard_code else None
+            result["standardFieldCode"] = standard_code
+            label = str(
+                standard.get("label") if standard else
+                result.get("wordLabel") or (existing or {}).get("word_label") or ""
+            ).strip()
             result["wordLabel"] = label or (f"{block['title']}字段" if block else "未命名字段")
             generated_code = self._generated_field_code(result, existing, chapter, block, rule_id)
             current_code = result.get("fieldCode", (existing or {}).get("field_code", ""))

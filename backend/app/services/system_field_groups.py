@@ -1,12 +1,17 @@
 import json
+import logging
 import re
 from typing import Any
 
 from ..database import Database, now_iso
 from .excel_standard_path import excel_target_path
+from .group_namespace_migration import migrate_persisted_group_namespace
 from .system_field_group_levels import (
     ensure_group_levels, field_path_for, json_path_for, list_group_levels,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 GROUP_LABELS = {
@@ -35,17 +40,6 @@ def _default_item_path(group_code: str) -> str:
     return f"$.{code}"
 
 
-def _item_path_for_display(group_code: str, stored_path: Any) -> str:
-    path = str(stored_path or "").strip()
-    if path:
-        return path
-    try:
-        return _default_item_path(group_code)
-    except ValueError:
-        # 历史脏数据仍可在管理界面展示，保存时会要求修正编码。
-        return ""
-
-
 def _decode_source_mappings(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return value
@@ -66,10 +60,11 @@ def _validate_group_contract(item: dict[str, Any], fields: list[dict[str, Any]] 
         raise ValueError("编组基数只能是 ONE 或 MANY")
     group_code = str(item.get("groupCode") or "").strip()
     canonical_path = _default_item_path(group_code)
-    # 兼容历史上确有嵌套路径的编组；新建编组和空路径编组统一使用编码推导路径。
-    item_path = str(item.get("itemPath") or "").strip() or canonical_path
-    if item_path and not _PATH_PATTERN.fullmatch(item_path):
-        raise ValueError("标准数据路径必须是形如 $.lod 的 JSONPath，不能包含 [*]")
+    submitted_path = str(item.get("itemPath") or "").strip()
+    if submitted_path and not _PATH_PATTERN.fullmatch(submitted_path):
+        raise ValueError("标准数据路径必须是形如 $.jiancexian 的 JSONPath，不能包含 [*]")
+    if submitted_path and submitted_path != canonical_path:
+        raise ValueError(f"标准数据路径必须由编组编码生成：{canonical_path}")
     mappings = _decode_source_mappings(item.get("sourceMappings", []))
     field_codes = {str(field.get("fieldCode")) for field in (fields or [])}
     seen_fields: set[tuple[str, str]] = set()
@@ -111,7 +106,52 @@ def _validate_group_contract(item: dict[str, Any], fields: list[dict[str, Any]] 
             if (source_type, field_code) in seen_fields:
                 raise ValueError(f"来源映射字段重复：{field_code}")
             seen_fields.add((source_type, field_code))
-    return item_path, "", mappings
+    return canonical_path, "", mappings
+
+
+def _migrate_legacy_group_names(connection: Any) -> None:
+    """把历史双命名配置和已归一化记录收敛到唯一编组编码。"""
+    migrated_groups = 0
+    for row in connection.execute("SELECT group_code,item_path,payload_key FROM system_field_groups").fetchall():
+        canonical_path = _default_item_path(row["group_code"])
+        if row["item_path"] != canonical_path or row["payload_key"]:
+            connection.execute(
+                "UPDATE system_field_groups SET item_path=%s,payload_key='' WHERE group_code=%s",
+                (canonical_path, row["group_code"]),
+            )
+            migrated_groups += 1
+    conflict = connection.execute(
+        """SELECT import_id,instance_id FROM lims_standard_records
+           WHERE collection_code IN (%s,%s)
+           GROUP BY import_id,instance_id
+           HAVING COUNT(DISTINCT collection_code)=2 LIMIT 1""",
+        ("lod", "jiancexian"),
+    ).fetchone()
+    if conflict:
+        raise ValueError("同一 LIMS 实例同时存在 lod 和 jiancexian 集合，无法确定唯一数据")
+    migrated_records = connection.execute(
+        """UPDATE lims_standard_records
+           SET collection_code=%s,
+               record_key=CASE WHEN record_key LIKE %s
+                               THEN CONCAT(%s,SUBSTRING(record_key,5)) ELSE record_key END
+           WHERE collection_code=%s""",
+        ("jiancexian", "lod:%", "jiancexian:", "lod"),
+    ).rowcount
+    migrated_codes = 0
+    for collection, field in (("solutions", "validationCode"),
+                              ("validationSummary", "validationItemCode")):
+        migrated_codes += connection.execute(
+            f"""UPDATE lims_standard_records
+                SET data_json=JSON_SET(data_json,'$.{field}',%s)
+                WHERE collection_code=%s
+                  AND JSON_UNQUOTE(JSON_EXTRACT(data_json,'$.{field}'))=%s""",
+            ("jiancexian", collection, "lod"),
+        ).rowcount
+    if migrated_groups or migrated_records or migrated_codes:
+        logger.info(
+            "编组编码迁移完成 groups=%d records=%d businessCodes=%d",
+            migrated_groups, migrated_records, migrated_codes,
+        )
 
 
 def ensure_system_field_groups(database: Database) -> None:
@@ -154,22 +194,8 @@ def ensure_system_field_groups(database: Database) -> None:
             )
             connection.execute("DELETE FROM system_field_group_fields WHERE group_code='Approval'")
             connection.execute("DELETE FROM system_field_groups WHERE group_code='Approval'")
-        legacy = connection.execute(
-            "SELECT group_code FROM system_field_groups WHERE group_code='jiancexian' AND (item_path='' OR payload_key='')"
-        ).fetchone()
-        if legacy:
-            connection.execute(
-                "UPDATE system_field_groups SET item_path='$.lod',payload_key='lod' WHERE group_code='jiancexian'"
-            )
-            fields = connection.execute(
-                "SELECT field_code,json_key FROM lims_field_catalog WHERE field_code IN "
-                "(SELECT field_code FROM system_field_group_fields WHERE group_code='jiancexian')"
-            ).fetchall()
-            mappings = [{"sourceType": "LIMS", "sectionPattern": "检测限与定量限", "headerPattern": "检测限|定量限",
-                         "columnMappings": [{"columnPattern": str(row["json_key"] or row["field_code"]).strip(),
-                                              "fieldCode": row["field_code"]}]} for row in fields]
-            connection.execute("UPDATE system_field_groups SET source_mappings=%s WHERE group_code='jiancexian'",
-                               (json.dumps(mappings, ensure_ascii=False),))
+        _migrate_legacy_group_names(connection)
+        migrate_persisted_group_namespace(connection)
 
 
 def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
@@ -204,7 +230,7 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
     return [{
         "groupCode": row["group_code"], "label": row["label"], "description": row["description"],
         "cardinality": row["cardinality"],
-        "itemPath": _item_path_for_display(row["group_code"], row["item_path"]),
+        "itemPath": _default_item_path(row["group_code"]),
         "itemKey": row["item_key"],
         "sourceMappings": _decode_source_mappings(row.get("source_mappings")),
         "orderNo": row["order_no"], "enabled": bool(row["enabled"]), "fieldCount": len(by_group.get(row["group_code"], [])),
@@ -222,7 +248,7 @@ def sync_group_field_paths(database: Database, group_code: str) -> None:
     field_paths: dict[str, str] = {}
     with database.connect() as connection:
         for field in group["fields"]:
-            canonical_path = json_path_for(group["itemPath"], group["cardinality"], field["fieldPath"])
+            canonical_path = json_path_for(_default_item_path(group_code), group["cardinality"], field["fieldPath"])
             field_paths[field["fieldCode"]] = canonical_path
             connection.execute(
                 "UPDATE system_field_group_fields SET field_path=%s WHERE group_code=%s AND field_code=%s",

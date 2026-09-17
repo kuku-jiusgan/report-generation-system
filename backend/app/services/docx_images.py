@@ -1,4 +1,5 @@
 import base64
+import copy
 import logging
 import urllib.request
 import uuid
@@ -16,6 +17,10 @@ PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 NS = {"w": W_NS}
 W = f"{{{W_NS}}}"
+WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+V_NS = "urn:schemas-microsoft-com:vml"
+IMAGE_NS = {"w": W_NS, "wp": WP_NS, "a": A_NS, "v": V_NS}
 
 
 def _tag(control: etree._Element) -> str:
@@ -53,9 +58,26 @@ def _set_control_image(control: etree._Element, relationship_id: str, name: str,
     content = control.find(W + "sdtContent")
     if content is None:
         return
+    blips = content.xpath(".//a:blip", namespaces=IMAGE_NS)
+    legacy_images = content.xpath(".//v:imagedata", namespaces=IMAGE_NS)
+    if blips or legacy_images:
+        for blip in blips:
+            blip.set(f"{{{R_NS}}}embed", relationship_id)
+        for image in legacy_images:
+            image.set(f"{{{R_NS}}}id", relationship_id)
+        for child in list(content):
+            if not child.xpath(".//w:drawing | .//w:pict", namespaces=IMAGE_NS):
+                content.remove(child)
+        for text in content.xpath(".//w:t", namespaces=IMAGE_NS):
+            text.getparent().remove(text)
+        return
+
+    paragraph_properties = content.find(f"{W}p/{W}pPr")
     for child in list(content):
         content.remove(child)
     paragraph = etree.SubElement(content, W + "p")
+    if paragraph_properties is not None:
+        paragraph.append(copy.deepcopy(paragraph_properties))
     run = etree.SubElement(paragraph, W + "r")
     drawing = etree.SubElement(run, W + "drawing")
     width, height = ((4_860_000, 2_610_000) if wide else (914_400, 914_400))

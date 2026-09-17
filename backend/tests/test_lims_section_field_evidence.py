@@ -57,6 +57,9 @@ class CollectionStorageTest(unittest.TestCase):
     def test_collections_that_are_never_persisted_have_no_storage(self) -> None:
         """溶液视图是读取时从 solutions 派生的，没有自己的记录行，也就没有证据可查。"""
         self.assertIsNone(collection_storage("specificitySolutions", "MANY"))
+        self.assertEqual(
+            collection_storage("custom", "MANY"), ("lims_standard_records", "data_json"),
+        )
         self.assertIsNone(collection_storage("custom", ""))
 
     def test_record_collections_win_over_cardinality(self) -> None:

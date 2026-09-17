@@ -4,7 +4,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.app.admin_routes.rule_catalog import _validate_system_rule
+from backend.app.services import ai_field_generator
 from backend.app.services.ai_field_generator import AiGenerationError, _response_content, generate_ai_text, render_ai_prompt
+from backend.app.services.ai_multimodal import build_message_content
+
+
+PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgo="
+JPEG_DATA_URL = "data:image/jpeg;base64,/9j/2Q=="
 
 
 def test_response_content_supports_text_parts() -> None:
@@ -75,6 +81,71 @@ def test_generate_prefers_rule_max_length_over_service_default() -> None:
 
     assert captured["payload"]["max_tokens"] == 240
     assert captured["payload"]["thinking"] == {"type": "disabled"}
+
+
+def test_build_message_content_keeps_text_requests_unchanged() -> None:
+    assert build_message_content("仅包含文本") == "仅包含文本"
+
+
+def test_build_message_content_extracts_images_and_deduplicates_them() -> None:
+    content = build_message_content(
+        f'{{"残差图":"{PNG_DATA_URL}","回归曲线图":"{JPEG_DATA_URL}",'
+        f'"重复残差图":"{PNG_DATA_URL}"}}'
+    )
+
+    assert isinstance(content, list)
+    assert content[0] == {
+        "type": "text",
+        "text": '{"残差图":"[图片 1，已作为视觉输入附加]",'
+                '"回归曲线图":"[图片 2，已作为视觉输入附加]",'
+                '"重复残差图":"[图片 1，已作为视觉输入附加]"}',
+    }
+    assert content[1] == {"type": "image_url", "image_url": {"url": PNG_DATA_URL}}
+    assert content[2] == {"type": "image_url", "image_url": {"url": JPEG_DATA_URL}}
+
+
+def test_build_message_content_rejects_invalid_image_data_url() -> None:
+    with pytest.raises(ValueError, match="格式错误"):
+        build_message_content("图片：data:image/png;base64,不是Base64")
+
+
+def test_generate_sends_images_as_multimodal_content() -> None:
+    response = MagicMock()
+    response.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+    response.__enter__.return_value = response
+    captured: dict[str, object] = {}
+
+    def open_request(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        return response
+
+    config = {
+        "contextVariables": [{"fieldCode": "chart", "mode": "ALL"}],
+        "promptTemplate": "请分析：{{chart}}",
+    }
+    with patch("backend.app.services.ai_field_generator.get_settings", return_value=object()), \
+         patch("backend.app.services.ai_field_generator.load_ai_service_config", return_value={
+             "baseUrl": "https://example.test", "apiKey": "key", "model": "vision-model",
+             "timeout": 60, "maxTokens": 800, "thinkingEnabled": False,
+         }), \
+         patch("backend.app.services.ai_field_generator.urllib.request.urlopen", side_effect=open_request):
+        generate_ai_text("field", {"config": config}, {"chart": PNG_DATA_URL})
+
+    content = captured["payload"]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "请分析：[图片 1，已作为视觉输入附加]"}
+    assert content[1] == {"type": "image_url", "image_url": {"url": PNG_DATA_URL}}
+
+
+def test_generate_rejects_request_over_provider_limit(monkeypatch) -> None:
+    monkeypatch.setattr(ai_field_generator, "MAX_AI_REQUEST_BYTES", 100)
+    monkeypatch.setattr(ai_field_generator, "get_settings", lambda: object())
+    monkeypatch.setattr(ai_field_generator, "load_ai_service_config", lambda required: {
+        "baseUrl": "https://example.test", "apiKey": "key", "model": "vision-model",
+        "timeout": 60, "maxTokens": 800, "thinkingEnabled": False,
+    })
+
+    with pytest.raises(AiGenerationError, match="超过 48 MiB"):
+        generate_ai_text("field", {"config": {"promptTemplate": "足够长的请求正文"}}, {})
 
 
 def test_render_prompt_formats_list_context_and_defaults() -> None:

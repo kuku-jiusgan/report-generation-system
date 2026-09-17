@@ -61,11 +61,17 @@ export interface LimsConflictOption {
   evidence: LimsEvidence
 }
 
+export interface LimsConflictField {
+  key: string
+  label: string
+}
+
 export interface LimsConflict {
   id: string
   collection: string
   label: string
   identity: string
+  differingFields: LimsConflictField[]
   options: LimsConflictOption[]
   resolved: boolean
 }

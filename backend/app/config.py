@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     ai_timeout: float = 60.0
     ai_max_tokens: int = 800
     ai_thinking_enabled: bool = False
+    libreoffice_executable: str = "libreoffice"
+    libreoffice_python_executable: str = "/usr/bin/python3"
+    libreoffice_timeout: float = 120.0
     bootstrap_admin_username: str = ""
     bootstrap_admin_password: str = ""
     session_hours: int = 8

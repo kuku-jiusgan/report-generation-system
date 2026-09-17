@@ -92,7 +92,7 @@ export function useChapterBlockEditor(options: EditorOptions) {
         tableNo: '', sectionCode: options.selectedChapter.value.code, mode: 'STATIC',
         headerRows: 1, dataRowStart: 2, dataRowEnd: 2, footerRows: 0, recordKey: '', mergeFields: [],
         physicalTableIndex: 0, preservedRowLabels: [], clearEmbeddedObjects: false, matrixLayout: '',
-        groupKey: block.standardGroupCode, innerMode: 'ROW_REPEAT', enabled: true, notes: '', updatedAt: '',
+        groupKey: '', innerMode: 'ROW_REPEAT', enabled: true, notes: '', updatedAt: '',
       }
     }
     blockDialog.value = true
@@ -108,6 +108,8 @@ export function useChapterBlockEditor(options: EditorOptions) {
     } catch (error) {
       return `表格布局不是合法 JSON：${(error as Error).message}`
     }
+    const usesMatrix = draft.tableRule?.mode === 'MATRIX'
+      || (draft.tableRule?.mode === 'TABLE_REPEAT' && draft.tableRule?.innerMode === 'MATRIX')
     const policy = layout.columnPolicy
     if (policy !== undefined) {
       if (!policy || typeof policy !== 'object') return '矩阵横向扩展的 columnPolicy 必须是对象'
@@ -118,6 +120,7 @@ export function useChapterBlockEditor(options: EditorOptions) {
       if (!['PROTOTYPE', 'PRESERVE_TOTAL'].includes(String(policy.widthMode || 'PROTOTYPE'))) {
         return '矩阵横向扩展的列宽策略无效'
       }
+      if (!usesMatrix) return '当前填充方式不使用矩阵，请清除矩阵横向扩展配置'
       if (!Array.isArray(layout.rowFields) || !layout.rowFields.length) return '启用矩阵横向扩展时，逐列数据行配置不能为空'
       if (layout.rowFields.some((entry: any) => !entry || !Number.isInteger(Number(entry.row)) || Number(entry.row) < 1 || !String(entry.field || '').trim())) {
         return '逐列数据行配置必须包含正整数 row 和非空 field'
@@ -144,13 +147,22 @@ export function useChapterBlockEditor(options: EditorOptions) {
       const hasAnchor = (blockDraft.value.mappings || []).some((item) => item.controlTag)
       if (!hasAnchor) return ElMessage.warning('请先绑定该编组的字段，系统才能自动定位目标表格')
     }
-    if (blockDraft.value.standardGroupCode && layout?.mode === 'ROW_REPEAT' && !layout.dataRowStart) {
+    const rowRepeat = layout?.mode === 'ROW_REPEAT'
+      || (layout?.mode === 'TABLE_REPEAT' && layout.innerMode === 'ROW_REPEAT')
+    if (blockDraft.value.standardGroupCode && rowRepeat && !layout?.dataRowStart) {
       return ElMessage.warning('按行向下扩展必须设置原型数据行')
     }
     const repeating = !blockDraft.value.standardGroupCode && ['REPEATING_TABLE', 'MATRIX', 'TABLE_REPEAT'].includes(blockDraft.value.kind || '')
     if (repeating && !blockDraft.value.sourcePath?.trim()) return ElMessage.warning('循环表格必须设置数据集合')
     if (blockDraft.value.standardGroupCode && blockDraft.value.tableRule?.mode === 'TABLE_REPEAT' && !blockDraft.value.tableRule?.groupKey?.trim()) {
       return ElMessage.warning('按分组复制整表必须设置分组字段')
+    }
+    if (blockDraft.value.standardGroupCode && blockDraft.value.tableRule?.mode === 'TABLE_REPEAT') {
+      const key = blockDraft.value.tableRule.groupKey?.trim()
+      const available = (blockDraft.value.standardFields || [])
+        .filter((item) => item.enabled !== false && !String(item.fieldPath || '').includes('[*]'))
+        .map((item) => item.fieldPath || item.jsonKey)
+      if (key && !available.includes(key)) return ElMessage.warning('整表分组字段必须选择当前编组记录自身的字段')
     }
     const layoutError = invalidMatrixLayout(blockDraft.value)
     if (layoutError) return ElMessage.warning(layoutError)

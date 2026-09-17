@@ -23,6 +23,8 @@ const matrixDraft = reactive({
 })
 const groupMode = computed(() => block.value?.tableRule?.mode === 'ROW_REPEAT'
   || (block.value?.tableRule?.mode === 'TABLE_REPEAT' && block.value?.tableRule?.innerMode === 'ROW_REPEAT'))
+const matrixMode = computed(() => block.value?.tableRule?.mode === 'MATRIX'
+  || (block.value?.tableRule?.mode === 'TABLE_REPEAT' && block.value?.tableRule?.innerMode === 'MATRIX'))
 const groupFields = computed(() => (block.value?.standardFields || [])
   .filter((item) => item.enabled !== false)
   .map((item) => ({ value: item.fieldPath || item.fieldCode, label: `${item.label} · ${item.fieldPath || item.fieldCode}` })))
@@ -37,6 +39,11 @@ function fieldKey(value: unknown): string {
     : segments[segments.length - 1] || normalized
   return segment.replace(/\[\*?\]$/g, '')
 }
+function relativeFieldPath(value: unknown): string {
+  const normalized = String(value || '').trim().replace(/^\$\.?/, '')
+  const collectionEnd = normalized.indexOf('[*].')
+  return collectionEnd >= 0 ? normalized.slice(collectionEnd + 4) : normalized
+}
 function sourceFieldKey(sourcePath: unknown, fieldCode: unknown): string {
   const source = String(sourcePath || '').trim()
   const code = String(fieldCode || '').trim()
@@ -45,14 +52,31 @@ function sourceFieldKey(sourcePath: unknown, fieldCode: unknown): string {
   if (sourceKey && !/\[\*?\]/.test(source) && /\[\*?\]/.test(code)) return fieldKey(code)
   return sourceKey || fieldKey(fieldCode)
 }
+function matrixFieldValue(sourcePath: unknown, fieldCode: unknown): string {
+  return matrixMode.value && block.value?.tableRule?.mode === 'TABLE_REPEAT'
+    ? relativeFieldPath(sourcePath) : sourceFieldKey(sourcePath, fieldCode)
+}
+const tableRepeatGroupFields = computed<MatrixFieldOption[]>(() => {
+  const options = (block.value?.standardFields || [])
+    .filter((item) => item.enabled !== false && !String(item.fieldPath || '').includes('[*]'))
+    .map((item) => ({ value: item.fieldPath || item.jsonKey || '', label: `${item.label} · ${item.fieldPath || item.jsonKey}` }))
+    .filter((item) => item.value)
+  const current = String(block.value?.tableRule?.groupKey || '')
+  if (current && !options.some((item) => item.value === current)) {
+    options.push({ value: current, label: `未找到记录字段 · ${current}` })
+  }
+  return options
+})
 const matrixFieldOptions = computed<MatrixFieldOption[]>(() => {
   const options = new Map<string, MatrixFieldOption>()
   for (const item of block.value?.mappings || []) {
-    const value = sourceFieldKey(item.sourcePath, item.fieldCode)
+    const value = matrixFieldValue(item.sourcePath, item.fieldCode)
     if (value && !options.has(value)) options.set(value, { value, label: `${item.wordLabel || value} · ${value}` })
   }
   for (const item of block.value?.standardFields || []) {
-    const value = fieldKey(item.legacyJsonPath || item.fieldPath || item.jsonKey || item.fieldCode)
+    const path = item.fieldPath || item.legacyJsonPath || item.jsonKey || item.fieldCode
+    const value = matrixMode.value && block.value?.tableRule?.mode === 'TABLE_REPEAT'
+      ? relativeFieldPath(path) : fieldKey(path)
     if (value && !options.has(value)) options.set(value, { value, label: `${item.label || value} · ${value}` })
   }
   for (const item of matrixDraft.rowFields) {
@@ -60,6 +84,34 @@ const matrixFieldOptions = computed<MatrixFieldOption[]>(() => {
   }
   return [...options.values()]
 })
+function boundMatrixField(row: number): string {
+  const physicalTable = Number(block.value?.tableRule?.physicalTableIndex || 0)
+  const values = new Set((block.value?.mappings || [])
+    .filter((item) => {
+      if (!item.bound || !item.wordLocation) return false
+      const location = String(item.wordLocation)
+      const rowMatch = location.match(/第\s*(\d+)\s*行/)
+      const tableMatch = location.match(/正文第\s*(\d+)\s*张表/)
+      return Number(rowMatch?.[1] || 0) === row
+        && (!physicalTable || Number(tableMatch?.[1] || 0) === physicalTable)
+    })
+    .map((item) => matrixFieldValue(item.sourcePath, item.fieldCode))
+    .filter(Boolean))
+  return values.size === 1 ? [...values][0] : ''
+}
+function resolvedMatrixField(row: number, configured: unknown): string {
+  const value = String(configured || '')
+  const available = new Set([
+    ...(block.value?.mappings || []).map((item) => matrixFieldValue(item.sourcePath, item.fieldCode)),
+    ...(block.value?.standardFields || []).map((item) => {
+      const path = item.fieldPath || item.legacyJsonPath || item.jsonKey || item.fieldCode
+      return matrixMode.value && block.value?.tableRule?.mode === 'TABLE_REPEAT'
+        ? relativeFieldPath(path) : fieldKey(path)
+    }),
+  ].filter(Boolean))
+  if (available.has(value)) return value
+  return boundMatrixField(row) || value
+}
 function loadGroup() {
   let layout: any = {}
   try { layout = block.value?.tableRule?.matrixLayout ? JSON.parse(block.value.tableRule.matrixLayout) : {} } catch { layout = {} }
@@ -88,11 +140,14 @@ function loadMatrix() {
   matrixDraft.minColumns = Number(policy.minColumns || 5)
   matrixDraft.widthMode = String(policy.widthMode || 'PROTOTYPE')
   matrixDraft.rowFields = Array.isArray(layout.rowFields)
-    ? layout.rowFields.map((entry: any) => ({ row: Number(entry?.row || 0), field: String(entry?.field || '') }))
+    ? layout.rowFields.map((entry: any) => {
+        const row = Number(entry?.row || 0)
+        return { row, field: resolvedMatrixField(row, entry?.field) }
+      })
     : []
 }
 function saveMatrix() {
-  if (!block.value?.tableRule || block.value.tableRule.mode !== 'MATRIX') return
+  if (!block.value?.tableRule || !matrixMode.value) return
   const layout = matrixLayout()
   if (matrixDraft.enabled) {
     layout.rowFields = matrixDraft.rowFields.map((entry) => ({ row: Number(entry.row), field: entry.field }))
@@ -115,7 +170,7 @@ function removeMatrixRowField(index: number) {
 watch(groupMode, (active) => { if (active) loadGroup() }, { immediate: true })
 watch(() => block.value?.standardGroupCode, () => { if (groupMode.value) loadGroup() })
 watch(groupDraft, saveGroup, { deep: true })
-watch(() => block.value?.tableRule?.mode, (mode) => { if (mode === 'MATRIX') loadMatrix() }, { immediate: true })
+watch(matrixMode, (active) => { if (active) loadMatrix() }, { immediate: true })
 watch(matrixDraft, saveMatrix, { deep: true })
 </script>
 
@@ -132,7 +187,7 @@ watch(matrixDraft, saveMatrix, { deep: true })
     <template #footer><el-button @click="chapterOpen = false">取消</el-button><el-button type="primary" @click="$emit('saveChapter')">保存章节</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="blockOpen" :title="block?.standardGroupCode ? '配置模板布局' : (block?.id ? '编辑内容块' : '新增内容块')" width="760px">
+  <el-dialog v-model="blockOpen" :title="block?.standardGroupCode ? '配置模板布局' : (block?.id ? '编辑内容块' : '新增内容块')" width="min(960px, calc(100vw - 32px))">
     <el-form v-if="block" label-position="top">
       <div v-if="!block.standardGroupCode" class="form-inline">
         <el-form-item label="内容块名称"><el-input v-model="block.title" placeholder="例如：对照品表格" /></el-form-item>
@@ -176,13 +231,16 @@ watch(matrixDraft, saveMatrix, { deep: true })
               default-first-option placeholder="例如 RSD、结论、平均" />
             <small class="dialog-hint">仅用于按行向下扩展：首列以这些文字开头的行不会被删除，只清空未绑定的单元格。矩阵横向扩展无需配置，未列入“逐列数据行配置”的行默认保留。</small>
           </el-form-item>
-          <div v-if="block.tableRule.mode === 'ROW_REPEAT'" class="form-inline">
+          <div v-if="groupMode" class="form-inline">
             <el-form-item label="原型数据行位置"><el-input-number v-model="block.tableRule.dataRowStart" :min="1" /></el-form-item>
             <el-form-item label="数据行结束位置"><el-input-number v-model="block.tableRule.dataRowEnd" :min="1" /></el-form-item>
           </div>
           <div v-if="block.tableRule.mode === 'TABLE_REPEAT'" class="form-inline">
             <el-form-item label="整表分组字段">
-              <el-input v-model="block.tableRule.groupKey" placeholder="例如 impurityId 或 impurityName" />
+              <el-select v-model="block.tableRule.groupKey" filterable placeholder="选择每张表的分组字段">
+                <el-option v-for="item in tableRepeatGroupFields" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+              <small class="dialog-hint">选择每条编组记录自身的字段，例如“杂质名称 · field_047”；不要填写集合名或标准字段编码。</small>
             </el-form-item>
             <el-form-item label="表内填充方式">
               <el-select v-model="block.tableRule.innerMode">
@@ -212,8 +270,8 @@ watch(matrixDraft, saveMatrix, { deep: true })
             </el-select>
             <small class="dialog-hint">扩列后保持表格总宽度不变。标题长的窄列在多分组时容易被挤成三行，选等宽即可。</small>
           </el-form-item>
-          <template v-if="block.tableRule.mode === 'MATRIX'">
-            <div class="section-title">矩阵横向扩展（当前矩阵类型的可选布局）</div>
+          <template v-if="matrixMode">
+            <div class="section-title">矩阵横向扩展</div>
             <div class="form-inline">
               <el-form-item label="按数据条数向右扩展">
                 <el-switch v-model="matrixDraft.enabled" active-text="启用" />
@@ -233,17 +291,23 @@ watch(matrixDraft, saveMatrix, { deep: true })
                 <div class="matrix-row-fields">
                   <div v-for="(entry, index) in matrixDraft.rowFields" :key="index" class="matrix-row-field">
                     <el-input-number v-model="entry.row" :min="1" controls-position="right" aria-label="Word行号" />
-                    <el-select v-model="entry.field" filterable placeholder="选择字段">
-                      <el-option v-for="option in matrixFieldOptions" :key="option.value" :label="option.label" :value="option.value" />
+                    <el-select v-model="entry.field" class="matrix-field-select" placeholder="选择字段"
+                      popper-class="matrix-field-popper">
+                      <el-option v-for="option in matrixFieldOptions" :key="option.value" :label="option.label"
+                        :value="option.value" :title="option.label" />
+                      <template #label="{ label }">
+                        <span class="matrix-selected-label" :title="label">{{ label }}</span>
+                      </template>
                     </el-select>
                     <el-button link type="danger" :icon="Delete" aria-label="删除数据行配置" @click="removeMatrixRowField(index)" />
+                    <small v-if="entry.field" class="matrix-field-path" :title="entry.field">{{ entry.field }}</small>
                   </div>
                   <el-button text type="primary" :icon="Plus" @click="addMatrixRowField">添加数据行</el-button>
                   <small v-if="!matrixDraft.rowFields.length" class="dialog-hint">请添加需要随数据记录向右扩展的 Word 行。</small>
                 </div>
               </el-form-item>
             </div>
-            <small v-if="matrixDraft.enabled" class="dialog-hint">只扩展配置为逐列数据的行；回归方程、相关系数、结论等固定行保持原布局。字段名必须来自报告数据记录。保存后该配置写入当前表格规则，不会新增独立业务类型。</small>
+            <small v-if="matrixDraft.enabled" class="dialog-hint">只扩展配置为逐列数据的行；固定行通过 Word 内容控件绑定取值。按分组复制整表时，请为逐列数据选择同一个明细层中的字段。</small>
           </template>
         </template>
       </template>
@@ -267,6 +331,14 @@ watch(matrixDraft, saveMatrix, { deep: true })
 .field-list { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
 .matrix-row-fields-item { grid-column: 1 / -1; min-width: 0; }
 .matrix-row-fields { display: grid; gap: 8px; width: 100%; }
-.matrix-row-field { display: grid; grid-template-columns: 110px minmax(0, 1fr) 32px; gap: 8px; align-items: center; }
+.matrix-row-field { display: grid; grid-template-columns: 110px minmax(360px, 1fr) 32px; gap: 6px 10px; align-items: center; }
 .matrix-row-field :deep(.el-select) { width: 100%; }
+.matrix-selected-label { display: block; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; direction: ltr; }
+.matrix-field-path { grid-column: 2 / 3; min-width: 0; color: var(--el-text-color-secondary); line-height: 1.45; overflow-wrap: anywhere; }
+:global(.matrix-field-popper) { max-width: min(720px, calc(100vw - 32px)); }
+:global(.matrix-field-popper .el-select-dropdown__item) { height: auto; min-height: 34px; padding-block: 7px; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .form-inline { grid-template-columns: 1fr; }
+  .matrix-row-field { grid-template-columns: 88px minmax(0, 1fr) 32px; }
+}
 </style>

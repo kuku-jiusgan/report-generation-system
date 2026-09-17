@@ -30,6 +30,7 @@ from .schemas import (
 )
 logger = logging.getLogger(__name__)
 from .services.mapped_docx_generator import build_mapped_docx
+from .services.docx_field_refresher import refresh_docx_fields
 from .services.docx_export import export_docx_bytes, export_docx_response, write_export_docx
 from .services.system_field_resolver import resolve_system_fields
 from .services.standard_payloads import active_standard_payload
@@ -190,13 +191,21 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
                     pending_codes.append(dependency)
     system_fields = [field for field in all_fields if field["fieldCode"] in required_codes]
     resolve_system_fields(system_fields, all_rules, active_payload, data)
+    output_path = settings.reports_dir / output_name
+    candidate_path = output_path.with_name(f".{output_path.stem}-{uuid.uuid4().hex[:8]}.docx")
     try:
-        build_mapped_docx(template, settings.reports_dir / output_name, mappings,
-                          active_payload, data, table_rules)
+        build_mapped_docx(template, candidate_path, mappings, active_payload, data, table_rules)
+        refresh_docx_fields(
+            candidate_path, settings.libreoffice_executable, settings.libreoffice_timeout,
+            settings.libreoffice_python_executable,
+        )
+        candidate_path.replace(output_path)
     except Exception as error:
         if phase:
             record_generation(item["id"], data, phase, actor, "FAILED", error=str(error))
         raise
+    finally:
+        candidate_path.unlink(missing_ok=True)
     if phase:
         record_generation(item["id"], data, phase, actor, output_name=output_name)
     return output_name

@@ -19,6 +19,9 @@ ROOT_LEVEL = ""
 OBJECT = "OBJECT"
 ARRAY = "ARRAY"
 LEVEL_KINDS = (OBJECT, ARRAY)
+CANONICAL_LEVEL_KINDS = {"summary": OBJECT, "injections": ARRAY}
+CANONICAL_LEVEL_LABELS = {"summary": "汇总", "injections": "进样明细"}
+LEGACY_LEVEL_ALIASES = {"mingxi": "injections"}
 
 
 def ensure_group_levels(database: Database) -> None:
@@ -75,14 +78,21 @@ def json_path_for(item_path: str, cardinality: str, field_path: str) -> str:
 def save_group_level(database: Database, group_code: str, item: dict[str, Any],
                      original_key: str = "") -> None:
     ensure_group_levels(database)
-    level_key = str(item.get("levelKey") or "").strip()
+    submitted_key = str(item.get("levelKey") or "").strip()
+    if submitted_key in LEGACY_LEVEL_ALIASES:
+        raise ValueError(f"层的键名 {submitted_key} 已废弃，请使用 {LEGACY_LEVEL_ALIASES[submitted_key]}")
+    level_key = submitted_key
     if not level_key:
         raise ValueError("层的键名不能为空")
     if not level_key.replace("_", "").isalnum():
         raise ValueError("层的键名只能使用字母、数字和下划线")
     kind = str(item.get("kind") or OBJECT)
-    if kind not in LEVEL_KINDS:
-        raise ValueError("层的类型只能是 OBJECT 或 ARRAY")
+    expected_kind = CANONICAL_LEVEL_KINDS.get(level_key)
+    if expected_kind is None:
+        raise ValueError("层的键名只能是 summary 或 injections")
+    if kind != expected_kind:
+        expected_label = "对象" if expected_kind == OBJECT else "数组"
+        raise ValueError(f"层 {level_key} 必须是{expected_label}层")
     with database.connect() as connection:
         if original_key and original_key != level_key:
             connection.execute(
@@ -97,7 +107,7 @@ def save_group_level(database: Database, group_code: str, item: dict[str, Any],
             "INSERT INTO system_field_group_levels(group_code,level_key,label,kind,order_no,updated_at) "
             "VALUES(%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE label=VALUES(label),kind=VALUES(kind),"
             "order_no=VALUES(order_no),updated_at=VALUES(updated_at)",
-            (group_code, level_key, str(item.get("label") or level_key), kind,
+            (group_code, level_key, CANONICAL_LEVEL_LABELS[level_key], kind,
              int(item.get("orderNo", 0)), now_iso()),
         )
 

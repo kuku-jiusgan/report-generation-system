@@ -32,13 +32,13 @@ EXCEL_FIELD_PATHS = {
     "uncategorized.field_002": "$.conclusions[*].text",
     "uncategorized.field_005": "$.custom.field_005",
     "uncategorized.field_006": "$.custom.field_006",
-    "uncategorized.field_007": "$.lod[*].name",
-    "uncategorized.field_008": "$.lod[*].field2",
-    "uncategorized.field_009": "$.lod[*].field3",
-    "uncategorized.field_010": "$.lod[*].field4",
-    "uncategorized.field_011": "$.lod[*].field5",
-    "uncategorized.field_012": "$.lod[*].field6",
-    "uncategorized.field_013": "$.lod[*].field7",
+    "uncategorized.field_007": "$.jiancexian[*].name",
+    "uncategorized.field_008": "$.jiancexian[*].field2",
+    "uncategorized.field_009": "$.jiancexian[*].field3",
+    "uncategorized.field_010": "$.jiancexian[*].field4",
+    "uncategorized.field_011": "$.jiancexian[*].field5",
+    "uncategorized.field_012": "$.jiancexian[*].field6",
+    "uncategorized.field_013": "$.jiancexian[*].field7",
     "uncategorized.field_014": "$.loq[*].sequence",
     "uncategorized.field_015": "$.loq[*].field2",
     "uncategorized.field_016": "$.loq[*].peakArea",
@@ -53,8 +53,23 @@ EXCEL_FIELD_PATHS = {
     "uncategorized.field_025": "$.linearity[*].correlationCoefficient",
     "uncategorized.field_026": "$.linearity[*].interceptRatio",
     "uncategorized.field_027": "$.linearity[*].predictedPeakArea",
-    "uncategorized.field_028": "$.linearity[*].residual",
     "uncategorized.field_029": "$.linearity[*].residualChart",
+    "uncategorized.field_047": "$.xianxingjieguo[*].field_047",
+    "uncategorized.field_048": "$.xianxingjieguo[*].injections[*].field_048",
+    "uncategorized.field_049": "$.chongfuxingjieguo[*].injections[*].field_049",
+    "uncategorized.field_050": "$.chongfuxingjieguo[*].injections[*].field_050",
+    "uncategorized.field_051": "$.chongfuxingjieguo[*].injections[*].field_051",
+    "uncategorized.field_052": "$.chongfuxingjieguo[*].injections[*].field_052",
+    "uncategorized.field_053": "$.chongfuxingjieguo[*].injections[*].field_053",
+    "uncategorized.field_054": "$.chongfuxingjieguo[*].injections[*].field_054",
+    "uncategorized.field_055": "$.chongfuxingjieguo[*].field_055",
+    "uncategorized.field_056": "$.chongfuxingjieguo[*].summary.field_056",
+    "uncategorized.field_057": "$.chongfuxingjieguo[*].summary.field_057",
+    "uncategorized.field_058": "$.chongfuxingjieguo[*].summary.field_058",
+    "uncategorized.field_059": "$.chongfuxingjieguo[*].summary.field_059",
+    "uncategorized.field_084": "$.xianxingjieguo[*].summary.field_084",
+    **{f"uncategorized.field_{index:03d}": f"$.custom.field_{index:03d}"
+       for index in (60, 61, 62, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 96)},
     **{f"uncategorized.field_{index:03d}": f"$.custom.field_{index:03d}" for index in range(30, 43)},
     "uncategorized.field_046": "$.dingliangxianjieguo[*].field_046",
 }
@@ -96,12 +111,35 @@ EXCEL_WORKBOOK_LOCATIONS = {
     "uncategorized.field_021": {"sheet": "线性", "cells": "C2:G2、C26:G26……", "matchBy": "每个杂质 5 个水平", "valueColumn": "溶液名称"},
     "uncategorized.field_022": {"sheet": "线性", "cells": "C3:G3、C27:G27……", "matchBy": "每个杂质 5 个水平", "valueColumn": "实际浓度"},
     "uncategorized.field_023": {"sheet": "线性", "cells": "C4:G4、C28:G28……", "matchBy": "每个杂质 5 个水平", "valueColumn": "峰面积"},
-    "uncategorized.field_024": {"sheet": "线性", "cells": "由实际浓度与峰面积计算", "matchBy": "每个杂质一条", "valueColumn": "线性回归方程"},
-    "uncategorized.field_025": {"sheet": "线性", "cells": "由实际浓度与峰面积计算", "matchBy": "每个杂质一条", "valueColumn": "线性相关系数 R²"},
-    "uncategorized.field_026": {"sheet": "线性", "cells": "由实际浓度与峰面积计算", "matchBy": "每个杂质一条", "valueColumn": "截距/100%浓度峰面积"},
+    "uncategorized.field_024": {"sheet": "线性", "cells": "C6、C30、C54……", "matchBy": "每个杂质一条", "valueColumn": "线性回归方程"},
+    "uncategorized.field_025": {"sheet": "线性", "cells": "C7、C31、C55……", "matchBy": "每个杂质一条", "valueColumn": "线性相关系数 R²"},
+    "uncategorized.field_026": {"sheet": "线性", "cells": "G7、G31、G55……", "matchBy": "每个杂质一条", "valueColumn": "截距/100%浓度峰面积"},
     "uncategorized.field_027": {"sheet": "线性", "cells": "C8:G8、C32:G32……", "matchBy": "每个杂质 5 个水平", "valueColumn": "预测峰面积"},
-    "uncategorized.field_028": {"sheet": "线性", "cells": "C9:G9、C33:G33……", "matchBy": "每个杂质 5 个水平", "valueColumn": "残差"},
     "uncategorized.field_029": {"sheet": "线性", "cells": "图表对象", "matchBy": "每个杂质的普通线性残差图", "valueColumn": "残差图"},
+    "uncategorized.field_047": {"sheet": "线性", "cells": "A2、A26、A50……", "matchBy": "每个杂质分块的首个结果表", "valueColumn": "A（杂质名称）"},
+    "uncategorized.field_048": {"sheet": "线性", "cells": "C9:G9、C33:G33……", "matchBy": "每个杂质 5 个水平", "valueColumn": "残差"},
+    "uncategorized.field_049": {"sheet": "重复性跟中间精密度", "cells": "D3:D8、D36:D41……", "matchBy": "每个杂质 6 次测定", "valueColumn": "D（编号）"},
+    "uncategorized.field_050": {"sheet": "重复性跟中间精密度", "cells": "E3:E8、E36:E41……", "matchBy": "每个杂质 6 次测定", "valueColumn": "E（称样量）"},
+    "uncategorized.field_051": {"sheet": "重复性跟中间精密度", "cells": "F3:F8、F36:F41……", "matchBy": "每个杂质 6 次测定", "valueColumn": "F（保留时间）"},
+    "uncategorized.field_052": {"sheet": "重复性跟中间精密度", "cells": "G3:G8、G36:G41……", "matchBy": "每个杂质 6 次测定", "valueColumn": "G（峰面积）"},
+    "uncategorized.field_053": {"sheet": "重复性跟中间精密度", "cells": "H3:H8、H36:H41……", "matchBy": "每个杂质 6 次测定", "valueColumn": "H（测得浓度）"},
+    "uncategorized.field_054": {"sheet": "重复性跟中间精密度", "cells": "I3:I8、I36:I41……", "matchBy": "每个杂质 6 次测定", "valueColumn": "I（相当供试品中含量）"},
+    "uncategorized.field_055": {"sheet": "重复性跟中间精密度", "cells": "A2、A35、A68……", "matchBy": "每个杂质分块的首个结果表", "valueColumn": "A（杂质名称）"},
+    "uncategorized.field_056": {"sheet": "重复性跟中间精密度", "cells": "F9、F42、F75……", "matchBy": "每个杂质重复性汇总行", "valueColumn": "保留时间 RSD"},
+    "uncategorized.field_057": {"sheet": "重复性跟中间精密度", "cells": "I9、I42、I75……", "matchBy": "每个杂质重复性汇总行", "valueColumn": "相当供试品中含量 RSD"},
+    "uncategorized.field_058": {"sheet": "重复性跟中间精密度", "cells": "F11 与 I11、F44 与 I44……", "matchBy": "每个杂质重复性汇总行", "valueColumn": "含量 95% 置信区间"},
+    "uncategorized.field_059": {"sheet": "重复性跟中间精密度", "cells": "F12 与 I12、F45 与 I45……", "matchBy": "每个杂质重复性汇总行", "valueColumn": "占理论含量百分比区间"},
+    "uncategorized.field_084": {"sheet": "线性", "cells": "由实际浓度与峰面积生成", "matchBy": "每个杂质的首个结果表", "valueColumn": "回归曲线图"},
+    **{f"uncategorized.field_{index:03d}": {
+        "sheet": "准确度", "cells": f"{column}16:{column}24、{column}44:{column}52……",
+        "matchBy": "每个杂质的准确度试验结果表，每 28 行一组", "valueColumn": column,
+    } for index, column in {61: "E", 62: "F", 64: "G", 67: "D", 68: "H",
+                            69: "I", 70: "J", 71: "K", 72: "L"}.items()},
+    "uncategorized.field_060": {"sheet": "准确度", "cells": "A14、A42、A70……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "杂质名称"},
+    "uncategorized.field_073": {"sheet": "准确度", "cells": "G25、G53、G81……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "平均回收率"},
+    "uncategorized.field_074": {"sheet": "准确度", "cells": "G26、G54、G82……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "RSD"},
+    "uncategorized.field_075": {"sheet": "准确度", "cells": "F27 与 K27、F55 与 K55……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "95%置信区间"},
+    "uncategorized.field_096": {"sheet": "准确度", "cells": "G28、G56、G84……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "结论"},
     "uncategorized.field_030": {"sheet": "重复性跟中间精密度", "cells": "D3:D8、D35:D40……", "matchBy": "每个杂质 6 次测定", "valueColumn": "No"},
     "uncategorized.field_031": {"sheet": "重复性跟中间精密度", "cells": "E3:E8、E35:E40……", "matchBy": "每个杂质 6 次测定", "valueColumn": "E（称样量）"},
     "uncategorized.field_032": {"sheet": "重复性跟中间精密度", "cells": "F3:F8、F35:F40……", "matchBy": "每个杂质 6 次测定", "valueColumn": "保留时间"},
@@ -143,12 +181,12 @@ LINEARITY_ROWS = {
     "uncategorized.field_022": 3,
     "uncategorized.field_023": 4,
     "uncategorized.field_027": 8,
-    "uncategorized.field_028": 9,
+    "uncategorized.field_048": 9,
 }
-LINEARITY_STATISTICS = {
-    "uncategorized.field_024": "LINEAR_EQUATION",
-    "uncategorized.field_025": "LINEAR_R2",
-    "uncategorized.field_026": "LINEAR_INTERCEPT_RATIO",
+LINEARITY_DIRECT_CELLS = {
+    "uncategorized.field_024": (6, 3),
+    "uncategorized.field_025": (7, 3),
+    "uncategorized.field_026": (7, 7),
 }
 
 REPEATABILITY_DETAIL_COLUMNS = {
@@ -161,6 +199,39 @@ REPEATABILITY_SUMMARY_CELLS = {
     "uncategorized.field_038": (11, 9), "uncategorized.field_039": (10, 5),
     "uncategorized.field_040": (10, 8), "uncategorized.field_041": (12, 6),
     "uncategorized.field_042": (12, 9),
+}
+CURRENT_REPEATABILITY_DETAIL_COLUMNS = {
+    "uncategorized.field_049": 4, "uncategorized.field_050": 5,
+    "uncategorized.field_051": 6, "uncategorized.field_052": 7,
+    "uncategorized.field_053": 8, "uncategorized.field_054": 9,
+}
+CURRENT_REPEATABILITY_SUMMARY_CELLS = {
+    "uncategorized.field_056": (9, 6), "uncategorized.field_057": (9, 9),
+}
+CURRENT_REPEATABILITY_INTERVAL_CELLS = {
+    "uncategorized.field_058": (11, (6, 9)),
+    "uncategorized.field_059": (12, (6, 9)),
+}
+ACCURACY_DETAIL_COLUMNS = {
+    "uncategorized.field_061": 5, "uncategorized.field_062": 6,
+    "uncategorized.field_064": 7, "uncategorized.field_067": 4,
+    "uncategorized.field_068": 8, "uncategorized.field_069": 9,
+    "uncategorized.field_070": 10, "uncategorized.field_071": 11,
+    "uncategorized.field_072": 12,
+}
+ACCURACY_SUMMARY_CELLS = {
+    "uncategorized.field_060": (14, 1),
+    "uncategorized.field_073": (25, 7),
+    "uncategorized.field_074": (26, 7),
+    "uncategorized.field_096": (28, 7),
+}
+ACCURACY_FIELDS = {*ACCURACY_DETAIL_COLUMNS, *ACCURACY_SUMMARY_CELLS, "uncategorized.field_075"}
+EXCEL_ONLY_FIELDS = {
+    *ACCURACY_FIELDS,
+    *CURRENT_REPEATABILITY_DETAIL_COLUMNS,
+    "uncategorized.field_055",
+    *CURRENT_REPEATABILITY_SUMMARY_CELLS,
+    *CURRENT_REPEATABILITY_INTERVAL_CELLS,
 }
 
 
@@ -207,9 +278,11 @@ def _sync_repeatability_group_chapter(database: Any) -> None:
 
 def _ensure_repeated_field_contracts(database: Any) -> None:
     repeated_fields = (*DETECTION_LIMIT_COLUMNS, *QUANTITATION_LIMIT_COLUMNS,
-                       *LINEARITY_ROWS, *LINEARITY_STATISTICS,
-                       "uncategorized.field_029",
+                       *LINEARITY_ROWS, *LINEARITY_DIRECT_CELLS,
+                       "uncategorized.field_029", "uncategorized.field_047",
+                       "uncategorized.field_084",
                        "uncategorized.field_046",
+                       *EXCEL_ONLY_FIELDS,
                        *REPEATABILITY_DETAIL_COLUMNS, *REPEATABILITY_SUMMARY_CELLS)
     _sync_repeated_field_catalog(database, repeated_fields)
     _sync_repeatability_group_chapter(database)
@@ -293,21 +366,73 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
                        "rowStartOffsetFromRepeatCount": 6, "rowCount": 1 if summary else 6,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL"})
+    elif field_code == "uncategorized.field_047":
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "线性", "rowStart": 2, "rowEnd": 2,
+                       "startColumn": 1, "rowStep": 24,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code in LINEARITY_ROWS:
         row = LINEARITY_ROWS[field_code]
         config.update({"mode": "REPEAT_BLOCK", "sheet": "线性", "rowStart": row, "rowEnd": row,
                        "startColumn": 3, "rowStep": 24, "valueCountMode": "UNTIL_BLANK", "maxValueCount": 100,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "HORIZONTAL_CELL"})
-    elif field_code in LINEARITY_STATISTICS:
-        config.update({"mode": "REPEAT_BLOCK", "sheet": "线性", "rowStart": 3, "rowEnd": 3,
-                       "xRow": 3, "yRow": 4, "startColumn": 3, "rowStep": 24,
-                       "valueCountMode": "UNTIL_BLANK", "maxValueCount": 100,
+    elif field_code in LINEARITY_DIRECT_CELLS:
+        row, column = LINEARITY_DIRECT_CELLS[field_code]
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "线性", "rowStart": row, "rowEnd": row,
+                       "startColumn": column, "rowStep": 24,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
-                       "maxRepeat": 15, "valueMode": LINEARITY_STATISTICS[field_code],
-                       "broadcastRepeat": True})
+                       "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code == "uncategorized.field_029":
-        config.update({"mode": "CHART_IMAGE", "sheet": "线性", "pointsPerTest": 5})
+        config.update({"mode": "CHART_IMAGE", "sheet": "线性",
+                       "pointsPerTest": 1 if ".summary." in source_path else 5})
+    elif field_code == "uncategorized.field_084":
+        config.update({"mode": "LINEAR_REGRESSION_CHART", "sheet": "线性", "pointsPerTest": 1})
+    elif field_code == "uncategorized.field_055":
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "重复性跟中间精密度",
+                       "rowStart": 2, "rowEnd": 2, "startColumn": 1, "rowStep": 33,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
+    elif field_code in CURRENT_REPEATABILITY_DETAIL_COLUMNS:
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "重复性跟中间精密度",
+                       "rowStart": 3, "rowEnd": 8,
+                       "startColumn": CURRENT_REPEATABILITY_DETAIL_COLUMNS[field_code],
+                       "columnStep": 0, "rowStep": 33,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
+    elif field_code in CURRENT_REPEATABILITY_SUMMARY_CELLS:
+        row, column = CURRENT_REPEATABILITY_SUMMARY_CELLS[field_code]
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "重复性跟中间精密度",
+                       "rowStart": row, "rowEnd": row, "startColumn": column,
+                       "columnStep": 0, "rowStep": 33,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
+    elif field_code in CURRENT_REPEATABILITY_INTERVAL_CELLS:
+        row, columns = CURRENT_REPEATABILITY_INTERVAL_CELLS[field_code]
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "重复性跟中间精密度",
+                       "rowStart": row, "rowEnd": row, "pairColumns": list(columns),
+                       "pairSeparator": "～", "rowStep": 33,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL_PAIR"})
+    elif field_code in ACCURACY_DETAIL_COLUMNS:
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "准确度", "rowStart": 16, "rowEnd": 24,
+                       "startColumn": ACCURACY_DETAIL_COLUMNS[field_code], "rowStep": 28,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15,
+                       "valueMode": "MERGED_CELL" if field_code in {
+                           "uncategorized.field_067", "uncategorized.field_070", "uncategorized.field_072",
+                       } else "CELL"})
+    elif field_code in ACCURACY_SUMMARY_CELLS:
+        row, column = ACCURACY_SUMMARY_CELLS[field_code]
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "准确度", "rowStart": row, "rowEnd": row,
+                       "startColumn": column, "rowStep": 28,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
+    elif field_code == "uncategorized.field_075":
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "准确度", "rowStart": 27, "rowEnd": 27,
+                       "pairColumns": [6, 11], "pairSeparator": "～", "rowStep": 28,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL_PAIR"})
     elif field_code in REPEATABILITY_DETAIL_COLUMNS:
         config.update({"mode": "REPEAT_BLOCK", "sheet": "重复性跟中间精密度", "rowStart": 3, "rowEnd": 8,
                        "startColumn": REPEATABILITY_DETAIL_COLUMNS[field_code], "columnStep": 0, "rowStep": 33,
@@ -324,15 +449,18 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
 
 def ensure_excel_field_rules(database: Any) -> None:
     """补齐 Excel 规则，并同步编组字段的标准结果路径。"""
+    _ensure_repeated_field_contracts(database)
     _ensure_quantitation_impurity_name_contract(database)
     for field_code, default_path in EXCEL_FIELD_PATHS.items():
         field = database.get_lims_field(field_code)
         if not field:
             continue
         source_path = excel_target_path(field, str(field.get("legacyJsonPath") or "") or default_path)
-        existing = [rule for rule in database.list_system_field_rules(field_code)
-                    if rule.get("sourceType") == "EXCEL"]
+        field_rules = database.list_system_field_rules(field_code)
+        existing = [rule for rule in field_rules if rule.get("sourceType") == "EXCEL"]
         if existing:
+            if field_code in ACCURACY_FIELDS and any(rule.get("sourceType") != "EXCEL" for rule in field_rules):
+                raise ValueError(f"字段 {field_code} 同时存在 Excel 与其他来源规则，请先解决来源冲突")
             for rule in existing:
                 config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
                 desired_row_count = 1 if (
@@ -341,7 +469,11 @@ def ensure_excel_field_rules(database: Any) -> None:
                     and source_path.startswith("$.dingliangxianjieguo")
                 ) else None
                 needs_row_count = desired_row_count is not None and config.get("rowCount") != desired_row_count
-                needs_field_config = field_code == "uncategorized.field_046"
+                needs_field_config = field_code in {
+                    "uncategorized.field_046", "uncategorized.field_047",
+                    "uncategorized.field_048", "uncategorized.field_029",
+                    "uncategorized.field_084",
+                } or field_code in LINEARITY_DIRECT_CELLS or field_code in EXCEL_ONLY_FIELDS
                 if config.get("sourcePath") == source_path and not needs_row_count and not needs_field_config:
                     continue
                 updated_config = _rule_config(field_code, source_path) if needs_field_config else {**config, "sourcePath": source_path}
@@ -350,6 +482,17 @@ def ensure_excel_field_rules(database: Any) -> None:
                 database.save_system_field_rule(
                     {**rule, "config": updated_config}, rule.get("id")
                 )
+            continue
+        replaceable = ([rule for rule in field_rules if rule.get("sourceType") in ({"LIMS", "AI"} if field_code in ACCURACY_FIELDS else {"LIMS"})]
+                       if field_code in EXCEL_ONLY_FIELDS else [])
+        if len(replaceable) > 1:
+            raise ValueError(f"字段 {field_code} 存在多条旧来源规则，不能确定要替换的规则")
+        if replaceable:
+            database.save_system_field_rule({
+                **replaceable[0], "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",
+                "priority": 50, "transform": "TRIM", "enabled": True,
+                "config": _rule_config(field_code, source_path),
+            }, replaceable[0].get("id"))
             continue
         database.save_system_field_rule({
             "fieldCode": field_code, "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",

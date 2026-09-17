@@ -11,13 +11,42 @@ from typing import Any, Callable
 from lxml import etree
 
 from .docx_table_cells import (
-    NS, cell_width, grid_after, grid_span, set_cell_text, set_cell_width,
+    NS, cell_width, grid_after, grid_span, set_cell_text, set_cell_width, set_grid_span,
     stretch_merged_row, sync_table_grid,
 )
 from .table_layout_rules import repeat_bookmark_name
 
 
 Warn = Callable[[str, str, str], None]
+
+
+def with_image_control_tags(layout: dict[str, Any],
+                            mappings: list[dict[str, Any]]) -> dict[str, Any]:
+    """把图片字段的内容控件标签注入矩阵固定单元格配置。"""
+    result = copy.deepcopy(layout)
+    by_field: dict[str, dict[str, Any] | None] = {}
+    for item in mappings:
+        if item.get("dataType") != "image" or not item.get("controlTag"):
+            continue
+        keys = [str(item.get("fieldCode") or "").split(".")[-1]]
+        source_path = str(item.get("sourcePath") or "")
+        if source_path:
+            keys.append(source_path.rsplit(".", 1)[-1])
+        for key in keys:
+            if not key:
+                continue
+            if key in by_field and by_field[key] != item:
+                by_field[key] = None
+            elif key not in by_field:
+                by_field[key] = item
+    for entry in result.get("scalarCells") or []:
+        if not isinstance(entry, dict):
+            continue
+        mapping = by_field.get(str(entry.get("field") or ""))
+        if mapping is not None:
+            entry["controlTag"] = mapping["controlTag"]
+            entry["dataType"] = "image"
+    return result
 
 
 def _layout_entries(layout: dict[str, Any], key: str) -> list[dict[str, Any]]:
@@ -144,6 +173,7 @@ def _expand_row(row: etree._Element, target: int, widths: list[int]) -> None:
         data_cells.append(clone)
     for cell, width in zip(data_cells[:target], widths):
         set_cell_width(cell, width)
+        set_grid_span(cell, 1)
     for cell in data_cells[target:]:
         row.remove(cell)
 

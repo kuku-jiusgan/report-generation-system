@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
+from backend.app.services.docx_field_values import format_value
 from backend.app.services.mapped_docx_generator import build_mapped_docx
 
 
@@ -42,3 +43,19 @@ def test_direct_field_applies_empty_rule(tmp_path: Path, value, expected: str, r
     assert document.xpath("./w:body/w:p//w:t/text()", namespaces=NS) == ["目的"]
     assert document.xpath(".//w:sdt//w:rPr/w:b", namespaces=NS)
     assert document.xpath(".//w:sdt//w:pPr/w:jc/@w:val", namespaces=NS) == ["both"]
+
+
+def test_standard_suffix_rule_is_not_hidden_by_mapping_text_rule() -> None:
+    mapping = {
+        "fillRule": "TEXT",
+        "standardFieldFillRule": "APPEND_SUFFIX:-线性与范围试验结果表",
+    }
+
+    assert format_value("测试1", mapping) == "测试1-线性与范围试验结果表"
+
+
+def test_suffix_rule_can_be_combined_with_other_directives() -> None:
+    mapping = {"fillRule": "PRESERVE_STYLE;EMPTY_AS_DASH;APPEND_SUFFIX:-结果表"}
+
+    assert format_value("杂质A", mapping) == "杂质A-结果表"
+    assert format_value("", mapping) == "-"

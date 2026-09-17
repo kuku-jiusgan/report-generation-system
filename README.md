@@ -35,7 +35,15 @@ REPORT_BOOTSTRAP_ADMIN_PASSWORD=请设置至少8位的初始密码
 REPORT_ONLYOFFICE_URL=http://SERVER_IP:8090
 REPORT_ONLYOFFICE_JWT_SECRET=请设置一个足够长的随机密钥
 REPORT_PUBLIC_BASE_URL=http://SERVER_IP:8010
+REPORT_LIBREOFFICE_EXECUTABLE=libreoffice
+REPORT_LIBREOFFICE_PYTHON_EXECUTABLE=/usr/bin/python3
 ```
+
+生成 DOCX 后，后端会调用 LibreOffice 重新排版并刷新目录、页码和交叉引用。服务器必须安装
+LibreOffice；如果可执行文件不在 `PATH` 中，请将 `REPORT_LIBREOFFICE_EXECUTABLE` 设置为其绝对路径。
+`REPORT_LIBREOFFICE_PYTHON_EXECUTABLE` 必须指向能够导入 `uno` 模块的 Python；Ubuntu/Debian 安装
+LibreOffice 后通常是 `/usr/bin/python3`，不能填写项目 `.venv` 中的 Python。
+刷新失败时本次报告生成会明确失败，不会交付带旧目录页码的文件。
 
 LIMS 使用 Oracle 时，在 `.env` 中另外配置以下变量。DSN 建议使用 Oracle Easy Connect 格式 `主机:端口/服务名`：
 

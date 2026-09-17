@@ -5,7 +5,7 @@ from typing import Any
 
 VALIDATION_ITEMS = (
     ("系统适用性", "systemSuitability"), ("专属性", "specificity"),
-    ("检测限", "lod"), ("定量限", "loq"), ("线性", "linearity"),
+    ("检测限", "jiancexian"), ("定量限", "loq"), ("线性", "linearity"),
     ("重复性", "repeatability"), ("中间精密度", "intermediatePrecision"),
     ("准确度", "accuracy"), ("溶液稳定性", "solutionStability"),
     ("稳定性", "solutionStability"), ("耐用性", "robustness"),

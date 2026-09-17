@@ -4,8 +4,7 @@ import type { SystemFieldGroup } from './admin-api'
 const props = defineProps<{ group: SystemFieldGroup }>()
 
 function standardPath(fieldPath: string) {
-  const base = String(props.group.itemPath || '').trim()
-  if (!base) return fieldPath
+  const base = `$.${props.group.groupCode}`
   const prefix = props.group.cardinality === 'MANY' ? `${base}[*]` : base
   return fieldPath ? `${prefix}.${fieldPath.replace(/\.\[\*\]/g, '[*]')}` : prefix
 }

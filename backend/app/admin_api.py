@@ -288,10 +288,21 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         # 标准编组的布局必须从嵌套 tableRule 统一落库；拒绝仅保存内容块而丢失表格规则。
         if table.get("mode") in {"MATRIX", "TABLE_REPEAT", "ROW_REPEAT"}:
             table["mode"] = str(table["mode"])
-            if table["mode"] == "MATRIX" and not str(table.get("matrixLayout") or "").strip():
+            uses_matrix = table["mode"] == "MATRIX" or (
+                table["mode"] == "TABLE_REPEAT" and table.get("innerMode") == "MATRIX"
+            )
+            if uses_matrix and not str(table.get("matrixLayout") or "").strip():
                 raise HTTPException(422, "矩阵填充必须配置矩阵布局")
             if table["mode"] == "TABLE_REPEAT" and not str(table.get("groupKey") or "").strip():
                 raise HTTPException(422, "按分组复制整表必须配置整表分组字段")
+            if table["mode"] == "TABLE_REPEAT":
+                group = next((value for value in repository.standard_field_catalog().get("groups", [])
+                              if value.get("groupCode") == group_code), None)
+                allowed = {str(field.get("fieldPath") or field.get("jsonKey") or "")
+                           for field in (group or {}).get("fields", [])
+                           if field.get("enabled", True) and "[*]" not in str(field.get("fieldPath") or "")}
+                if str(table.get("groupKey") or "") not in allowed:
+                    raise HTTPException(422, "整表分组字段必须是当前编组记录自身的字段")
         table_no = str(table.get("tableNo") or next((str(row.get("tableNo") or "") for row in repository.list_mappings()
                                                      if str(row.get("standardFieldCode") or "").startswith(f"{group_code}.")
                                                      and str(row.get("tableNo") or "").startswith("T")), f"GROUP:{group_code}"))

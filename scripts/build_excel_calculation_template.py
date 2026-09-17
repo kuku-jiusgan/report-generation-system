@@ -34,7 +34,7 @@ TARGET_PATHS = {
     "impurities": "$.impurities[*]",
     "systemSuitability": "$.systemSuitability[*]",
     "specificity": "$.specificity[*]",
-    "lodLoq": "$.lod[*] / $.loq[*]（按 result_type 拆分）",
+    "lodLoq": "$.jiancexian[*] / $.loq[*]（按 result_type 拆分）",
     "linearityPreparation": "$.linearityPreparation[*] / $.intermediateLinearityPreparation[*]（按 run_type 拆分）",
     "linearity": "$.linearity[*] / $.intermediateLinearity[*]（按 run_type 拆分）",
     "repeatability": "$.repeatability[*]",

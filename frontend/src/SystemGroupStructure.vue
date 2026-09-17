@@ -10,6 +10,10 @@ const props = defineProps<{ group: SystemFieldGroup; errorText: (error: unknown)
 const emit = defineEmits<{ saved: [group: SystemFieldGroup] }>()
 
 type LevelDraft = SystemFieldGroupLevel & { originalKey: string }
+const canonicalLevels: SystemFieldGroupLevel[] = [
+  { levelKey: 'summary', label: '汇总', kind: 'OBJECT', orderNo: 0 },
+  { levelKey: 'injections', label: '进样明细', kind: 'ARRAY', orderNo: 1 },
+]
 const levelDraft = ref<LevelDraft>()
 const dialogOpen = computed({
   get: () => !!levelDraft.value,
@@ -40,9 +44,18 @@ async function setLevelFields(levelKey: string, selected: string[]) {
   } catch (error) { ElMessage.error(props.errorText(error)) }
 }
 function editLevel(level?: SystemFieldGroupLevel) {
+  const available = canonicalLevels.find((item) => !props.group.levels.some((current) => current.levelKey === item.levelKey))
   levelDraft.value = level
     ? { ...level, originalKey: level.levelKey }
-    : { levelKey: '', label: '', kind: 'ARRAY', orderNo: props.group.levels.length, originalKey: '' }
+    : available ? { ...available, originalKey: '' } : undefined
+  if (!level && !available) ElMessage.info('汇总层和进样明细层均已配置')
+}
+function selectCanonicalLevel(levelKey: string) {
+  const selected = canonicalLevels.find((item) => item.levelKey === levelKey)
+  if (selected && levelDraft.value) Object.assign(levelDraft.value, selected)
+}
+function levelOptionDisabled(levelKey: string) {
+  return props.group.levels.some((item) => item.levelKey === levelKey && item.levelKey !== levelDraft.value?.originalKey)
 }
 async function apply(action: Promise<SystemFieldGroup>, message: string) {
   try {
@@ -74,7 +87,8 @@ async function removeLevel(levelKey: string) {
     <small class="structure-hint">
       编组的基数是「多条」时提取出来就是一个数组，这里描述的是数组里<b>一条记录</b>长什么样：
       字段留在记录顶层，就是每条记录一个取值；放进对象层，会包成记录下的一个子对象；
-      放进数组层，会变成记录下的一个子数组，一条记录可以有多条。
+      放进数组层，会变成记录下的一个子数组，一条记录可以有多条。子层统一使用汇总（summary）
+      和进样明细（injections）。
     </small>
 
     <div class="structure-level">
@@ -120,11 +134,16 @@ async function removeLevel(levelKey: string) {
     <el-dialog v-model="dialogOpen" title="编组的层" width="460px">
       <el-form v-if="levelDraft" label-position="top">
         <el-form-item label="键名（生成的 JSON 里的属性名）">
-          <el-input v-model="levelDraft.levelKey" placeholder="例如 injections" />
+          <el-select :model-value="levelDraft.levelKey" :disabled="!!levelDraft.originalKey"
+            @update:model-value="selectCanonicalLevel">
+            <el-option v-for="level in canonicalLevels" :key="level.levelKey"
+              :label="`${level.label}（${level.levelKey}）`" :value="level.levelKey"
+              :disabled="levelOptionDisabled(level.levelKey)" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="显示名"><el-input v-model="levelDraft.label" placeholder="例如 进样明细" /></el-form-item>
+        <el-form-item label="显示名"><el-input v-model="levelDraft.label" disabled /></el-form-item>
         <el-form-item label="类型">
-          <el-select v-model="levelDraft.kind">
+          <el-select v-model="levelDraft.kind" disabled>
             <el-option label="对象：记录下的一个子对象，每条记录一份" value="OBJECT" />
             <el-option label="数组：记录下的一个子数组，每条记录多条" value="ARRAY" />
           </el-select>

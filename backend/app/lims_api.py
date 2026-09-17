@@ -6,7 +6,7 @@ from .config import Settings
 from .auth import AuthManager
 from .database import Database, now_iso
 from .schemas import QueryLimsRequest, RecognizeLimsRequest
-from .services.lims_normalizer import COLLECTION_ORDER, merge_instances, normalize_instance
+from .services.lims_normalizer import merge_instances, normalize_instance, record_collection_codes
 from .services.lims_oracle import query_lims_project
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
@@ -78,7 +78,7 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
             "created_at": now_iso(),
         })
         for raw, payload in normalized:
-            database.replace_lims_instance(import_id, raw, payload, COLLECTION_ORDER)
+            database.replace_lims_instance(import_id, raw, payload, record_collection_codes(groups))
         return import_response(item)
 
     @router.get("/queries")
@@ -102,7 +102,10 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
         item = required_import(import_id)
         try:
             instances = [normalized_instance(item, instance_id) for instance_id in request.instance_ids]
-            return merge_instances(instances, normalized=True)
+            groups = list_system_field_groups(database)
+            return merge_instances(
+                instances, fields=database.list_lims_fields(True), groups=groups, normalized=True,
+            )
         except KeyError as error:
             raise HTTPException(404, f"LIMS 实验记录不存在：{error.args[0]}") from error
         except ValueError as error:

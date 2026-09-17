@@ -88,6 +88,7 @@ export interface DesignerBlock {
     fieldPath?: string;
     jsonKey?: string;
     legacyJsonPath?: string;
+    levelKey?: string;
     enabled: boolean;
   }>;
   kind: ContentBlockKind;

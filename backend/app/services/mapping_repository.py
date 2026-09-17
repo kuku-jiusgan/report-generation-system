@@ -22,16 +22,28 @@ REVERSE_MAPPING_COLUMNS = {value: key for key, value in MAPPING_COLUMNS.items()}
 class MappingRepositoryMixin:
     """Persistence and relationship management for template field mappings."""
 
-    def _catalog_source_paths(self) -> dict[str, str]:
-        """字段编码 → 取值路径。映射规则不存路径，一律来自标准字段目录。"""
-        return {str(item["fieldCode"]): str(item.get("legacyJsonPath") or "")
-                for item in self.database.list_lims_fields(True)}
+    def _catalog_metadata(self) -> dict[str, dict[str, str]]:
+        """映射展示元数据一律来自标准字段目录，不在模板映射中维护副本。"""
+        return {
+            str(item["fieldCode"]): {
+                "label": str(item.get("label") or ""),
+                "sourcePath": str(item.get("legacyJsonPath") or ""),
+            }
+            for item in self.database.list_lims_fields(True)
+        }
 
     @staticmethod
-    def _mapping_to_api(row: dict[str, Any], paths: dict[str, str]) -> dict[str, Any]:
+    def _mapping_to_api(
+        row: dict[str, Any], catalog: dict[str, dict[str, str]],
+    ) -> dict[str, Any]:
         item = {REVERSE_MAPPING_COLUMNS.get(key, key): value
                 for key, value in row.items() if key not in ("updated_at", "source_path")}
-        item["sourcePath"] = paths.get(str(item.get("standardFieldCode") or ""), "")
+        standard = catalog.get(str(item.get("standardFieldCode") or ""))
+        if standard:
+            item["wordLabel"] = standard["label"]
+            item["sourcePath"] = standard["sourcePath"]
+        else:
+            item["sourcePath"] = ""
         for key in ("required", "sourcePending", "enabled"):
             if key in item:
                 item[key] = bool(item[key])
@@ -55,18 +67,20 @@ class MappingRepositoryMixin:
                 clauses.append(clause)
                 params.append(value)
         if search:
-            clauses.insert(0, "(m.field_code LIKE %s OR m.word_label LIKE %s OR m.location_id LIKE %s)")
+            clauses.insert(0, "(m.field_code LIKE %s OR COALESCE(sf.label,m.word_label) LIKE %s "
+                              "OR m.location_id LIKE %s)")
             params[0:0] = [f"%{search}%"] * 3
         sql = """SELECT m.*,mc.chapter_id AS assigned_chapter_id,mb.block_id AS assigned_block_id
                  FROM admin_mapping_rules m LEFT JOIN admin_mapping_chapters mc ON mc.mapping_id=m.id
-                 LEFT JOIN admin_mapping_blocks mb ON mb.mapping_id=m.id"""
+                 LEFT JOIN admin_mapping_blocks mb ON mb.mapping_id=m.id
+                 LEFT JOIN lims_field_catalog sf ON sf.field_code=m.standard_field_code"""
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY CASE WHEN m.table_no='HEADER' THEN 0 ELSE CAST(SUBSTRING(m.table_no,2) AS SIGNED) END,m.id"
         with self.database.connect() as connection:
             rows = [dict(row) for row in connection.execute(sql, params).fetchall()]
-        paths = self._catalog_source_paths()
-        return [self._mapping_to_api(row, paths) for row in rows]
+        catalog = self._catalog_metadata()
+        return [self._mapping_to_api(row, catalog) for row in rows]
 
     @staticmethod
     def _mapping_values(item: dict[str, Any], partial: bool) -> dict[str, Any]:
@@ -74,6 +88,8 @@ class MappingRepositoryMixin:
             db: item.get(api, False if api in {"required", "sourcePending", "enabled"} else "")
             for api, db in MAPPING_COLUMNS.items()
         }
+        if item.get("standardFieldCode"):
+            values["word_label"] = ""
         if "calculationDependencies" in item or not partial:
             values["calculation_dependencies"] = json.dumps(item.get("calculationDependencies", []), ensure_ascii=False)
         if not partial:
@@ -98,7 +114,7 @@ class MappingRepositoryMixin:
             row = connection.execute("SELECT * FROM admin_mapping_rules WHERE id=%s", (cursor.lastrowid,)).fetchone()
         self._create_mapping_relations(cursor.lastrowid, item)
         return next((value for value in self.list_mappings() if value["id"] == cursor.lastrowid),
-                    self._mapping_to_api(dict(row), self._catalog_source_paths()))
+                    self._mapping_to_api(dict(row), self._catalog_metadata()))
 
     def _create_mapping_relations(self, mapping_id: int, item: dict[str, Any]) -> None:
         if item.get("chapterId"):
@@ -142,7 +158,7 @@ class MappingRepositoryMixin:
         if item.get("blockId"):
             self._assign_mapping_block(rule_id, item["blockId"])
         return next((value for value in self.list_mappings() if value["id"] == rule_id),
-                    self._mapping_to_api(dict(row), self._catalog_source_paths())) if row else None
+                    self._mapping_to_api(dict(row), self._catalog_metadata())) if row else None
 
     @staticmethod
     def _update_chapter_relation(connection: Any, rule_id: int, item: dict[str, Any]) -> None:

@@ -20,6 +20,26 @@ def _tag_values(node: etree._Element) -> list[str]:
     return node.xpath(".//w:sdtPr/w:tag/@w:val", namespaces=NS)
 
 
+def _refresh_control_alias(roots: list[etree._Element], tag: str, alias: str) -> bool:
+    changed = False
+    for root in roots:
+        controls = root.xpath(
+            ".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces=NS, tag=tag,
+        )
+        for control in controls:
+            properties = control.find(W + "sdtPr")
+            if properties is None:
+                raise ValueError(f"控制标签 {tag} 缺少内容控件属性")
+            alias_node = properties.find(W + "alias")
+            if alias_node is None:
+                alias_node = etree.Element(W + "alias")
+                properties.insert(0, alias_node)
+            if alias_node.get(W + "val") != alias:
+                alias_node.set(W + "val", alias)
+                changed = True
+    return changed
+
+
 def _wrap_cell(cell: etree._Element, tag: str, alias: str) -> str:
     if tag in _tag_values(cell):
         return "existing"
@@ -83,22 +103,39 @@ def _physical_table_number(layout: TableLayoutRules, table_no: str,
     return None
 
 
-def _ensure_repeat_bookmark(document: etree._Element, tag: str, table_no: str) -> bool:
+def _ensure_repeat_bookmark(document: etree._Element, tag: str, table_no: str,
+                            layout: TableLayoutRules) -> bool:
     bookmark_name = repeat_bookmark_name(table_no)
-    if document.xpath(f".//w:bookmarkStart[@w:name='{bookmark_name}']", namespaces=NS):
-        return False
     controls = document.xpath(
         ".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces=NS, tag=tag,
     )
     rows = controls[0].xpath("ancestor::w:tr[1]", namespaces=NS) if controls else []
     if not rows:
         return False
+    target = rows[0]
+    data_row = layout.data_row_start(table_no)
+    if data_row:
+        tables = target.xpath("ancestor::w:tbl[1]", namespaces=NS)
+        table_rows = tables[0].xpath("./w:tr", namespaces=NS) if tables else []
+        if data_row > len(table_rows):
+            raise ValueError(
+                f"{table_no} 配置的原型数据行是第 {data_row} 行，但目标表只有 {len(table_rows)} 行"
+            )
+        target = table_rows[data_row - 1]
+    existing = document.xpath(
+        ".//w:bookmarkStart[@w:name=$name]", namespaces=NS, name=bookmark_name,
+    )
+    if len(existing) == 1 and existing[0].getparent() is target:
+        return False
+    existing_id = existing[0].get(W + "id") if existing else ""
+    for bookmark in existing:
+        bookmark.getparent().remove(bookmark)
     bookmark_ids = [int(value) for value in document.xpath(".//w:bookmarkStart/@w:id", namespaces=NS)
                     if str(value).isdigit()]
     bookmark = etree.Element(W + "bookmarkStart")
-    bookmark.set(W + "id", str(max(bookmark_ids, default=1999) + 1))
+    bookmark.set(W + "id", existing_id or str(max(bookmark_ids, default=1999) + 1))
     bookmark.set(W + "name", bookmark_name)
-    rows[0].insert(0, bookmark)
+    target.insert(0, bookmark)
     return True
 
 
@@ -191,10 +228,14 @@ def compile_template(source: Path, output: Path, mappings: list[dict[str, Any]],
                                        "message": "Word域或空Tag保持原样"})
             continue
         if tag in existing_tags:
+            alias_changed = _refresh_control_alias(
+                [document_root, *header_roots.values()], tag, str(mapping["wordLabel"]),
+            )
             if mapping.get("repeatType") == "ROW" and mapping.get("tableNo"):
-                _ensure_repeat_bookmark(document_root, tag, str(mapping["tableNo"]))
+                _ensure_repeat_bookmark(document_root, tag, str(mapping["tableNo"]), layout)
             report["success"].append({"locationId": location, "fieldCode": mapping["fieldCode"],
-                                      "controlTag": tag, "action": "existing-content-control"})
+                                      "controlTag": tag, "action": "updated-content-control-alias"
+                                      if alias_changed else "existing-content-control"})
             continue
         if mapping.get("sourcePending"):
             report["warnings"].append({

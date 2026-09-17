@@ -74,10 +74,10 @@ export function mappingIdentifiers(mapping: Partial<MappingRule>, context: Mappi
 export function mappingDisplayName(
   mapping: Partial<MappingRule>, context: MappingContext, standardFields: StandardField[],
 ) {
-  const current = String(mapping.wordLabel || '').trim()
-  if (current && current !== '新字段') return current
   const standard = standardFields.find((item) => item.fieldCode === mapping.standardFieldCode)
   if (standard?.label) return standard.label
+  const current = String(mapping.wordLabel || '').trim()
+  if (current && current !== '新字段') return current
   const { block } = resolveMappingContext(mapping, context)
   return block?.title ? `${block.title}字段` : '未命名字段'
 }

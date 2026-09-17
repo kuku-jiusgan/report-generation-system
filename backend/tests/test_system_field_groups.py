@@ -1,7 +1,10 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from backend.app.database import Database
+from backend.app.services.system_field_group_levels import save_group_level
 from backend.app.services.system_field_groups import (
     assign_field_to_group,
     ensure_system_field_groups,
@@ -64,6 +67,67 @@ def test_group_path_is_derived_when_not_configured() -> None:
         })
 
         assert saved["itemPath"] == "$.customResults"
+
+
+def test_group_path_cannot_use_a_second_business_name() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = _database(Path(directory))
+
+        with pytest.raises(ValueError, match=r"\$\.jiancexian"):
+            save_system_field_group(database, {
+                "groupCode": "jiancexian", "label": "检测限", "cardinality": "MANY",
+                "itemPath": "$.lod",
+            })
+
+
+def test_group_levels_only_accept_the_shared_summary_and_injections_contract() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = _database(Path(directory))
+        save_system_field_group(database, {
+            "groupCode": "customResults", "label": "自定义结果", "cardinality": "MANY",
+        })
+
+        save_group_level(database, "customResults", {
+            "levelKey": "injections", "label": "自定义名称", "kind": "ARRAY", "orderNo": 1,
+        })
+        saved = next(item for item in list_system_field_groups(database)
+                     if item["groupCode"] == "customResults")
+
+        assert saved["levels"] == [{
+            "levelKey": "injections", "label": "进样明细", "kind": "ARRAY", "orderNo": 1,
+        }]
+        with pytest.raises(ValueError, match="已废弃"):
+            save_group_level(database, "customResults", {"levelKey": "mingxi", "kind": "ARRAY"})
+        with pytest.raises(ValueError, match="summary 或 injections"):
+            save_group_level(database, "customResults", {"levelKey": "details", "kind": "ARRAY"})
+        with pytest.raises(ValueError, match="必须是对象层"):
+            save_group_level(database, "customResults", {"levelKey": "summary", "kind": "ARRAY"})
+
+
+def test_existing_detection_limit_records_migrate_to_group_code() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = _database(Path(directory))
+        database.create_lims_import({
+            "id": "legacy-lod", "file_name": "legacy.json", "stored_name": "legacy.json",
+            "size": 1, "summary": {}, "created_at": "2026-09-17T00:00:00",
+        })
+        raw = {"instanceId": "EXP-LOD", "projectId": "P1"}
+        normalized = {
+            "project": {"id": "P1"}, "document": {}, "lod": [{"name": "杂质A"}],
+            "solutions": [{"name": "检测限溶液", "validationCode": "lod"}],
+            "validationSummary": [{"validationItemCode": "lod", "field1": "检测限"}],
+        }
+        database.replace_lims_instance(
+            "legacy-lod", raw, normalized, ["lod", "solutions", "validationSummary"],
+        )
+
+        ensure_system_field_groups(database)
+
+        payload = database.get_lims_normalized_payload("legacy-lod", "EXP-LOD")
+        assert "lod" not in payload
+        assert payload["jiancexian"][0]["name"] == "杂质A"
+        assert payload["solutions"][0]["validationCode"] == "jiancexian"
+        assert payload["validationSummary"][0]["validationItemCode"] == "jiancexian"
 
 
 def test_field_catalog_uses_formal_group_relationship_for_display() -> None:

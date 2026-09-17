@@ -26,7 +26,7 @@ COLLECTION_LABELS = {
     "methodParameters": "方法参数",
     "systemSuitability": "系统适用性",
     "specificity": "专属性",
-    "lod": "检测限",
+    "jiancexian": "检测限",
     "loq": "定量限",
     "linearityPreparation": "线性溶液",
     "linearity": "线性与范围",
@@ -44,6 +44,30 @@ COLLECTION_LABELS = {
 }
 
 COLLECTION_ORDER = list(COLLECTION_LABELS)
+SOLUTION_VIEW_CODES = {
+    "systemSuitabilitySolutions": "systemSuitability",
+    "specificitySolutions": "specificity",
+    "lodSolutions": "jiancexian",
+    "repeatabilitySolutions": "repeatability",
+    "intermediatePrecisionSolutions": "intermediatePrecision",
+    "accuracySolutions": "accuracy",
+    "stabilitySolutions": "solutionStability",
+    "robustnessSolutions": "robustness",
+}
+DERIVED_COLLECTION_CODES = frozenset({
+    *SOLUTION_VIEW_CODES, "intermediateLinearityPreparation", "intermediateLinearity",
+})
+
+
+def record_collection_codes(groups: list[dict[str, Any]] | None = None) -> list[str]:
+    """Return built-in and configured multi-row collections in stable order."""
+    configured = [
+        str(group.get("groupCode") or "").strip()
+        for group in groups or []
+        if group.get("enabled", True) and str(group.get("cardinality") or "ONE").upper() == "MANY"
+        and str(group.get("groupCode") or "").strip() not in DERIVED_COLLECTION_CODES
+    ]
+    return list(dict.fromkeys([*COLLECTION_ORDER, *(code for code in configured if code)]))
 
 
 def _clean(value: Any) -> str:
@@ -63,15 +87,19 @@ def _hash(value: Any) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _business_content(item: dict[str, Any]) -> dict[str, Any]:
+    """Return values that describe the business record, without source metadata."""
+    return {key: value for key, value in item.items() if key not in {"evidence", "sourceRecordId"}}
+
+
 def _content_hash(item: dict[str, Any]) -> str:
-    """Hash an item's content (excluding evidence) for deduplication."""
-    return _hash({key: value for key, value in item.items() if key != "evidence"})
+    """Hash business content so equivalent records from different LIMS rows deduplicate."""
+    return _hash(_business_content(item))
 
 
-def _comparison_content(item: dict[str, Any]) -> str:
-    """Format item content for display in conflict resolution UI."""
-    content = {key: value for key, value in item.items() if key != "evidence" and value}
-    return json.dumps(content, ensure_ascii=False, indent=2, default=str)
+def _comparison_content(item: dict[str, Any]) -> dict[str, Any]:
+    """Return structured business values for conflict comparison."""
+    return _business_content(item)
 
 
 def _find_column(headers: list[str], patterns: tuple[str, ...]) -> int | None:
@@ -254,11 +282,11 @@ def _classify_table(instance: dict[str, Any], rich_text: dict[str, Any], table_i
     if "杂质名称" in header and "信噪比-1" in header and "检测限" in header:
         for row in rows[1:]:
             if _clean(row[0]) == "结论":
-                if result["lod"]:
-                    result["lod"][-1]["conclusion"] = _clean(row[1] if len(row) > 1 else "")
+                if result["jiancexian"]:
+                    result["jiancexian"][-1]["conclusion"] = _clean(row[1] if len(row) > 1 else "")
                 continue
             if _clean(row[0]):
-                result["lod"].append(_record({"name": _clean(row[0]), "field2": _at(row, 1),
+                result["jiancexian"].append(_record({"name": _clean(row[0]), "field2": _at(row, 1),
                     "field3": _at(row, 2), "field4": _at(row, 3), "field5": _at(row, 4),
                     "field6": _at(row, 5), "field7": _at(row, 6), "conclusion": ""}, evidence))
         return True
@@ -443,10 +471,13 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
         for index, table in enumerate(tables, start=1):
             rows = _table_grid(table)
             evidence = _evidence(instance, rich_text, index, rows[0] if rows else [])
-            configured = apply_configured_group_tables(
+            configured_targets = apply_configured_group_tables(
                 rows, ">".join(rich_text.get("sectionPath", [])), groups or [], evidence, collections,
             )
-            if not configured and not _classify_table(instance, rich_text, index, rows, collections, parser_profiles):
+            standard_mapping_matched = any(target in COLLECTION_ORDER for target in configured_targets)
+            if not standard_mapping_matched and not _classify_table(
+                instance, rich_text, index, rows, collections, parser_profiles,
+            ):
                 unmatched.append({
                     "instanceId": instance["instanceId"], "instanceTitle": instance.get("title", ""),
                     "sectionPath": rich_text.get("sectionPath", []), "richTextId": rich_text.get("id"),
@@ -480,7 +511,7 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
         payload_key = str(group.get("groupCode") or "").strip()
         if payload_key and payload_key not in result:
             result[payload_key] = collections.get(payload_key, [])
-    result["lodConclusion"] = next((item.get("conclusion", "") for item in result["lod"]
+    result["lodConclusion"] = next((item.get("conclusion", "") for item in result["jiancexian"]
                                     if item.get("conclusion")), "")
     if fields and extraction_rules:
         apply_configured_extraction(instance, result, fields, extraction_rules)
@@ -489,19 +520,9 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
 
 
 def _add_solution_views(payload: dict[str, Any]) -> None:
-    views = {
-        "systemSuitabilitySolutions": "systemSuitability",
-        "specificitySolutions": "specificity",
-        "lodSolutions": "lod",
-        "repeatabilitySolutions": "repeatability",
-        "intermediatePrecisionSolutions": "intermediatePrecision",
-        "accuracySolutions": "accuracy",
-        "stabilitySolutions": "solutionStability",
-        "robustnessSolutions": "robustness",
-    }
-    for target, code in views.items():
+    for target, code in SOLUTION_VIEW_CODES.items():
         payload[target] = [item for item in payload.get("solutions", [])
-                           if item.get("validationCode") in {code, "shared"}]
+                           if item.get("validationCode") == code]
     payload["intermediateLinearityPreparation"] = [
         item for item in payload.get("linearityPreparation", [])
         if "中间精密度" in item.get("evidence", {}).get("instanceTitle", "")

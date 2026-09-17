@@ -8,9 +8,11 @@ from typing import Any
 from ..config import get_settings
 from .ai_service_config import load_ai_service_config
 from .ai_context_labels import serialize_ai_context
+from .ai_multimodal import build_message_content
 
 
 logger = logging.getLogger(__name__)
+MAX_AI_REQUEST_BYTES = 48 * 1024 * 1024
 
 
 class AiGenerationError(RuntimeError):
@@ -178,13 +180,19 @@ def generate_ai_text(field_code: str, rule: dict[str, Any], values: dict[str, An
         raise AiGenerationError("AI 服务未配置，请设置接口地址、API Key 和模型")
     prompt, _ = render_ai_prompt(config, values, current_record, context_fields)
     max_tokens = int(config.get("maxLength") or service.get("maxTokens") or 800)
+    try:
+        message_content = build_message_content(prompt)
+    except ValueError as error:
+        raise AiGenerationError(str(error)) from error
     payload = json.dumps({
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": message_content}],
         "temperature": float(config.get("temperature", 0.2)),
         "max_tokens": max_tokens,
         "thinking": {"type": "enabled" if service.get("thinkingEnabled") else "disabled"},
     }, ensure_ascii=False).encode("utf-8")
+    if len(payload) > MAX_AI_REQUEST_BYTES:
+        raise AiGenerationError("AI 请求体超过 48 MiB 限制，请减少提示词中的图片数量或图片大小")
     request = urllib.request.Request(
         f"{base_url}/chat/completions", data=payload, method="POST",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -202,6 +210,8 @@ def generate_ai_text(field_code: str, rule: dict[str, Any], values: dict[str, An
         if has_reasoning:
             raise AiGenerationError("AI 输出预算已被思考过程耗尽，请增大最大长度或关闭思考模式")
         raise AiGenerationError("AI 服务返回了空内容")
-    logger.info("AI字段生成成功 field=%s rule=%s model=%s elapsedMs=%d",
-                field_code, rule.get("id"), model, int((time.monotonic() - started) * 1000))
+    image_count = len(message_content) - 1 if isinstance(message_content, list) else 0
+    logger.info("AI字段生成成功 field=%s rule=%s model=%s images=%d elapsedMs=%d",
+                field_code, rule.get("id"), model, image_count,
+                int((time.monotonic() - started) * 1000))
     return content

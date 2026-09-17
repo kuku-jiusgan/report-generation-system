@@ -169,10 +169,10 @@ class ContentBlockRegressionTest(unittest.TestCase):
           </w:tr></w:tbl></w:body></w:document>''')
         mappings = [{
             "enabled": True, "repeatType": "ROW", "tableNo": "T17",
-            "blockSourcePath": "$.lod[*]", "sourcePath": "$.lod[*].name",
+            "blockSourcePath": "$.jiancexian[*]", "sourcePath": "$.jiancexian[*].name",
             "controlTag": "lod.name", "fieldCode": "lod[].name",
         }]
-        fill_repeat_rows(document, mappings, {"lod": [{"name": "杂质A"}, {"name": "杂质B"}]},
+        fill_repeat_rows(document, mappings, {"jiancexian": [{"name": "杂质A"}, {"name": "杂质B"}]},
                          {}, {}, TableLayoutRules([]), lambda *_args: None)
         rows = document.xpath(".//w:tbl/w:tr", namespaces=NS)
         self.assertEqual(len(rows), 2)

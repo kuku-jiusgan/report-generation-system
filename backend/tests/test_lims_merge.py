@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 from backend.app.services.lims_normalizer import COLLECTION_ORDER, merge_instances
 
 
@@ -14,10 +12,6 @@ def normalized(instance_id: str, collection: str, record: dict) -> dict:
     }
 
 
-def raw(instance_id: str) -> dict:
-    return {"instanceId": instance_id, "projectId": "P1"}
-
-
 def test_identical_business_records_with_different_source_ids_are_deduplicated() -> None:
     records = [
         normalized("E1", "columns", {
@@ -29,8 +23,7 @@ def test_identical_business_records_with_different_source_ids_are_deduplicated()
             "specification": "4.6x250mm", "sourceRecordId": "ROW-2",
         }),
     ]
-    with patch("backend.app.services.lims_normalizer.normalize_instance", side_effect=records):
-        result = merge_instances([raw("E1"), raw("E2")])
+    result = merge_instances(records, normalized=True)
 
     assert result["duplicateCount"] == 1
     assert result["conflicts"] == []
@@ -48,13 +41,19 @@ def test_same_name_with_different_business_value_remains_a_conflict() -> None:
             "sourceRecordId": "ROW-2",
         }),
     ]
-    with patch("backend.app.services.lims_normalizer.normalize_instance", side_effect=records):
-        result = merge_instances([raw("E1"), raw("E2")])
+    result = merge_instances(records, fields=[{
+        "fieldCode": "reagents.expiryDate", "jsonKey": "expiryDate",
+        "collectionCode": "reagents", "label": "有效期",
+    }], normalized=True)
 
     assert result["duplicateCount"] == 0
     assert result["unresolvedConflictCount"] == 1
     assert len(result["conflicts"][0]["options"]) == 2
     assert all("sourceRecordId" not in option["value"] for option in result["conflicts"][0]["options"])
+    assert result["conflicts"][0]["differingFields"] == [{"key": "expiryDate", "label": "有效期"}]
+    assert [option["value"]["expiryDate"] for option in result["conflicts"][0]["options"]] == [
+        "2026-05-01", "2026-06-01",
+    ]
 
 
 def test_same_reagent_batch_with_different_stock_numbers_are_separate_records() -> None:
@@ -68,8 +67,7 @@ def test_same_reagent_batch_with_different_stock_numbers_are_separate_records() 
             "expiryDate": "2026-06-01", "sourceRecordId": "ROW-2",
         }),
     ]
-    with patch("backend.app.services.lims_normalizer.normalize_instance", side_effect=records):
-        result = merge_instances([raw("E1"), raw("E2")])
+    result = merge_instances(records, normalized=True)
 
     assert result["duplicateCount"] == 0
     assert result["conflicts"] == []

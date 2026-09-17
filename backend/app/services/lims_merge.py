@@ -3,7 +3,8 @@ from typing import Any
 
 from .lims_normalizer import (
     COLLECTION_LABELS, COLLECTION_ORDER, _add_solution_views, _content_hash,
-    _comparison_content, _hash, _semantic, normalize_instance, sort_validation_summary,
+    _comparison_content, _hash, _semantic, normalize_instance, record_collection_codes,
+    sort_validation_summary,
 )
 
 
@@ -23,6 +24,26 @@ def _identity(collection: str, item: dict[str, Any]) -> str:
     if not keys:
         return _hash({key: value for key, value in item.items() if key != "evidence"})
     return "|".join(_semantic(item.get(key)) for key in keys)
+
+
+def _field_labels(collection: str, fields: list[dict[str, Any]] | None) -> dict[str, str]:
+    return {
+        str(field.get("jsonKey") or field.get("fieldCode", "").rsplit(".", 1)[-1]): str(field.get("label") or "")
+        for field in fields or []
+        if field.get("collectionCode") == collection and field.get("label")
+    }
+
+
+def _differing_fields(collection: str, choices: list[dict[str, Any]],
+                      fields: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    values = [_comparison_content(choice) for choice in choices]
+    keys = dict.fromkeys(key for value in values for key in value)
+    labels = _field_labels(collection, fields)
+    return [
+        {"key": key, "label": labels.get(key, key)}
+        for key in keys
+        if len({_hash(value.get(key)) for value in values}) > 1
+    ]
 
 
 def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str] | None = None,
@@ -45,7 +66,8 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
     conflicts = []
     duplicate_count = 0
     resolutions = resolutions or {}
-    for collection in ["approval", *COLLECTION_ORDER]:
+    collection_codes = record_collection_codes(groups)
+    for collection in ["approval", *collection_codes]:
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for source in normalized_instances:
             for item in source.get(collection, []):
@@ -70,20 +92,22 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
             selected = next((item for item in choices if _content_hash(item) == selected_id), None)
             conflicts.append({"id": conflict_id, "collection": collection,
                               "label": COLLECTION_LABELS.get(collection, collection),
-                              "identity": identity, "options": options, "resolved": bool(selected)})
+                              "identity": identity,
+                              "differingFields": _differing_fields(collection, choices, fields),
+                              "options": options, "resolved": bool(selected)})
             if selected:
                 merged.append(selected)
         payload[collection] = merged
     payload["validationSummary"] = sort_validation_summary(payload.get("validationSummary", []))
-    payload["lodConclusion"] = next((item.get("conclusion", "") for item in payload.get("lod", [])
+    payload["lodConclusion"] = next((item.get("conclusion", "") for item in payload.get("jiancexian", [])
                                      if item.get("conclusion")), "")
     for source in normalized_instances:
         payload["instances"].extend(source["instances"])
         payload["unmatched"].extend(source["unmatched"])
     _add_solution_views(payload)
-    recognized = {name: len(payload.get(name, [])) for name in COLLECTION_ORDER if payload.get(name)}
+    recognized = {name: len(payload.get(name, [])) for name in collection_codes if payload.get(name)}
     validation_names = [name for name in (
-        "systemSuitability", "specificity", "lod", "loq", "linearity", "repeatability",
+        "systemSuitability", "specificity", "jiancexian", "loq", "linearity", "repeatability",
         "intermediatePrecision", "accuracy", "solutionStability", "robustnessResult", "sampleResults",
     ) if payload.get(name)]
     return {
@@ -99,7 +123,7 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
             "recognizedTables": len({(item.get("evidence", {}).get("instanceId"),
                                       item.get("evidence", {}).get("richTextId"),
                                       item.get("evidence", {}).get("tableIndex"))
-                                     for name in COLLECTION_ORDER for item in payload.get(name, [])
+                                     for name in collection_codes for item in payload.get(name, [])
                                      if item.get("evidence", {}).get("tableIndex")}),
             "unmatchedTables": len(payload["unmatched"]),
         },

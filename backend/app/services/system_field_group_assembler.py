@@ -64,7 +64,7 @@ def apply_group_contracts(payload: dict[str, Any], groups: list[dict[str, Any]])
             continue
         code = str(group.get("groupCode") or "").strip()
         source_key = code
-        item_path = str(group.get("itemPath") or "").strip() or (f"$.{code}" if code else "")
+        item_path = f"$.{code}" if code else ""
         if source_key not in payload:
             # 不同来源分别保存载荷；当前来源没有该编组时保持缺省，不能据此推断 Excel/LIMS 的来源。
             continue

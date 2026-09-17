@@ -36,11 +36,10 @@ const selectedGroup = computed(() => groups.value.find((group) => group.groupCod
 const groupDraft = ref<Partial<SystemFieldGroup>>({}); const groupSourceMappings = computed({ get: () => groupDraft.value.sourceMappings || [], set: (value: SystemFieldGroup["sourceMappings"]) => { groupDraft.value.sourceMappings = value } });
 const groupDataPath = computed(() => {
   const code = String(groupDraft.value.groupCode || selectedGroup.value?.groupCode || "").trim();
-  const configured = String(groupDraft.value.itemPath || selectedGroup.value?.itemPath || "").trim();
-  return configured || (code ? `$.${code}` : "由编组编码自动生成");
+  return code ? `$.${code}` : "由编组编码自动生成";
 });
 const draftGroup = computed(() => { const code = draft.value?.fieldCode; return code ? groups.value.find((group) => group.fields.some((field) => field.fieldCode === code)) : undefined; });
-const draftStandardPath = computed(() => { const group = draftGroup.value; const field = group?.fields.find((item) => item.fieldCode === draft.value?.fieldCode); if (!group || !field) return String(draft.value?.legacyJsonPath || ""); const base = String(group.itemPath || `$.${group.groupCode}`).trim(); const prefix = group.cardinality === "MANY" ? `${base}[*]` : base; return field.fieldPath ? `${prefix}.${field.fieldPath.replace(/\.\[\*/g, "[*]")}` : prefix; });
+const draftStandardPath = computed(() => { const group = draftGroup.value; const field = group?.fields.find((item) => item.fieldCode === draft.value?.fieldCode); if (!group || !field) return String(draft.value?.legacyJsonPath || ""); const base = `$.${group.groupCode}`; const prefix = group.cardinality === "MANY" ? `${base}[*]` : base; return field.fieldPath ? `${prefix}.${field.fieldPath.replace(/\.\[\*/g, "[*]")}` : prefix; });
 const selectedChapter = ref<StandardFieldCatalogChapter>();
 const draft = ref<Partial<StandardField>>();
 const rules = ref<CatalogRule[]>([]);

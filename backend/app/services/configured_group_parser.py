@@ -25,13 +25,13 @@ def _column_index(headers: list[str], pattern: Any) -> int | None:
 def apply_configured_group_tables(
     rows: list[list[str]], section_path: str, groups: list[dict[str, Any]],
     evidence: dict[str, Any], output: dict[str, list[dict[str, Any]]],
-) -> bool:
+) -> set[str]:
     """Apply group-level Excel/LIMS table mappings to a normalized payload."""
     if not rows:
-        return False
+        return set()
     headers = rows[0]
     header_text = "|".join(headers)
-    matched = False
+    matched_targets: set[str] = set()
     for group in groups:
         if not group.get("enabled", True):
             continue
@@ -51,13 +51,19 @@ def apply_configured_group_tables(
             indexes = [(item, index) for item, index in indexes if index is not None]
             if not indexes:
                 continue
+            row_pattern = mapping.get("rowPattern")
             for row in rows[1:]:
                 if not any(str(value or "").strip() for value in row):
+                    continue
+                row_text = "|".join(
+                    f"{header}={str(value or '').strip()}" for header, value in zip(headers, row)
+                )
+                if not _matches(row_pattern, row_text):
                     continue
                 record = {str(item["fieldCode"]).split(".")[-1]:
                           (str(row[index]).strip() if index < len(row) else "")
                           for item, index in indexes}
                 record["evidence"] = evidence
                 output.setdefault(target, []).append(record)
-            matched = True
-    return matched
+            matched_targets.add(target)
+    return matched_targets

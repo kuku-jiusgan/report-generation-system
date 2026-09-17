@@ -67,7 +67,7 @@ const {
 const limsCollectionLabels: Record<string, string> = {
   samples: '供试品', referenceStandards: '对照品', instruments: '仪器', columns: '色谱柱',
   reagents: '试剂', weighings: '称量记录', solutions: '溶液配制', methodParameters: '方法参数',
-  systemSuitability: '系统适用性', specificity: '专属性', lod: '检测限', loq: '定量限',
+  systemSuitability: '系统适用性', specificity: '专属性', jiancexian: '检测限', loq: '定量限',
   linearity: '线性与范围', repeatability: '重复性', intermediatePrecision: '中间精密度',
   accuracy: '准确度', solutionStability: '溶液稳定性', sampleResults: '样品结果',
 }

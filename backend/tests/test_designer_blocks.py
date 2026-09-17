@@ -73,6 +73,13 @@ class TemplateBlockRepositoryStub(DesignerRepositoryStub):
         return {"versionId": "version-1"}
 
     @staticmethod
+    def standard_field_catalog() -> dict:
+        return {"groups": [{
+            "groupCode": "dingliangxianjieguo",
+            "fields": [{"fieldPath": "field_046", "enabled": True}],
+        }]}
+
+    @staticmethod
     def save_template_block(_version_id: str, item: dict) -> dict:
         return dict(item)
 

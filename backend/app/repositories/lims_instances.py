@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 from ..database_common import now_iso
-from ..services.lims_normalizer import COLLECTION_ORDER
+from ..services.lims_normalizer import COLLECTION_ORDER, DERIVED_COLLECTION_CODES
 
 
 # 归一化载荷里不成行的段（project、document，以及基数为 ONE 的编组）整段存这一列。
@@ -27,7 +27,10 @@ def collection_storage(collection_code: str, cardinality: str) -> tuple[str, str
     基数为 ONE 的编组是不成行的段，整段存在段列里；其余集合（例如溶液视图，读取时才从
     solutions 派生）根本不落库，没有自己的证据可查。
     """
-    if collection_code in RECORD_COLLECTIONS:
+    configured_many = (
+        str(cardinality or "").upper() == "MANY" and collection_code not in DERIVED_COLLECTION_CODES
+    )
+    if collection_code in RECORD_COLLECTIONS or configured_many:
         return "lims_standard_records", "data_json"
     if str(cardinality or "").upper() == "ONE":
         return "lims_experiments", SECTION_COLUMN

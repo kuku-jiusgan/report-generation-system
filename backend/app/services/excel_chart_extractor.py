@@ -1,4 +1,5 @@
 import base64
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -6,6 +7,7 @@ from urllib.parse import unquote
 
 from lxml import html
 from openpyxl import load_workbook
+from openpyxl.chart.trendline import Trendline
 
 
 class ExcelChartError(ValueError):
@@ -85,5 +87,47 @@ def extract_residual_chart_values(path: Path, points_per_test: int = 5) -> list[
     values: list[str] = []
     for image in normal_images:
         data_url = "data:image/png;base64," + base64.b64encode(image).decode("ascii")
+        values.extend([data_url] * points_per_test)
+    return values
+
+
+def _peak_area_reference(x_reference: str) -> str:
+    match = re.fullmatch(r"(.+\$[A-Z]+\$)(\d+)(:\$[A-Z]+\$)(\d+)", x_reference)
+    if not match or match.group(2) != match.group(4):
+        raise ExcelChartError(f"回归曲线横坐标范围无效：{x_reference}")
+    row = int(match.group(2)) + 1
+    return f"{match.group(1)}{row}{match.group(3)}{row}"
+
+
+def extract_regression_chart_values(path: Path, points_per_test: int = 1) -> list[str]:
+    """用 Excel 的实际浓度和峰面积生成每个杂质的线性回归曲线图。"""
+    workbook = load_workbook(path, data_only=False, read_only=False, keep_vba=False)
+    if "线性" not in workbook.sheetnames:
+        raise ExcelChartError("Excel 缺少“线性”工作表")
+    sheet = workbook["线性"]
+    charts = sorted(sheet._charts, key=_chart_row)[::2]
+    if not charts:
+        raise ExcelChartError("Excel 的“线性”工作表缺少可用于生成回归曲线的图表")
+    for chart in charts:
+        if len(chart.ser) != 1:
+            raise ExcelChartError("线性图表必须且只能包含一个数据系列")
+        series = chart.ser[0]
+        x_reference = getattr(getattr(series.xVal, "numRef", None), "f", "")
+        y_reference = getattr(series.yVal, "numRef", None)
+        if not x_reference or y_reference is None:
+            raise ExcelChartError("线性图表缺少可识别的横纵坐标数据范围")
+        y_reference.f = _peak_area_reference(x_reference)
+        y_reference.numCache = None
+        series.trendline = Trendline(trendlineType="linear", dispRSqr=True, dispEq=True)
+    sheet._charts = charts
+    with tempfile.TemporaryDirectory(prefix="excel-regression-charts-") as directory:
+        generated = Path(directory) / "regression.xlsx"
+        workbook.save(generated)
+        images = _rendered_chart_images(generated)
+    if len(images) != len(charts):
+        raise ExcelChartError(f"线性回归图共 {len(charts)} 个，但仅渲染出 {len(images)} 张图片")
+    values: list[str] = []
+    for _, content in images:
+        data_url = "data:image/png;base64," + base64.b64encode(content).decode("ascii")
         values.extend([data_url] * points_per_test)
     return values

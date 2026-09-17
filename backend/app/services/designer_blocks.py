@@ -65,7 +65,7 @@ def _group_block(
         "tableNo": configured.get("tableNo", ""),
         "standardGroupCode": group["groupCode"], "standardFields": group.get("fields", []),
         "orderNo": configured.get("orderNo", index),
-        "sourcePath": configured.get("sourcePath") or group.get("itemPath", ""),
+        "sourcePath": configured.get("sourcePath") or f"$.{group['groupCode']}",
         "repeatKey": configured.get("repeatKey") or group.get("itemKey", ""),
         "prototypeLocation": configured.get("prototypeLocation", ""),
         "dedupKey": configured.get("dedupKey", ""), "sortRule": configured.get("sortRule", ""),

@@ -17,6 +17,7 @@ import type { AuthUser } from './auth-api'
 import ReportGenerationProgress from './ReportGenerationProgress.vue'
 import ReportTemplatePicker from './ReportTemplatePicker.vue'
 import ProtocolUpload from './ProtocolUpload.vue'
+import LimsConflictResolver from './LimsConflictResolver.vue'
 
 const props = defineProps<{ sessionUser: AuthUser }>()
 const emit = defineEmits<{ open: [id: string] }>()
@@ -214,22 +215,6 @@ async function recognizeCreateInstances(sequence = ++createRecognitionSequence) 
   } finally {
     if (sequence === createRecognitionSequence) createRecognizing.value = false
   }
-}
-
-const conflictFieldLabels: Record<string, string> = {
-  name: '名称', grade: '级别', batchNo: '批号', manufacturer: '厂家', expiryDate: '有效期',
-  sampleName: '样品名称', sampleNo: '样品编号', model: '型号', serialNo: '序列号',
-}
-
-function differingConflictFields(options: LimsRecognition['conflicts'][number]['options']) {
-  const values = options.map((option) => option.value as Record<string, unknown>)
-  const keys = [...new Set(values.flatMap((value) => Object.keys(value)))]
-  return keys.filter((key) => new Set(values.map((value) => JSON.stringify(value[key] ?? null))).size > 1)
-}
-
-function conflictValue(value: unknown) {
-  if (value === undefined || value === null || value === '') return '空'
-  return typeof value === 'object' ? JSON.stringify(value) : String(value)
 }
 
 function selectCreatePdf(file: UploadFile) {
@@ -506,22 +491,12 @@ onMounted(load)
           <span><b>{{ createRecognition.duplicateCount }}</b> 条完全重复已合并</span>
           <span><b>{{ createRecognition.conflicts.length }}</b> 个同名冲突</span>
         </div>
-        <div v-if="createRecognition?.conflicts.length" class="create-conflicts">
-          <article v-for="conflict in createRecognition.conflicts" :key="conflict.id">
-            <strong>{{ conflict.label }} · {{ conflict.identity }}</strong>
-            <p class="conflict-difference">
-              差异字段：{{ differingConflictFields(conflict.options).map((key) => conflictFieldLabels[key] || key).join('、') }}
-            </p>
-            <el-radio-group v-model="createConflictResolutions[conflict.id]">
-              <el-radio v-for="option in conflict.options" :key="option.candidateId" :value="option.candidateId" border>
-                <span>{{ option.evidence.instanceTitle || option.evidence.instanceId }}</span>
-                <b v-for="key in differingConflictFields(conflict.options)" :key="key">
-                  {{ conflictFieldLabels[key] || key }}：{{ conflictValue((option.value as Record<string, unknown>)[key]) }}
-                </b>
-              </el-radio>
-            </el-radio-group>
-          </article>
-        </div>
+        <LimsConflictResolver
+          v-if="createRecognition?.conflicts.length"
+          :conflicts="createRecognition.conflicts"
+          :resolutions="createConflictResolutions"
+          @resolve="(conflictId, candidateId) => { createConflictResolutions[conflictId] = candidateId }"
+        />
       </section>
       <div class="create-attachments">
         <ProtocolUpload v-if="createVisible" v-model="createProtocol" />

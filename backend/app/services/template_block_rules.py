@@ -71,8 +71,8 @@ def apply_template_block_rules(snapshot: dict[str, Any], field_groups: list[dict
         block = blocks.get(group_of_field.get(standard_code, ""))
         group_code = group_of_field.get(standard_code, "")
         group_config = next((item for item in field_groups if str(item.get("groupCode") or "") == group_code), None)
-        if group_config and group_config.get("itemPath"):
-            mapping["groupItemPath"] = collection_source_path(str(group_config["itemPath"]))
+        if group_config and group_code:
+            mapping["groupItemPath"] = collection_source_path(f"$.{group_code}")
         if block:
             mapping["standardGroupCode"] = block.get("standardGroupCode", "")
             _apply_block(mapping, block)
