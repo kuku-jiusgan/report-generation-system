@@ -67,6 +67,12 @@ EXCEL_FIELD_PATHS = {
     "uncategorized.field_057": "$.chongfuxingjieguo[*].summary.field_057",
     "uncategorized.field_058": "$.chongfuxingjieguo[*].summary.field_058",
     "uncategorized.field_059": "$.chongfuxingjieguo[*].summary.field_059",
+    "uncategorized.field_076": "$.custom_1788404594530[*].field_076",
+    "uncategorized.field_077": "$.custom_1788404594530[*].injections[*].field_077",
+    "uncategorized.field_078": "$.custom_1788404594530[*].injections[*].field_078",
+    "uncategorized.field_079": "$.custom_1788404594530[*].injections[*].field_079",
+    "uncategorized.field_080": "$.custom_1788404594530[*].injections[*].field_080",
+    "uncategorized.field_081": "$.custom_1788404594530[*].injections[*].field_081",
     "uncategorized.field_084": "$.xianxingjieguo[*].summary.field_084",
     **{f"uncategorized.field_{index:03d}": f"$.custom.field_{index:03d}"
        for index in (60, 61, 62, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 96)},
@@ -140,6 +146,11 @@ EXCEL_WORKBOOK_LOCATIONS = {
     "uncategorized.field_074": {"sheet": "准确度", "cells": "G26、G54、G82……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "RSD"},
     "uncategorized.field_075": {"sheet": "准确度", "cells": "F27 与 K27、F55 与 K55……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "95%置信区间"},
     "uncategorized.field_096": {"sheet": "准确度", "cells": "G28、G56、G84……", "matchBy": "每个杂质的准确度试验结果表", "valueColumn": "结论"},
+    "uncategorized.field_076": {"sheet": "溶液稳定性", "cells": "A2、A11、A20……", "matchBy": "每个杂质的溶液稳定性试验结果表，每 9 行一组", "valueColumn": "A（杂质名称）"},
+    **{f"uncategorized.field_{index:03d}": {
+        "sheet": "溶液稳定性", "cells": f"{column}4:{column}9、{column}13:{column}18……",
+        "matchBy": "每个杂质的溶液稳定性试验结果表，每 9 行一组", "valueColumn": column,
+    } for index, column in {77: "C", 78: "D", 79: "E", 80: "F", 81: "G"}.items()},
     "uncategorized.field_030": {"sheet": "重复性跟中间精密度", "cells": "D3:D8、D35:D40……", "matchBy": "每个杂质 6 次测定", "valueColumn": "No"},
     "uncategorized.field_031": {"sheet": "重复性跟中间精密度", "cells": "E3:E8、E35:E40……", "matchBy": "每个杂质 6 次测定", "valueColumn": "E（称样量）"},
     "uncategorized.field_032": {"sheet": "重复性跟中间精密度", "cells": "F3:F8、F35:F40……", "matchBy": "每个杂质 6 次测定", "valueColumn": "保留时间"},
@@ -226,8 +237,15 @@ ACCURACY_SUMMARY_CELLS = {
     "uncategorized.field_096": (28, 7),
 }
 ACCURACY_FIELDS = {*ACCURACY_DETAIL_COLUMNS, *ACCURACY_SUMMARY_CELLS, "uncategorized.field_075"}
+STABILITY_DETAIL_COLUMNS = {
+    "uncategorized.field_077": 3, "uncategorized.field_078": 4,
+    "uncategorized.field_079": 5, "uncategorized.field_080": 6,
+    "uncategorized.field_081": 7,
+}
+STABILITY_FIELDS = {"uncategorized.field_076", *STABILITY_DETAIL_COLUMNS}
+EXCLUSIVE_EXCEL_FIELDS = {*ACCURACY_FIELDS, *STABILITY_FIELDS}
 EXCEL_ONLY_FIELDS = {
-    *ACCURACY_FIELDS,
+    *EXCLUSIVE_EXCEL_FIELDS,
     *CURRENT_REPEATABILITY_DETAIL_COLUMNS,
     "uncategorized.field_055",
     *CURRENT_REPEATABILITY_SUMMARY_CELLS,
@@ -433,6 +451,17 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
                        "pairColumns": [6, 11], "pairSeparator": "～", "rowStep": 28,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL_PAIR"})
+    elif field_code == "uncategorized.field_076":
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "溶液稳定性",
+                       "rowStart": 2, "rowEnd": 2, "startColumn": 1, "rowStep": 9,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
+    elif field_code in STABILITY_DETAIL_COLUMNS:
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "溶液稳定性",
+                       "rowStart": 4, "rowEnd": 9,
+                       "startColumn": STABILITY_DETAIL_COLUMNS[field_code], "rowStep": 9,
+                       "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+                       "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code in REPEATABILITY_DETAIL_COLUMNS:
         config.update({"mode": "REPEAT_BLOCK", "sheet": "重复性跟中间精密度", "rowStart": 3, "rowEnd": 8,
                        "startColumn": REPEATABILITY_DETAIL_COLUMNS[field_code], "columnStep": 0, "rowStep": 33,
@@ -459,7 +488,9 @@ def ensure_excel_field_rules(database: Any) -> None:
         field_rules = database.list_system_field_rules(field_code)
         existing = [rule for rule in field_rules if rule.get("sourceType") == "EXCEL"]
         if existing:
-            if field_code in ACCURACY_FIELDS and any(rule.get("sourceType") != "EXCEL" for rule in field_rules):
+            if field_code in EXCLUSIVE_EXCEL_FIELDS and any(
+                rule.get("sourceType") != "EXCEL" for rule in field_rules
+            ):
                 raise ValueError(f"字段 {field_code} 同时存在 Excel 与其他来源规则，请先解决来源冲突")
             for rule in existing:
                 config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
@@ -483,7 +514,7 @@ def ensure_excel_field_rules(database: Any) -> None:
                     {**rule, "config": updated_config}, rule.get("id")
                 )
             continue
-        replaceable = ([rule for rule in field_rules if rule.get("sourceType") in ({"LIMS", "AI"} if field_code in ACCURACY_FIELDS else {"LIMS"})]
+        replaceable = ([rule for rule in field_rules if rule.get("sourceType") in ({"LIMS", "AI"} if field_code in EXCLUSIVE_EXCEL_FIELDS else {"LIMS"})]
                        if field_code in EXCEL_ONLY_FIELDS else [])
         if len(replaceable) > 1:
             raise ValueError(f"字段 {field_code} 存在多条旧来源规则，不能确定要替换的规则")
