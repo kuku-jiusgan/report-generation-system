@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from .database import Database, now_iso
 
 
 REPORT_SESSION_COOKIE = "report_user_session"
+logger = logging.getLogger(__name__)
 PERMISSIONS = {
     "ADMIN_ACCESS": "访问系统管理功能",
     "RULES_MANAGE": "管理报告模板与规则",
@@ -25,6 +27,7 @@ PERMISSIONS = {
     "REPORT_EDIT": "编辑本人报告",
     "REPORT_GENERATE": "生成本人报告",
     "REPORT_DOWNLOAD": "下载本人报告",
+    "REPORT_ALL_VIEW": "只读查看全部用户报告",
 }
 
 ROLE_DEFINITIONS = [
@@ -37,7 +40,7 @@ DEFAULT_ROLE_PERMISSIONS = {
     "SUPER_ADMIN": set(PERMISSIONS),
     "SYSTEM_ADMIN": {
         "ADMIN_ACCESS", "RULES_MANAGE", "LIMS_FIELDS_MANAGE", "USERS_MANAGE",
-        "REPORT_HISTORY_VIEW", "REPORT_HISTORY_DOWNLOAD",
+        "REPORT_HISTORY_VIEW", "REPORT_HISTORY_DOWNLOAD", "REPORT_ALL_VIEW",
     },
     "REPORT_USER": {"REPORT_CREATE", "REPORT_EDIT", "REPORT_GENERATE", "REPORT_DOWNLOAD"},
 }
@@ -57,6 +60,7 @@ class AuthManager:
     def __init__(self, database: Database, settings: Settings):
         self.database = database
         self.settings = settings
+        self._permission_migration_checked = False
 
     @staticmethod
     def hash_password(password: str) -> str:
@@ -90,6 +94,7 @@ class AuthManager:
 
     def bootstrap(self) -> str | None:
         self.database.seed_roles(ROLE_DEFINITIONS, DEFAULT_ROLE_PERMISSIONS)
+        self._migrate_report_all_view_permission()
         if self.database.count_users():
             users = self.database.list_users()
             owner = next((user for user in users if user["role_code"] == "SUPER_ADMIN"), users[0])
@@ -108,6 +113,23 @@ class AuthManager:
             "must_change_password": True,
         })
         return str(user["id"])
+
+    def _migrate_report_all_view_permission(self) -> None:
+        if self._permission_migration_checked:
+            return
+        migration_key = "grant-report-all-view-to-admins-v1"
+        if self.database.migration_applied(migration_key):
+            self._permission_migration_checked = True
+            return
+        self.database.add_role_permissions("SUPER_ADMIN", {"REPORT_ALL_VIEW"})
+        self.database.add_role_permissions("SYSTEM_ADMIN", {"REPORT_ALL_VIEW"})
+        self.database.mark_migration_applied(migration_key)
+        self._permission_migration_checked = True
+        logger.info("管理员跨用户报告只读权限迁移完成")
+
+    def permissions_for(self, user: dict[str, Any]) -> set[str]:
+        self._migrate_report_all_view_permission()
+        return self.database.role_permissions(user["role_code"])
 
     def authenticate(self, username: str, password: str) -> dict[str, Any] | None:
         user = self.database.get_user_by_username(username.strip())
@@ -128,7 +150,7 @@ class AuthManager:
         user = self.database.get_session_user(hashlib.sha256(session.encode()).hexdigest())
         if not user:
             raise HTTPException(401, "登录已失效，请重新登录")
-        user["permissions"] = self.database.role_permissions(user["role_code"])
+        user["permissions"] = self.permissions_for(user)
         return user
 
     def current_user(self, session: str | None = Cookie(default=None, alias=REPORT_SESSION_COOKIE)) -> dict[str, Any]:
@@ -139,7 +161,7 @@ class AuthManager:
             return None
         user = self.database.get_session_user(hashlib.sha256(session.encode()).hexdigest())
         if user:
-            user["permissions"] = self.database.role_permissions(user["role_code"])
+            user["permissions"] = self.permissions_for(user)
         return user
 
     def require(self, permission: str) -> Callable[..., dict[str, Any]]:
@@ -202,7 +224,7 @@ def create_auth_router(auth: AuthManager) -> APIRouter:
             REPORT_SESSION_COOKIE, token, httponly=True, samesite="lax",
             secure=auth.settings.secure_cookies, expires=expires, path="/",
         )
-        return auth.public_user(user, auth.database.role_permissions(user["role_code"]))
+        return auth.public_user(user, auth.permissions_for(user))
 
     @router.post("/logout")
     def logout(response: Response,
@@ -226,6 +248,6 @@ def create_auth_router(auth: AuthManager) -> APIRouter:
             user["id"], password_hash=auth.hash_password(payload.new_password), must_change_password=0
         )
         refreshed = auth.database.get_user(user["id"])
-        return auth.public_user(refreshed, auth.database.role_permissions(refreshed["role_code"]))
+        return auth.public_user(refreshed, auth.permissions_for(refreshed))
 
     return router

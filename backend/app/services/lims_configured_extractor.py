@@ -5,6 +5,8 @@ from typing import Any
 
 from lxml import html
 
+from .payload_paths import set_payload_path
+
 
 def _parts(path: str) -> list[str]:
     value = path.strip().removeprefix("$").lstrip(".")
@@ -159,6 +161,9 @@ def _write(payload: dict[str, Any], field: dict[str, Any], value: Any) -> None:
     parts = _parts(str(path))
     if not parts:
         return
+    if "[*]" in str(path):
+        set_payload_path(payload, str(path), value if isinstance(value, list) else [value])
+        return
     if field.get("cardinality") == "MANY":
         collection = payload.setdefault(parts[0], [])
         key = parts[-1]
@@ -197,7 +202,8 @@ def apply_configured_extraction(
             transformed = [_transform(_capture(value, str(rule.get("valuePattern") or ""), field.get("fieldCode", "")),
                                        field, rule)
                            for value in values]
-            if field.get("cardinality") == "MANY":
+            target_path = str(field.get("legacyJsonPath") or field.get("fieldCode") or "")
+            if field.get("cardinality") == "MANY" or "[*]" in target_path:
                 if any(value not in (None, "") for value in transformed):
                     # 保留行位置：空值不回填，避免后续行整体前移错位
                     _write(payload, field, transformed)

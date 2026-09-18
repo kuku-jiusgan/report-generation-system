@@ -513,9 +513,9 @@ def normalize_instance(instance: dict[str, Any], fields: list[dict[str, Any]] | 
             result[payload_key] = collections.get(payload_key, [])
     result["lodConclusion"] = next((item.get("conclusion", "") for item in result["jiancexian"]
                                     if item.get("conclusion")), "")
+    _add_solution_views(result)
     if fields and extraction_rules:
         apply_configured_extraction(instance, result, fields, extraction_rules)
-    _add_solution_views(result)
     return result
 
 

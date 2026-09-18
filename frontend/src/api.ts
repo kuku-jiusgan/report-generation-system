@@ -103,6 +103,9 @@ export interface ReportTask {
   resolved_data: ReportData
   output_name?: string
   download_url?: string
+  created_by?: string | null
+  updated_by?: string | null
+  creator_name?: string | null
   word_edit_locked: boolean
   word_edited_at?: string
   created_at: string
@@ -264,8 +267,8 @@ export async function applyLimsToReport(
   }, { timeout: 300000 })).data
 }
 
-export async function listReports() {
-  return (await http.get<ReportTask[]>('/reports')).data
+export async function listReports(scope: 'mine' | 'all' = 'mine') {
+  return (await http.get<ReportTask[]>('/reports', { params: { scope } })).data
 }
 
 export async function getTemplateSourceCatalog() {

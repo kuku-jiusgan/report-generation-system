@@ -2,6 +2,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from ..services.rule_admin import RuleAdminRepository
 from ..services.lims_normalizer import merge_instances
+from ..services.system_field_groups import list_system_field_groups
 
 def register_data_source_routes(router: APIRouter, repository: RuleAdminRepository) -> None:
     @router.get('/data-sources')
@@ -13,7 +14,13 @@ def register_data_source_routes(router: APIRouter, repository: RuleAdminReposito
         ids = [str(value) for value in item.get('instanceIds', []) if value]
         if not ids: raise HTTPException(422, '至少选择一个实验记录')
         try:
-            return merge_instances([repository.database.get_lims_normalized_payload(imported['id'], value) for value in ids], normalized=True)
+            database = repository.database
+            groups = list_system_field_groups(database)
+            return merge_instances(
+                [database.get_lims_normalized_payload(imported['id'], value) for value in ids],
+                fields=database.list_lims_fields(True), extraction_rules=database.list_lims_parser_rules(),
+                groups=groups, normalized=True,
+            )
         except (KeyError, ValueError) as error: raise HTTPException(422, str(error)) from error
     @router.put('/data-sources/{code}')
     def update_data_source(code: str, item: dict[str, Any]) -> dict[str, Any]:

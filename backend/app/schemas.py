@@ -113,6 +113,7 @@ class ReportTask(BaseModel):
     download_url: str | None = None
     created_by: str | None = None
     updated_by: str | None = None
+    creator_name: str | None = None
     word_edit_locked: bool = False
     word_edited_at: str | None = None
     created_at: str

@@ -1,6 +1,7 @@
 from collections import defaultdict
 from typing import Any
 
+from .lims_configured_extractor import apply_configured_extraction
 from .lims_normalizer import (
     COLLECTION_LABELS, COLLECTION_ORDER, _add_solution_views, _content_hash,
     _comparison_content, _hash, _semantic, normalize_instance, record_collection_codes,
@@ -105,6 +106,8 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
         payload["instances"].extend(source["instances"])
         payload["unmatched"].extend(source["unmatched"])
     _add_solution_views(payload)
+    if fields and extraction_rules:
+        apply_configured_extraction({}, payload, fields, extraction_rules)
     recognized = {name: len(payload.get(name, [])) for name in collection_codes if payload.get(name)}
     validation_names = [name for name in (
         "systemSuitability", "specificity", "jiancexian", "loq", "linearity", "repeatability",

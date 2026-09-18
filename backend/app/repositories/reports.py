@@ -12,10 +12,15 @@ class ReportRepositoryMixin:
         with self.connect() as connection:
             if owner_id:
                 rows = connection.execute(
-                    "SELECT * FROM reports WHERE created_by=%s ORDER BY updated_at DESC", (owner_id,),
+                    """SELECT r.*,u.display_name AS creator_name FROM reports r
+                       LEFT JOIN auth_users u ON u.id=r.created_by
+                       WHERE r.created_by=%s ORDER BY r.updated_at DESC""", (owner_id,),
                 ).fetchall()
             else:
-                rows = connection.execute("SELECT * FROM reports ORDER BY updated_at DESC").fetchall()
+                rows = connection.execute(
+                    """SELECT r.*,u.display_name AS creator_name FROM reports r
+                       LEFT JOIN auth_users u ON u.id=r.created_by ORDER BY r.updated_at DESC"""
+                ).fetchall()
         return [self._decode(row, ("resolved_data",)) for row in rows]
 
     def get_report(self, report_id: str) -> dict[str, Any] | None:

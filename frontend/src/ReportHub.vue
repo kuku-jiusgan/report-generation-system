@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
-  Clock, Delete, Download, EditPen, Plus, Refresh, Search, UploadFilled, View,
+  Search, UploadFilled,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import {
@@ -18,13 +18,23 @@ import ReportGenerationProgress from './ReportGenerationProgress.vue'
 import ReportTemplatePicker from './ReportTemplatePicker.vue'
 import ProtocolUpload from './ProtocolUpload.vue'
 import LimsConflictResolver from './LimsConflictResolver.vue'
+import ReportHubHeader from './report-hub/ReportHubHeader.vue'
+import ReportStatusTabs from './report-hub/ReportStatusTabs.vue'
+import ReportQueue from './report-hub/ReportQueue.vue'
+import {
+  reportLifecycle, type ReportHubRow, type ReportHubTab, type ReportLifecycle,
+} from './report-hub'
 
 const props = defineProps<{ sessionUser: AuthUser }>()
 const emit = defineEmits<{ open: [id: string] }>()
 const can = (permission: string) => props.sessionUser.permissions.includes(permission)
-const reports = ref<ReportTask[]>([])
+const mineReports = ref<ReportTask[]>([])
+const allReports = ref<ReportTask[]>([])
+const activeTab = ref<ReportHubTab>('MINE')
+const reports = computed(() => activeTab.value === 'ALL' ? allReports.value : mineReports.value)
 const generations = ref<ReportGeneration[]>([])
 const loading = ref(false)
+const loadError = ref('')
 const actionId = ref('')
 const auditVisible = ref(false)
 const auditReport = ref<ReportTask>()
@@ -50,8 +60,8 @@ const replaceFile = ref<File>()
 const replaceFiles = ref<UploadFile[]>([])
 const createConflictResolutions = reactive<Record<string, string>>({})
 const selected = ref<ReportTask[]>([])
-const filters = reactive<{ query: string; status: string; dates: [Date, Date] | [] }>({
-  query: '', status: '', dates: [],
+const filters = reactive<{ query: string; dates: [Date, Date] | [] }>({
+  query: '', dates: [],
 })
 let createRecognitionTimer: ReturnType<typeof setTimeout> | undefined
 let createRecognitionSequence = 0
@@ -71,27 +81,12 @@ function startGenerationProgress() {
 }
 function stopGenerationTimer() { if (generationTimer) clearInterval(generationTimer); generationTimer = undefined }
 
-const latestByReport = computed(() => {
-  const result = new Map<string, ReportGeneration>()
-  for (const item of generations.value) if (!result.has(item.report_id)) result.set(item.report_id, item)
-  return result
-})
-
-function lifecycle(item: ReportTask) {
-  const generation = latestByReport.value.get(item.id)
-  if (generation?.status === 'PROCESSING') return 'GENERATING'
-  if (generation?.status === 'FAILED') return 'FAILED'
-  if (item.status === 'GENERATED') return 'COMPLETED'
-  if (item.status === 'READY_TO_GENERATE') return 'REVIEW'
-  return 'DRAFT'
+function lifecycle(item: ReportTask): ReportLifecycle {
+  return reportLifecycle(item.status)
 }
 
-const statusMeta: Record<string, { label: string; type: '' | 'primary' | 'success' | 'warning' | 'danger' | 'info' }> = {
-  DRAFT: { label: '草稿编辑', type: 'info' },
-  GENERATING: { label: '生成中', type: 'warning' },
-  REVIEW: { label: '待复核', type: 'primary' },
-  COMPLETED: { label: '已完成导出', type: 'success' },
-  FAILED: { label: '生成失败', type: 'danger' },
+function isLifecycleTab(tab: ReportHubTab): tab is ReportLifecycle {
+  return tab !== 'MINE' && tab !== 'ALL'
 }
 
 const filtered = computed(() => reports.value.filter((item) => {
@@ -100,27 +95,25 @@ const filtered = computed(() => reports.value.filter((item) => {
   const searchable = [item.title, data.report_no, data.sample, data.project_name,
     ...samples.flatMap((sample) => [sample.sampleName, sample.batchNo])].join(' ').toLowerCase()
   const queryMatches = !filters.query.trim() || searchable.includes(filters.query.trim().toLowerCase())
-  const statusMatches = !filters.status || lifecycle(item) === filters.status
+  const statusMatches = !isLifecycleTab(activeTab.value) || lifecycle(item) === activeTab.value
   const changed = new Date(item.updated_at).getTime()
   const dateMatches = !filters.dates.length || (changed >= filters.dates[0].getTime() && changed <= filters.dates[1].getTime())
   return queryMatches && statusMatches && dateMatches
 }))
 
 const stats = computed(() => ({
-  total: reports.value.length,
-  review: reports.value.filter((item) => lifecycle(item) === 'REVIEW').length,
-  completed: reports.value.filter((item) => lifecycle(item) === 'COMPLETED').length,
-  failed: reports.value.filter((item) => lifecycle(item) === 'FAILED').length,
+  mine: mineReports.value.length,
+  draft: mineReports.value.filter((item) => lifecycle(item) === 'DRAFT').length,
+  review: mineReports.value.filter((item) => lifecycle(item) === 'REVIEW').length,
+  reviewed: mineReports.value.filter((item) => lifecycle(item) === 'REVIEWED').length,
+  completed: mineReports.value.filter((item) => lifecycle(item) === 'COMPLETED').length,
+  all: allReports.value.length,
 }))
 
 function projectNumber(item: ReportTask) {
   const lims = item.resolved_data.source_payloads?.LIMS
   const project = lims?.project as Record<string, unknown> | undefined
   return String(project?.id || '-').trim() || '-'
-}
-
-function generatedAt(item: ReportTask) {
-  return latestByReport.value.get(item.id)?.generated_at || item.updated_at
 }
 
 function experimentRecordNames(item: ReportTask) {
@@ -130,14 +123,48 @@ function experimentRecordNames(item: ReportTask) {
   return [...new Set(names)].join('；') || '-'
 }
 
+function reportSources(item: ReportTask) {
+  const payloads = item.resolved_data.source_payloads || {}
+  return Object.keys(payloads)
+    .filter((key) => payloads[key as keyof typeof payloads])
+    .join(' / ')
+}
+
+const reportRows = computed<ReportHubRow[]>(() => filtered.value.map((item) => ({
+  report: item,
+  id: item.id,
+  title: item.title,
+  reportNo: String(item.resolved_data.report_no || '暂无报告编号'),
+  projectNumber: projectNumber(item),
+  updatedAt: new Date(item.updated_at).toLocaleString('zh-CN', { hour12: false }),
+  experimentNames: experimentRecordNames(item),
+  creator: item.creator_name || '未知用户',
+  sources: reportSources(item),
+  lifecycle: lifecycle(item),
+  isOwned: item.created_by === props.sessionUser.id,
+})))
+
+function clearFilters() {
+  filters.query = ''
+  filters.dates = []
+}
+
 async function load() {
   loading.value = true
+  loadError.value = ''
   try {
-    const [items, history] = await Promise.all([listReports(), listReportGenerations()])
-    reports.value = items
+    const [items, globalItems, history] = await Promise.all([
+      listReports('mine'),
+      can('REPORT_ALL_VIEW') ? listReports('all') : Promise.resolve([]),
+      can('REPORT_EDIT') ? listReportGenerations() : Promise.resolve({ items: [] }),
+    ])
+    ;[...items, ...globalItems].forEach((item) => reportLifecycle(item.status))
+    mineReports.value = items
+    allReports.value = globalItems
     generations.value = history.items
   } catch (error) {
-    ElMessage.error(errorText(error))
+    loadError.value = `报告列表加载失败：${errorText(error)}`
+    ElMessage.error(loadError.value)
   } finally {
     loading.value = false
   }
@@ -413,50 +440,48 @@ async function batchRemove() {
   }
 }
 
+watch(activeTab, () => { selected.value = [] })
 onMounted(load)
 </script>
 
 <template>
   <main class="hub-main">
-      <header class="hub-header"><div><p>REPORT MANAGEMENT</p><h1>报告管理大厅</h1><span>统一管理报告任务、数据源与合规记录</span></div><el-button v-if="can('REPORT_CREATE')" class="hub-create-button" type="primary" size="large" :icon="Plus" :loading="actionId === 'new'" @click="createNew">发起新报告生成</el-button></header>
-      <ReportGenerationProgress v-bind="generationProgress" />
-      <section class="hub-stats">
-        <article><span>全部报告</span><b>{{ stats.total }}</b></article>
-        <article><span>待复核</span><b>{{ stats.review }}</b></article>
-        <article><span>已完成导出</span><b>{{ stats.completed }}</b></article>
-        <article :class="{ alert: stats.failed }"><span>生成失败</span><b>{{ stats.failed }}</b></article>
-      </section>
-      <section class="hub-content">
-        <div class="hub-filters">
-          <el-input v-model="filters.query" :prefix-icon="Search" clearable placeholder="报告名称、样品编号或实验名称" />
-          <el-select v-model="filters.status" clearable placeholder="全部状态">
-            <el-option v-for="(meta, code) in statusMeta" :key="code" :label="meta.label" :value="code" />
-          </el-select>
-          <el-date-picker v-model="filters.dates" type="datetimerange" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" />
-          <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-        </div>
-        <div v-if="selected.length" class="hub-batch"><strong>已选择 {{ selected.length }} 份报告</strong><el-button v-if="can('REPORT_DOWNLOAD')" type="primary" plain :icon="Download" :loading="actionId === 'batch'" @click="batchDownload">批量导出 Word</el-button><el-button type="danger" plain :icon="Delete" @click="batchRemove">批量删除</el-button></div>
-        <el-table v-loading="loading" :data="filtered" row-key="id" height="calc(100vh - 330px)" @selection-change="selected = $event" @row-dblclick="emit('open', $event.id)">
-          <el-table-column type="selection" width="44" />
-          <el-table-column prop="title" label="报告名称" min-width="220"><template #default="{ row }"><button class="hub-report-link" @click="emit('open', row.id)">{{ row.title }}</button><small>{{ row.resolved_data.report_no || '暂无报告编号' }}</small></template></el-table-column>
-          <el-table-column label="项目号" min-width="150"><template #default="{ row }">{{ projectNumber(row) }}</template></el-table-column>
-          <el-table-column label="生成 / 更新时间" width="180"><template #default="{ row }">{{ new Date(generatedAt(row)).toLocaleString('zh-CN') }}</template></el-table-column>
-          <el-table-column label="实验记录名称" min-width="240" show-overflow-tooltip><template #default="{ row }">{{ experimentRecordNames(row) }}</template></el-table-column>
-          <el-table-column label="创建人" width="110"><template #default>{{ props.sessionUser.displayName }}</template></el-table-column>
-          <el-table-column label="操作" width="210" fixed="right" align="center" header-align="center" label-class-name="hub-operation-header"><template #default="{ row }"><div class="hub-actions">
-            <el-button link type="primary" :icon="EditPen" @click="emit('open', row.id)">编辑/复核</el-button>
-            <el-dropdown trigger="click"><el-button link :loading="actionId === row.id">更多操作</el-button><template #dropdown><el-dropdown-menu>
-              <el-dropdown-item v-if="can('REPORT_GENERATE')" :icon="Refresh" @click="regenerate(row)">重新生成</el-dropdown-item>
-              <el-dropdown-item :icon="UploadFilled" @click="openReplaceSource(row)">更换数据源</el-dropdown-item>
-              <el-dropdown-item v-if="can('REPORT_GENERATE') && can('REPORT_DOWNLOAD')" :icon="Download" @click="downloadWord(row)">导出 Word</el-dropdown-item>
-              <el-dropdown-item v-if="can('REPORT_DOWNLOAD')" :icon="View" @click="downloadPdf(row)">导出 PDF</el-dropdown-item>
-              <el-dropdown-item :icon="Clock" @click="showAudit(row)">查看 Audit Trail</el-dropdown-item>
-              <el-dropdown-item divided :icon="Delete" @click="remove(row)">删除</el-dropdown-item>
-            </el-dropdown-menu></template></el-dropdown>
-          </div></template></el-table-column>
-        </el-table>
-        <div class="hub-table-footer">显示 {{ filtered.length }} / {{ reports.length }} 份报告</div>
-      </section>
+    <ReportHubHeader :can-create="can('REPORT_CREATE')" :creating="actionId === 'new'" @create="createNew" />
+    <ReportGenerationProgress v-bind="generationProgress" />
+    <ReportStatusTabs
+      :stats="stats"
+      :active="activeTab"
+      :can-view-all="can('REPORT_ALL_VIEW')"
+      @select="activeTab = $event"
+    />
+    <ReportQueue
+      :rows="reportRows"
+      :total="reports.length"
+      :loading="loading"
+      :load-error="loadError"
+      :query="filters.query"
+      :dates="filters.dates"
+      :action-id="actionId"
+      :can-create="can('REPORT_CREATE')"
+      :can-edit="can('REPORT_EDIT')"
+      :can-generate="can('REPORT_GENERATE')"
+      :can-download="can('REPORT_DOWNLOAD')"
+      @update:query="filters.query = $event"
+      @update:dates="filters.dates = $event"
+      @reload="load"
+      @clear="clearFilters"
+      @create="createNew"
+      @select="selected = $event"
+      @open="emit('open', $event.id)"
+      @regenerate="regenerate"
+      @replace="openReplaceSource"
+      @download-word="downloadWord"
+      @download-pdf="downloadPdf"
+      @audit="showAudit"
+      @remove="remove"
+      @batch-download="batchDownload"
+      @batch-remove="batchRemove"
+    />
 
     <el-dialog v-model="createVisible" title="发起新报告生成" width="1040px" top="5vh" class="create-report-dialog" :close-on-click-modal="false">
       <template #header>
@@ -549,3 +574,4 @@ onMounted(load)
 </template>
 
 <style src="./styles/create-report-dialog.css"></style>
+<style src="./styles/report-hub.css"></style>

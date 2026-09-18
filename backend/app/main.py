@@ -7,6 +7,7 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -228,10 +229,14 @@ def favicon() -> Response:
 
 
 @app.get(f"{settings.api_prefix}/reports", response_model=list[ReportTask])
-def list_reports(user: dict = Depends(auth.require("REPORT_EDIT"))) -> list[ReportTask]:
+def list_reports(scope: Literal["mine", "all"] = "mine",
+                 user: dict = Depends(auth.require_any("REPORT_EDIT", "REPORT_ALL_VIEW"))) -> list[ReportTask]:
     # GET 保持纯读：模板元数据的惰性补写由 ensure_report_file 在生成文件时完成，
     # 这里若边读边写，会与并发保存的 sync_word_fields 互相覆盖（丢失更新）
-    return [report_response(item) for item in database.list_reports(user["id"])]
+    if scope == "all" and "REPORT_ALL_VIEW" not in user["permissions"]:
+        raise HTTPException(403, "没有查看全部用户报告的权限")
+    owner_id = None if scope == "all" else user["id"]
+    return [report_response(item) for item in database.list_reports(owner_id)]
 
 
 @app.get(f"{settings.api_prefix}/template-source-catalog")

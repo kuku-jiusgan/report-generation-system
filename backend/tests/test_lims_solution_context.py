@@ -1,5 +1,6 @@
 from backend.app.services.lims_normalizer import merge_instances, normalize_instance
 from backend.app.services.lims_configured_extractor import _table_values
+from backend.app.services.lims_configured_extractor import apply_configured_extraction
 
 
 def test_intermediate_precision_instance_owns_solution_rows() -> None:
@@ -89,3 +90,60 @@ def test_custom_sample_test_group_filters_rows_without_hiding_standard_solutions
 
     merged = merge_instances([result], groups=groups, normalized=True)["payload"]
     assert merged["custom_1789633006443"][0]["field_001"] == "供试品溶液"
+
+
+def test_normalized_rules_keep_flat_configured_group_rows_aligned() -> None:
+    payload = {"configuredRows": [
+        {"field_1": " A ", "field_2": " 1 "},
+        {"field_1": " B ", "field_2": " 2 "},
+    ]}
+    fields = [{
+        "fieldCode": f"test.field_{index}",
+        "legacyJsonPath": f"$.configuredRows[*].field_{index}",
+        "dataType": "string", "cardinality": "ONE", "enabled": True,
+    } for index in (1, 2)]
+    rules = [{
+        "fieldCode": field["fieldCode"], "sourceType": "NORMALIZED_PATH",
+        "sourcePath": field["legacyJsonPath"], "transform": "TRIM", "enabled": True,
+    } for field in fields]
+
+    apply_configured_extraction({}, payload, fields, rules)
+
+    assert payload == {"configuredRows": [
+        {"field_1": "A", "field_2": "1"},
+        {"field_1": "B", "field_2": "2"},
+    ]}
+
+
+def test_normalized_rule_transforms_derived_solution_view() -> None:
+    instance = {
+        "instanceId": "IP-LINEARITY-1",
+        "title": "中间精密度",
+        "richTexts": [{
+            "id": "R-1", "sectionPath": ["实验设计", "溶液配制"],
+            "plainText": "验证项目 溶液名称 配制方法",
+            "html": "<table><tr><th>验证项目</th><th>溶液名称</th><th>配制方法</th></tr>"
+                    "<tr><td>中间精密度</td><td>线性溶液</td>"
+                    "<td>按方案稀释。 溶液 名称 量取体积（μl） 定容至（ml） C1 500 20</td>"
+                    "</tr></table>",
+        }],
+    }
+    field = {
+        "fieldCode": "intermediatePrecisionSolutions.preparation",
+        "legacyJsonPath": "$.intermediatePrecisionSolutions[*].preparation",
+        "dataType": "string", "cardinality": "ONE", "enabled": True,
+    }
+    rule = {
+        "fieldCode": field["fieldCode"], "sourceType": "NORMALIZED_PATH",
+        "sourcePath": field["legacyJsonPath"], "transform": "TRIM", "enabled": True,
+        "valuePattern": r"^\s*(.*?)(?=\s*溶液\s*名称\s*量取体积|$)",
+    }
+
+    result = normalize_instance(instance, fields=[field], extraction_rules=[rule])
+
+    assert result["intermediatePrecisionSolutions"][0]["preparation"] == "按方案稀释。"
+
+    merged = merge_instances(
+        [result], fields=[field], extraction_rules=[rule], normalized=True,
+    )["payload"]
+    assert merged["intermediatePrecisionSolutions"][0]["preparation"] == "按方案稀释。"

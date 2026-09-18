@@ -26,7 +26,11 @@ def refresh_protocol_source(database, settings, data: dict[str, Any]) -> None:
     else:
         path = None
     payload = extract_protocol(path, source['id'] if source else '', fields, rules, groups,
-                               settings.max_upload_mb * 1024 * 1024)
+                               settings.max_upload_mb * 1024 * 1024, strict=False)
+    # 报告运行时允许方案字段缺失；保留字段级 ERROR 详情，同时将整体失败降为可见告警。
+    meta = payload['_meta']
+    meta['warnings'].extend(meta['errors'])
+    meta['errors'] = []
     replace_protocol_result(data, payload, source.get('sha256', '') if source else '')
 
 

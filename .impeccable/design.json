@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-18T12:41:49+08:00",
+  "title": "Design System: 报告自动生成系统",
+  "extensions": {
+    "colorMeta": {
+      "operational-blue": {
+        "role": "primary",
+        "displayName": "Operational Blue",
+        "tonalRamp": ["#06132f", "#0a2863", "#0d3d98", "#1456d9", "#4d7de3", "#86a6ed", "#bfd0f7", "#eef4ff"]
+      },
+      "operational-blue-hover": {
+        "role": "primary",
+        "displayName": "Operational Blue Hover",
+        "tonalRamp": ["#071633", "#0d2e6b", "#1647a2", "#2768df", "#5b88e7", "#8eaaef", "#c2d2f7", "#eff5ff"]
+      },
+      "operational-blue-active": {
+        "role": "primary",
+        "displayName": "Operational Blue Active",
+        "tonalRamp": ["#041027", "#082253", "#0a347f", "#0d46b5", "#4b74c8", "#85a0dc", "#becdee", "#eef3fb"]
+      },
+      "focus-ring": {
+        "role": "primary",
+        "displayName": "Visible Focus Blue",
+        "tonalRamp": ["#10192b", "#25365d", "#405687", "#5c79b3", "#7aa4ee", "#a3bff4", "#cad8f8", "#f0f4fd"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ledger Ink",
+        "tonalRamp": ["#111827", "#182235", "#303b4e", "#505b6d", "#737d8d", "#9ba3af", "#c8cdd4", "#f2f4f6"]
+      },
+      "body-text": {
+        "role": "neutral",
+        "displayName": "Operational Text",
+        "tonalRamp": ["#121720", "#273247", "#3f4b61", "#5c687d", "#7c8799", "#a2aab6", "#cdd1d7", "#f3f4f6"]
+      },
+      "secondary-text": {
+        "role": "neutral",
+        "displayName": "Secondary Slate",
+        "tonalRamp": ["#15191f", "#29313d", "#414c5d", "#657187", "#858fa0", "#a8afb9", "#d0d4da", "#f3f4f6"]
+      },
+      "divider": {
+        "role": "neutral",
+        "displayName": "Quiet Divider",
+        "tonalRamp": ["#181a1d", "#33363b", "#53575e", "#767b83", "#9da1a8", "#c2c5ca", "#dfe4ec", "#f5f7fa"]
+      },
+      "shell-ground": {
+        "role": "neutral",
+        "displayName": "Shell Ground",
+        "tonalRamp": ["#171819", "#323334", "#535455", "#767778", "#9d9e9f", "#c4c5c6", "#e4e5e6", "#f5f6f8"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Work Surface",
+        "tonalRamp": ["#171717", "#333333", "#555555", "#777777", "#9f9f9f", "#c7c7c7", "#e5e5e5", "#ffffff"]
+      },
+      "surface-subtle": {
+        "role": "neutral",
+        "displayName": "Subtle Utility Surface",
+        "tonalRamp": ["#171819", "#323334", "#535455", "#767778", "#9e9fa1", "#c6c7c9", "#e6e7e9", "#f8f9fb"]
+      },
+      "surface-selected": {
+        "role": "neutral",
+        "displayName": "Selected Surface",
+        "tonalRamp": ["#101724", "#21334f", "#3a5279", "#5e78a6", "#8da4cd", "#b8c9e7", "#d7e3f7", "#eaf1ff"]
+      },
+      "success-text": {
+        "role": "neutral",
+        "displayName": "Success Text",
+        "tonalRamp": ["#071a03", "#0e3506", "#155009", "#237804", "#4c9840", "#7ab570", "#add4a6", "#edf7ea"]
+      },
+      "warning-text": {
+        "role": "neutral",
+        "displayName": "Warning Text",
+        "tonalRamp": ["#251100", "#4a2400", "#703700", "#8a4600", "#aa6b32", "#c99368", "#e4bea2", "#f9eee6"]
+      },
+      "danger-text": {
+        "role": "neutral",
+        "displayName": "Danger Text",
+        "tonalRamp": ["#2a0704", "#550f0a", "#81170f", "#b42318", "#ca564d", "#dd8982", "#edbcb8", "#fbeeed"]
+      },
+      "info-text": {
+        "role": "neutral",
+        "displayName": "Information Text",
+        "tonalRamp": ["#121417", "#262b31", "#3b424b", "#4b5563", "#747d89", "#9da4ad", "#c8ccd1", "#f1f2f3"]
+      }
+    },
+    "typographyMeta": {
+      "page-title": {
+        "displayName": "Page Title",
+        "purpose": "Compact workspace identity; never a marketing hero."
+      },
+      "row-title": {
+        "displayName": "Row Title",
+        "purpose": "Primary scannable identifier inside dense report rows."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Operational values, fields, and working copy."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Controls, columns, navigation, and commands."
+      },
+      "metadata": {
+        "displayName": "Metadata",
+        "purpose": "Report numbers, source namespaces, descriptions, and totals."
+      }
+    },
+    "shadows": [
+      {
+        "name": "nav-active-inset",
+        "value": "inset 2px 0 #1456d9",
+        "purpose": "Anchors the selected application module to the navigation edge."
+      },
+      {
+        "name": "drawer-structural",
+        "value": "-10px 0 30px rgba(28, 57, 92, 0.12)",
+        "purpose": "Separates a true overlay drawer from the workspace beneath it."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-state",
+        "value": "140ms ease-out",
+        "purpose": "Navigation and compact control color-state transitions."
+      },
+      {
+        "name": "shell-resize",
+        "value": "180ms ease-out",
+        "purpose": "Expanded-to-compact navigation rail transition."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "0s",
+        "purpose": "Removes transitions and animations when reduced motion is requested."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sidebar-compact",
+        "value": "1180px",
+        "purpose": "Collapses the application sidebar to the 64px icon rail."
+      },
+      {
+        "name": "queue-full-columns",
+        "value": "1160px container",
+        "purpose": "Restores the experiment record column when queue width permits."
+      },
+      {
+        "name": "hub-tight-gutter",
+        "value": "1100px",
+        "purpose": "Reduces horizontal workspace gutters from 24px to 18px."
+      },
+      {
+        "name": "queue-core-columns",
+        "value": "1000px container",
+        "purpose": "Keeps only core columns and the fixed action column below this width."
+      },
+      {
+        "name": "filters-wrap",
+        "value": "980px container",
+        "purpose": "Moves the date range to a second filter row without page overflow."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single high-emphasis command for the current workspace.",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"/></svg><span>新建报告</span></button>",
+      "css": ".ds-btn-primary { height: 36px; padding: 0 15px; display: inline-flex; align-items: center; gap: 7px; color: #fff; background: #1456d9; border: 1px solid #1456d9; border-radius: 5px; font: 600 12px/1.4 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background-color 140ms ease-out, border-color 140ms ease-out; } .ds-btn-primary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; } .ds-btn-primary:hover { background: #2768df; border-color: #2768df; } .ds-btn-primary:focus-visible { outline: 2px solid #7aa4ee; outline-offset: 2px; } .ds-btn-primary:active { background: #0d46b5; border-color: #0d46b5; }"
+    },
+    {
+      "name": "Compact Search Input",
+      "kind": "input",
+      "refersTo": "input-compact",
+      "description": "A dense search field for queue-level filtering.",
+      "html": "<label class=\"ds-search\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"m20 20-3.5-3.5\"/></svg><input type=\"search\" placeholder=\"搜索报告名称、编号或项目号\" aria-label=\"搜索报告\"></label>",
+      "css": ".ds-search { width: 360px; height: 34px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: #657187; background: #fff; border: 1px solid #dfe4ec; border-radius: 4px; transition: border-color 140ms ease-out, box-shadow 140ms ease-out; } .ds-search:focus-within { border-color: #1456d9; box-shadow: 0 0 0 2px rgba(122, 164, 238, 0.28); } .ds-search svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; } .ds-search input { min-width: 0; flex: 1; color: #273247; background: transparent; border: 0; outline: 0; font: 400 12px/1.45 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-search input::placeholder { color: #657187; }"
+    },
+    {
+      "name": "Active Navigation Item",
+      "kind": "nav",
+      "refersTo": "navigation-item-active",
+      "description": "The selected module state in the expanded application rail.",
+      "html": "<button class=\"ds-nav-item\" type=\"button\" aria-current=\"page\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M6 3h9l3 3v15H6z\"/><path d=\"M9 11h6M9 15h6\"/></svg><span><strong>报告管理大厅</strong><small>创建、复核与交付报告</small></span></button>",
+      "css": ".ds-nav-item { position: relative; width: 200px; height: 40px; padding: 0 10px; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 9px; color: #1456d9; background: #eaf1ff; border: 0; border-radius: 5px; box-shadow: inset 2px 0 #1456d9; text-align: left; cursor: pointer; transition: background-color 140ms ease-out; } .ds-nav-item:hover { background: #dfeaff; } .ds-nav-item:focus-visible { outline: 2px solid #7aa4ee; outline-offset: -2px; } .ds-nav-item svg { width: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; } .ds-nav-item span, .ds-nav-item strong, .ds-nav-item small { min-width: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-nav-item strong { font: 600 12px/1.4 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-nav-item small { margin-top: 2px; color: #5f6b7d; font: 400 11px/1.4 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; }"
+    },
+    {
+      "name": "Report Status Strip",
+      "kind": "nav",
+      "refersTo": "status-tab",
+      "description": "A compact queue filter that carries counts without becoming a metric dashboard.",
+      "html": "<nav class=\"ds-status-strip\" aria-label=\"报告状态快速筛选\"><button class=\"ds-status active\" type=\"button\" aria-pressed=\"true\"><span>我的报告</span><b>42</b></button><button class=\"ds-status\" type=\"button\"><span>草稿</span><b>8</b></button><button class=\"ds-status\" type=\"button\"><span>待复核</span><b>12</b></button><button class=\"ds-status\" type=\"button\"><span>已复核</span><b>7</b></button><button class=\"ds-status\" type=\"button\"><span>已完成</span><b>15</b></button><button class=\"ds-status\" type=\"button\"><span>全部报告</span><b>128</b></button></nav>",
+      "css": ".ds-status-strip { height: 49px; padding: 0 24px; display: flex; align-items: stretch; gap: 28px; background: #fff; border-bottom: 1px solid #dfe4ec; } .ds-status { position: relative; min-width: 82px; padding: 0; display: flex; align-items: center; justify-content: center; gap: 8px; color: #526075; background: transparent; border: 0; font: 400 13px/1.4 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; } .ds-status::after { content: ''; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: transparent; } .ds-status:hover, .ds-status.active { color: #1456d9; } .ds-status:focus-visible { outline: 2px solid #7aa4ee; outline-offset: -3px; } .ds-status.active { font-weight: 600; } .ds-status.active::after { background: #1456d9; } .ds-status b { min-width: 22px; padding: 1px 6px; color: #3e4b61; background: #edf0f5; border-radius: 9px; font-size: 11px; font-variant-numeric: tabular-nums; } .ds-status.active b { color: #0d46b5; background: #e7efff; } .ds-status.alert b { color: #b42318; background: #feeceb; }"
+    },
+    {
+      "name": "Lifecycle Tags",
+      "kind": "chip",
+      "refersTo": "status-tag",
+      "description": "Accessible, text-backed lifecycle states for report rows.",
+      "html": "<div class=\"ds-tags\"><span class=\"ds-tag info\">草稿</span><span class=\"ds-tag primary\">待复核</span><span class=\"ds-tag warning\">已复核</span><span class=\"ds-tag success\">已完成</span></div>",
+      "css": ".ds-tags { display: flex; flex-wrap: wrap; gap: 8px; } .ds-tag { min-width: 72px; height: 24px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid currentColor; border-radius: 3px; font: 500 11px/1 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-tag.primary { color: #0b57c9; background: #ecf5ff; } .ds-tag.success { color: #237804; background: #f0f9eb; } .ds-tag.warning { color: #8a4600; background: #fdf6ec; } .ds-tag.danger { color: #b42318; background: #fef0f0; } .ds-tag.info { color: #4b5563; background: #f4f4f5; }"
+    },
+    {
+      "name": "Report Queue Row",
+      "kind": "custom",
+      "refersTo": "table-row",
+      "description": "The signature dense row with provenance, status, timing, and a fixed action area.",
+      "html": "<div class=\"ds-report-row\"><input type=\"checkbox\" aria-label=\"选择报告\"><div class=\"ds-report-name\"><button type=\"button\" title=\"阿莫西林胶囊检验报告\">阿莫西林胶囊检验报告</button><small>RPT-2026-0918 · LIMS · EXCEL</small></div><span class=\"ds-row-status\">待复核</span><span class=\"ds-project\">PRJ-240918</span><time>2026/09/18 14:32</time><div class=\"ds-row-actions\"><button type=\"button\">编辑/复核</button><button type=\"button\">更多</button></div></div>",
+      "css": ".ds-report-row { width: 900px; height: 52px; display: grid; grid-template-columns: 28px minmax(240px, 1fr) 108px 130px 168px 184px; align-items: center; color: #273247; background: #fff; border-bottom: 1px solid #e7eaf0; font: 400 12px/1.45 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-report-row:hover { background: #f5f8fd; } .ds-report-name { min-width: 0; padding: 0 12px; } .ds-report-name button { max-width: 100%; padding: 0; overflow: hidden; color: #1d2d49; background: transparent; border: 0; font: 600 13px/1.45 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; } .ds-report-name button:hover { color: #1456d9; text-decoration: underline; text-underline-offset: 3px; } .ds-report-name button:focus-visible, .ds-row-actions button:focus-visible { outline: 2px solid #7aa4ee; outline-offset: 2px; } .ds-report-name small { margin-top: 3px; display: block; overflow: hidden; color: #657187; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; } .ds-row-status { width: 72px; padding: 4px 8px; color: #0b57c9; background: #ecf5ff; border: 1px solid currentColor; border-radius: 3px; text-align: center; } .ds-project, .ds-report-row time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-row-actions { height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; background: inherit; } .ds-row-actions button { padding: 4px; color: #1456d9; background: transparent; border: 0; cursor: pointer; }"
+    },
+    {
+      "name": "Batch Action Bar",
+      "kind": "custom",
+      "refersTo": "batch-action-bar",
+      "description": "A contextual action band that appears only after report selection.",
+      "html": "<div class=\"ds-batch\"><strong>已选择 3 份报告</strong><button class=\"primary\" type=\"button\">批量导出</button><button class=\"danger\" type=\"button\">批量删除</button></div>",
+      "css": ".ds-batch { height: 45px; padding: 6px 24px; display: flex; align-items: center; gap: 8px; color: #27364e; background: #edf4ff; border-bottom: 1px solid #ccdcf7; font: 400 12px/1.4 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-batch strong { margin-right: auto; font-weight: 600; } .ds-batch button { height: 30px; padding: 0 10px; background: transparent; border: 1px solid currentColor; border-radius: 4px; font: 600 12px/1.4 Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; } .ds-batch button.primary { color: #0b57c9; background: #fff; } .ds-batch button.danger { color: #b42318; background: #fff; } .ds-batch button:hover { background: #f8f9fb; } .ds-batch button:focus-visible { outline: 2px solid #7aa4ee; outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Controlled Report Ledger",
+    "overview": "The Controlled Report Ledger treats every authenticated screen as an operational surface: quiet, information-dense, and anchored by a stable application shell. White work areas and cool-gray structure keep attention on report state, provenance, and the next permitted action; one precise blue accent supplies hierarchy without turning the interface into a brand spectacle.\n\nThis system is designed for repeated desktop work from 1024px through 1440px. It favors compact controls, explicit loading, error, and empty states, predictable columns, and visible keyboard focus. It rejects marketing composition, decorative AI imagery, gradients, oversized metrics, and ornamental card grids.",
+    "keyCharacteristics": [
+      "Full-height application shell with a stable navigation rail.",
+      "Dense tabular workspaces that prioritize the next permitted action.",
+      "Flat white surfaces separated by cool-gray rules and restrained tonal shifts.",
+      "A single operational blue used for selection, focus, and primary commands.",
+      "Explicit, text-backed states with accessible contrast and keyboard disclosure."
+    ],
+    "rules": [
+      {
+        "name": "The One Blue Rule",
+        "body": "Operational Blue is the only general-purpose accent; semantic colors communicate status and never become decorative accents.",
+        "section": "colors"
+      },
+      {
+        "name": "The Contrast Pair Rule",
+        "body": "Compact status text must maintain at least 4.5:1 contrast against its light status surface, and every status must retain a written label rather than relying on color alone.",
+        "section": "colors"
+      },
+      {
+        "name": "The Compact Legibility Rule",
+        "body": "Secondary operational text never drops below the metadata role, and Chinese labels keep normal letter spacing instead of artificial tracking.",
+        "section": "typography"
+      },
+      {
+        "name": "The Numeric Stability Rule",
+        "body": "Counts and totals use tabular numerals so changing data does not shift surrounding controls.",
+        "section": "typography"
+      },
+      {
+        "name": "The Queue-First Rule",
+        "body": "On report-index surfaces, status, filters, and the working queue consume the first viewport; summary cards never displace the reports themselves.",
+        "section": "layout"
+      },
+      {
+        "name": "The Fixed Action Rule",
+        "body": "Dense operational tables keep the primary row action visible at the right edge while lower-priority data columns yield first.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat-by-Default Rule",
+        "body": "Resting work surfaces use borders and tonal shifts; shadows are reserved for overlays or explicit selected-state structure.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Radius Follows Function Rule",
+        "body": "Dense controls stay close to square; only compact counters, avatars, and platform dialogs receive more curvature.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do keep report workspaces dense enough that the queue occupies the remaining first viewport.",
+      "Do preserve a single blue primary accent and use semantic colors only for labeled status or risk.",
+      "Do keep loading, success, retained-data error, initial error, filtered-empty, and true-empty states explicit.",
+      "Do maintain visible keyboard focus and at least 4.5:1 contrast for compact status and supporting text.",
+      "Do adapt by hiding lower-priority columns before allowing horizontal page overflow.",
+      "Do keep permissions, source namespaces, auditability, and backend data authoritative in the UI."
+    ],
+    "donts": [
+      "Don't place metric cards, promotional summaries, or decorative containers above the operational queue.",
+      "Don't use gradients, glowing effects, decorative AI imagery, or atmospheric color blobs.",
+      "Don't introduce a second general-purpose accent or turn semantic status colors into decoration.",
+      "Don't nest cards inside cards or make page sections look like floating marketing panels.",
+      "Don't hide full truncated values from keyboard users or communicate status by color alone.",
+      "Don't enlarge headings, radii, or spacing until routine office work becomes sparse or scroll-heavy."
+    ]
+  }
+}

@@ -59,6 +59,16 @@ class AuthenticationAndHistoryTest(unittest.TestCase):
             })
         self.assertEqual(1, len(self.database.list_reports(first["id"])))
         self.assertEqual("first", self.database.list_reports(first["id"])[0]["title"])
+        self.assertEqual("报告用户", self.database.list_reports(first["id"])[0]["creator_name"])
+        self.assertEqual(2, len(self.database.list_reports()))
+
+    def test_admin_roles_receive_cross_user_view_permission_once(self) -> None:
+        self.assertIn("REPORT_ALL_VIEW", self.database.role_permissions("SUPER_ADMIN"))
+        self.assertIn("REPORT_ALL_VIEW", self.database.role_permissions("SYSTEM_ADMIN"))
+
+        self.database.replace_role_permissions("SYSTEM_ADMIN", {"ADMIN_ACCESS"})
+        self.auth.bootstrap()
+        self.assertNotIn("REPORT_ALL_VIEW", self.database.role_permissions("SYSTEM_ADMIN"))
 
     def test_generation_history_keeps_each_attempt(self) -> None:
         user = self.create_report_user()

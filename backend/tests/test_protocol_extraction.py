@@ -1,4 +1,3 @@
-from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -230,17 +229,37 @@ def test_reextract_removes_stale_values_and_warning(tmp_path):
     assert not data['warnings']
 
 
-def test_runtime_failure_does_not_mutate_data(tmp_path):
+def test_runtime_missing_document_is_kept_as_warning(tmp_path):
     database = MagicMock()
     database.list_lims_fields.return_value = [field()]
     database.list_system_field_rules.return_value = [rule()]
     settings = SimpleNamespace(uploads_dir=tmp_path, max_upload_mb=4)
     data = {'source_payloads': {'EXCEL': {'keep': True}}}
-    before = deepcopy(data)
     with patch('backend.app.services.system_field_groups.list_system_field_groups', return_value=[]):
-        with pytest.raises(ValueError, match='未上传'):
-            refresh_protocol_source(database, settings, data)
-    assert data == before
+        refresh_protocol_source(database, settings, data)
+    assert data['source_payloads']['EXCEL'] == {'keep': True}
+    assert data['source_payloads']['PROTOCOL']['_meta']['warnings']
+    assert '未上传' in data['source_payloads']['PROTOCOL']['_meta']['warnings'][0]
+
+
+def test_runtime_locator_failure_is_kept_as_empty_value(tmp_path):
+    database = MagicMock()
+    database.list_lims_fields.return_value = [field()]
+    database.list_system_field_rules.return_value = [rule(sectionPattern='不存在的章节')]
+    source_path = scheme(tmp_path)
+    database.get_source.return_value = {
+        'id': 'doc-1', 'source_type': 'PROTOCOL', 'stored_name': source_path.name,
+        'sha256': 'hash',
+    }
+    settings = SimpleNamespace(uploads_dir=tmp_path, max_upload_mb=4)
+    data = {'source_payloads': {'PROTOCOL_DOCUMENT': {'id': 'doc-1'}, 'EXCEL': {'keep': True}}}
+    with patch('backend.app.services.system_field_groups.list_system_field_groups', return_value=[]):
+        refresh_protocol_source(database, settings, data)
+    result = data['source_payloads']['PROTOCOL']['_meta']['fields']['project.code']
+    assert result['status'] == 'ERROR'
+    assert result.get('value') is None
+    assert '未匹配' in result['message']
+    assert data['source_payloads']['EXCEL'] == {'keep': True}
 
 
 def test_preview_is_read_only_and_shows_required_failure(tmp_path):

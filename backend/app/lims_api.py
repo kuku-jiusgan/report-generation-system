@@ -104,7 +104,8 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
             instances = [normalized_instance(item, instance_id) for instance_id in request.instance_ids]
             groups = list_system_field_groups(database)
             return merge_instances(
-                instances, fields=database.list_lims_fields(True), groups=groups, normalized=True,
+                instances, fields=database.list_lims_fields(True),
+                extraction_rules=database.list_lims_parser_rules(), groups=groups, normalized=True,
             )
         except KeyError as error:
             raise HTTPException(404, f"LIMS 实验记录不存在：{error.args[0]}") from error
