@@ -18,8 +18,11 @@ def _compile_failure_message(report: dict) -> str:
             f"请在模板设计器中修正这些字段的 Word 位置，或停用不再使用的映射。")
 
 
-def resolve_runtime_template(settings, rule_admin, apply_content_block_rules, template_id: str | None = None) -> tuple[Path, list[dict], list[dict], dict[str, str]]:
-    active = rule_admin.active_runtime_template(template_id)
+def resolve_runtime_template(
+    settings, rule_admin, apply_content_block_rules,
+    template_id: str | None = None, template_version_id: str | None = None,
+) -> tuple[Path, list[dict], list[dict], dict[str, str]]:
+    active = rule_admin.active_runtime_template(template_id, template_version_id)
     if active:
         snapshot = active["snapshot"]
         # 表格布局是设计器的当前配置；重新生成不能继续使用发布快照中的旧布局。
@@ -51,6 +54,8 @@ def resolve_runtime_template(settings, rule_admin, apply_content_block_rules, te
                 "template_version": f"V{active['versionNo']}" if active else "V1.0",
                 "template_revision": revision,
             }
+    if template_version_id:
+        raise RuntimeError("报告绑定的模板发布文件缺失，无法按原版本重新生成")
     if template_id:
         raise RuntimeError("所选报告模板的已发布文件缺失，请重新发布模板")
     # 走到这里说明模板库里没有可用的已发布版本。以前会静默拿基座模板顶上，

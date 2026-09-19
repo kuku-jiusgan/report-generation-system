@@ -1,7 +1,5 @@
 import hashlib
-import json
 import logging
-import shutil
 import time
 import urllib.request
 import uuid
@@ -10,28 +8,25 @@ from typing import Any, Callable
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 
 from .auth import AuthManager
 from .config import Settings
 from .database import Database, now_iso
 from .onlyoffice_callback import assert_document_server_url, callback_status, verified_callback_payload
-from .report_utils import has_custom_report_title, resolved_report_title
-from .services.rule_admin import RuleAdminRepository
-from .services.word_sync import read_bound_values
 from .services.docx_export import export_docx_response
+from .services.docx_validation import validate_docx_document
+from .services.onlyoffice_force_save import (
+    OnlyOfficeForceSaveError, request_onlyoffice_force_save, wait_for_file_update,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def create_report_word_router(
-    database: Database, settings: Settings, auth: AuthManager, rule_admin: RuleAdminRepository,
+    database: Database, settings: Settings, auth: AuthManager,
     required_report: Callable[[str], dict[str, Any]],
     required_owned_report: Callable[[str, dict[str, Any]], dict[str, Any]],
-    runtime_template_and_mappings: Callable[..., tuple[Path, list[dict], list[dict], dict[str, str]]],
-    render_report_word: Callable[..., str],
-    require_automatic_edit_allowed: Callable[[dict[str, Any]], None],
-    apply_content_block_rules: Callable[[dict], list[dict]],
 ) -> APIRouter:
     router = APIRouter()
 
@@ -39,7 +34,6 @@ def create_report_word_router(
         document_hash = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         return f"{report_id}-{document_hash}"
 
-    _apply_content_block_rules = apply_content_block_rules
     @router.get(f"{settings.api_prefix}/reports/{{report_id}}/file")
     def download_report(report_id: str, document_token: str = "",
                         user: dict | None = Depends(auth.optional_user)) -> Response:
@@ -63,84 +57,14 @@ def create_report_word_router(
             raise HTTPException(404, "报告文件不存在")
         if not signed_access:
             return export_docx_response(path, item["title"])
-        return FileResponse(
-            path,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            filename=f"{item['title']}.docx",
-        )
+        return export_docx_response(path, item["title"])
 
 
     def ensure_report_file(item: dict) -> tuple[dict, Path]:
-        working_name = f"report-{item['id']}-working.docx"
-        path = settings.reports_dir / working_name
-        previous_name = item.get("output_name")
-        previous_path = settings.reports_dir / previous_name if previous_name else None
-        *_, template_meta = runtime_template_and_mappings(item["resolved_data"].get("template_id") or None)
-        template_changed = item["resolved_data"].get("template_revision") != template_meta["template_revision"]
-        metadata_changed = any(item["resolved_data"].get(key) != value for key, value in template_meta.items())
-        if template_changed and not item.get("word_edit_locked"):
-            output_name = render_report_word(item, item["resolved_data"])
-            item = database.update_report(
-                item["id"], status="EDITING", output_name=output_name,
-                resolved_data=item["resolved_data"],
-                # 文件已重新渲染，旧编辑会话签发的文档 key 必须失效，防止其回调覆盖新文件
-                onlyoffice_document_key=None,
-            )
-            return item, settings.reports_dir / output_name
-        if metadata_changed and not item.get("word_edit_locked"):
-            item["resolved_data"].update(template_meta)
-            item = database.update_report(item["id"], resolved_data=item["resolved_data"])
-        if not path.exists() and previous_path and previous_path.exists() and previous_path != path:
-            shutil.copy2(previous_path, path)
+        path = settings.reports_dir / f"report-{item['id']}-working.docx"
         if not path.exists():
-            require_automatic_edit_allowed(item)
-            output_name = render_report_word(item, item["resolved_data"])
-            path = settings.reports_dir / output_name
-        if item.get("output_name") != working_name:
-            item = database.update_report(item["id"], status="EDITING", output_name=working_name)
+            raise HTTPException(409, "报告工作文件不存在，请先重新生成报告")
         return item, path
-
-
-    def ensure_editable_report_file(item: dict) -> tuple[dict, Path]:
-        return ensure_report_file(item)
-
-
-    def sync_word_fields(item: dict, path: Path) -> dict:
-        _, mappings, *_ = runtime_template_and_mappings(item["resolved_data"].get("template_id") or None)
-        bound_values, canonical_values = read_bound_values(path, mappings)
-        data = dict(item["resolved_data"])
-        old_word = data.get("source_payloads", {}).get("WORD", {}).get("boundValues", {})
-        sources = dict(data.get("field_sources", {}))
-        originals = dict(data.get("original_values", {}))
-        for code, value in canonical_values.items():
-            old_value = str(data.get(code) or "")
-            if old_value != value:
-                database.add_change(item["id"], code, old_value, value, "ONLYOFFICE", "Word 人工编辑")
-            data[code] = value
-            sources[code] = {"type": "MANUAL_WORD", "record_id": "ONLYOFFICE"}
-            originals[code] = value
-        for code, value in bound_values.items():
-            sources[code] = {"type": "MANUAL_WORD", "record_id": "ONLYOFFICE"}
-            if code in canonical_values:
-                continue
-            before = old_word.get(code, "") if isinstance(old_word, dict) else ""
-            if before != value:
-                database.add_change(
-                    item["id"], code,
-                    json.dumps(before, ensure_ascii=False) if isinstance(before, list) else str(before),
-                    json.dumps(value, ensure_ascii=False) if isinstance(value, list) else str(value),
-                    "ONLYOFFICE", "Word 人工编辑",
-                )
-        data["field_sources"] = sources
-        data["original_values"] = originals
-        source_payloads = dict(data.get("source_payloads", {}))
-        source_payloads["WORD"] = {"boundValues": bound_values}
-        data["source_payloads"] = source_payloads
-        title = item["title"] if has_custom_report_title(item) else resolved_report_title(None, data)
-        return database.update_report(
-            item["id"], title=title, resolved_data=data, status="EDITING",
-            word_edit_locked=1, word_edited_at=now_iso(),
-        )
 
 
     @router.get(f"{settings.api_prefix}/onlyoffice/reports/{{report_id}}/config")
@@ -149,7 +73,7 @@ def create_report_word_router(
             raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请设置 REPORT_ONLYOFFICE_JWT_SECRET")
         item = required_owned_report(report_id, user)
         try:
-            item, path = ensure_editable_report_file(item)
+            item, path = ensure_report_file(item)
         except HTTPException:
             raise
         except Exception as error:
@@ -177,13 +101,9 @@ def create_report_word_router(
                 "lang": "zh-CN",
                 "mode": "edit",
                 "user": {"id": user["id"], "name": user["display_name"]},
-                "customization": {"autosave": True, "forcesave": True, "compactHeader": False},
-                "plugins": {
-                    "autostart": ["asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"],
-                    "pluginsData": [
-                        f"{settings.onlyoffice_url}/sdkjs-plugins/"
-                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=22"
-                    ],
+                "customization": {
+                    "autosave": True, "forcesave": True, "compactHeader": False,
+                    "goback": {"requestClose": True, "text": "返回报告大厅"},
                 },
             },
             "height": "100%",
@@ -192,6 +112,38 @@ def create_report_word_router(
         }
         config["token"] = jwt.encode(config, settings.onlyoffice_jwt_secret, algorithm="HS256")
         return {"documentServerUrl": settings.onlyoffice_url, "config": config}
+
+
+    @router.post(f"{settings.api_prefix}/onlyoffice/reports/{{report_id}}/force-save")
+    def onlyoffice_force_save(
+        report_id: str, user: dict = Depends(auth.require("REPORT_EDIT")),
+    ) -> dict[str, Any]:
+        if not settings.onlyoffice_jwt_secret:
+            raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请设置 REPORT_ONLYOFFICE_JWT_SECRET")
+        item = required_owned_report(report_id, user)
+        _, path = ensure_report_file(item)
+        document_key = str(item.get("onlyoffice_document_key") or "")
+        if not document_key:
+            raise HTTPException(409, "报告编辑器会话不存在，请重新打开报告后再编辑")
+        before = path.stat().st_mtime_ns
+        logger.info("请求 ONLYOFFICE 强制保存 report_id=%s", report_id)
+        try:
+            save_requested = request_onlyoffice_force_save(
+                settings.onlyoffice_url, settings.onlyoffice_jwt_secret, document_key, report_id,
+            )
+        except OnlyOfficeForceSaveError as error:
+            logger.exception("请求 ONLYOFFICE 强制保存失败 report_id=%s", report_id)
+            raise HTTPException(502, f"报告保存失败：{error}") from error
+        if not save_requested:
+            logger.info("ONLYOFFICE 没有待保存改动 report_id=%s", report_id)
+            return {"saved": False, "reportId": report_id}
+        try:
+            wait_for_file_update(path, before)
+        except TimeoutError as error:
+            logger.error("ONLYOFFICE 报告保存回调超时 report_id=%s", report_id)
+            raise HTTPException(504, "报告保存回调超时，已保留当前编辑页面，请重试") from error
+        logger.info("ONLYOFFICE 强制保存完成 report_id=%s", report_id)
+        return {"saved": True, "reportId": report_id}
 
 
     @router.post(f"{settings.api_prefix}/onlyoffice/callback/{{report_id}}")
@@ -209,8 +161,7 @@ def create_report_word_router(
             raise HTTPException(400, "ONLYOFFICE 回调缺少文件地址")
         _, output = ensure_report_file(item)
         # key 必须等于最近一次签发值：既挡住跨报告重放，也挡住陈旧编辑会话的延迟保存。
-        # 必须在 ensure_report_file 之后重新读取——若模板变更触发了重渲染，
-        # 签发记录已被清空，此时保存必须拒绝，不能覆盖新渲染结果
+        # 必须在文件存在性检查后重新读取，避免并发重建已清空签发记录时仍接受旧回调。
         refreshed = database.get_report(report_id)
         issued_key = str((refreshed or {}).get("onlyoffice_document_key") or "")
         if not issued_key or callback_key != issued_key:
@@ -218,18 +169,37 @@ def create_report_word_router(
             return {"error": 1}
         # 唯一临时名：并发的自动保存不能互相截断对方的半截文件
         temp_path = output.with_name(f"{output.name}.{uuid.uuid4().hex[:8]}.saving.docx")
+        started_at = time.monotonic()
         try:
             with urllib.request.urlopen(payload["url"], timeout=60) as response, temp_path.open("wb") as target:
                 target.write(response.read())
-            # Validate and extract controls before replacing the known-good working file.
-            _, mappings, *_ = runtime_template_and_mappings(item["resolved_data"].get("template_id") or None)
-            read_bound_values(temp_path, mappings)
+            downloaded_at = time.monotonic()
+            validate_docx_document(
+                temp_path, settings.max_upload_mb * 1024 * 1024, "ONLYOFFICE 报告 DOCX 文件",
+            )
+            validated_at = time.monotonic()
             temp_path.replace(output)
-            updated = sync_word_fields(item, output)
-            database.create_version(report_id, updated["resolved_data"], "ONLYOFFICE 自动保存")
+            database.update_report(
+                report_id, status="EDITING", word_edit_locked=1, word_edited_at=now_iso(),
+            )
+            completed_at = time.monotonic()
         except Exception as error:
             temp_path.unlink(missing_ok=True)
+            logger.exception(
+                "ONLYOFFICE 报告回调处理失败 report_id=%s elapsedMs=%d",
+                report_id, int((time.monotonic() - started_at) * 1000),
+            )
             raise HTTPException(502, f"保存 ONLYOFFICE 文件失败：{error}") from error
+        elapsed_ms = int((completed_at - started_at) * 1000)
+        callback_log = logger.warning if elapsed_ms >= 2000 else logger.info
+        callback_log(
+            "ONLYOFFICE 报告回调完成 report_id=%s downloadMs=%d validateMs=%d persistMs=%d totalMs=%d",
+            report_id,
+            int((downloaded_at - started_at) * 1000),
+            int((validated_at - downloaded_at) * 1000),
+            int((completed_at - validated_at) * 1000),
+            elapsed_ms,
+        )
         return {"error": 0}
 
     return router

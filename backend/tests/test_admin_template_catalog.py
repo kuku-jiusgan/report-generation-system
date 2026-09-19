@@ -1,15 +1,29 @@
+import asyncio
 import os
 from pathlib import Path
+
+import jwt
+import pytest
 
 from backend.app.admin_api import create_admin_router
 from backend.app.auth import AuthManager
 from backend.app.config import Settings
 from backend.app.database import Database
 from backend.app.services.rule_admin import RuleAdminRepository
+from backend.app.services.template_file_store import TemplateFileStore
 from backend.tests.database_helpers import make_test_database
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class FakeCallbackRequest:
+    def __init__(self, body: dict):
+        self._body = body
+        self.headers = {}
+
+    async def json(self) -> dict:
+        return self._body
 
 
 def test_template_versions_keep_independent_rule_snapshots(tmp_path: Path) -> None:
@@ -118,3 +132,68 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
     assert result["deleted"] is True
     assert not second_file.exists()
     assert all(item["id"] != second["id"] for item in repository.list_templates())
+
+
+def test_publish_freezes_artifact_and_opens_a_new_draft(tmp_path: Path, monkeypatch) -> None:
+    initial_template = tmp_path / "templates" / "report-template.docx"
+    initial_template.parent.mkdir(parents=True)
+    initial_template.write_bytes((PROJECT_ROOT / "templates" / "report-template.docx").read_bytes())
+    settings = Settings(
+        data_dir=tmp_path / "data", template_path=initial_template,
+        onlyoffice_url="http://127.0.0.1:8088", onlyoffice_jwt_secret="test-secret",
+        public_base_url="http://127.0.0.1:8010",
+    )
+    settings.ensure_directories()
+    database = Database(settings)
+    database.initialize()
+    repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
+    repository.seed()
+    router = create_admin_router(repository, settings, AuthManager(database, settings))
+
+    def compile_copy(source: Path, output: Path, *_args) -> dict:
+        output.write_bytes(source.read_bytes())
+        return {"valid": True, "errors": [], "warnings": []}
+
+    monkeypatch.setattr("backend.app.admin_routes.publishing.compile_template", compile_copy)
+    publish = next(route.endpoint for route in router.routes if route.path == "/api/v1/admin/publish")
+    callback = next(
+        route.endpoint for route in router.routes
+        if route.path == "/api/v1/admin/onlyoffice/callback/{version_id}"
+    )
+
+    published = publish({"note": "发布测试"})
+    artifact = Path(published["templateFile"])
+    frozen_bytes = artifact.read_bytes()
+    workspace = repository.active_workspace()
+    assert published["status"] == "PUBLISHED"
+    assert artifact.parent.parent.name == "published"
+    assert workspace["versionStatus"] == "DRAFT"
+    assert workspace["versionId"] != published["id"]
+    assert Path(workspace["templateFile"]) != artifact
+
+    Path(workspace["templateFile"]).write_bytes(b"changed draft")
+    assert artifact.read_bytes() == frozen_bytes
+
+    file_store = TemplateFileStore(repository, settings.template_path)
+    with pytest.raises(ValueError, match="已发布模板不可进入编辑器"):
+        file_store.ensure_version_draft(published["id"])
+
+    legacy_path = file_store.draft_dir / "legacy-published.docx"
+    legacy_path.write_bytes(frozen_bytes)
+    repository.set_template_version_file(published["id"], str(legacy_path))
+    assert file_store.migrate_legacy_published_versions() == 1
+    migrated = repository.get_template_version(published["id"])
+    assert Path(migrated["templateFile"]).parent.parent.name == "published"
+    assert Path(migrated["templateFile"]).read_bytes() == frozen_bytes
+
+    repository.create_template({"code": "SECOND", "name": "备用模板"})
+    with pytest.raises(ValueError, match="包含已发布或历史版本"):
+        repository.delete_template(published["templateId"])
+
+    token = jwt.encode({"status": 2}, settings.onlyoffice_jwt_secret, algorithm="HS256")
+    result = asyncio.run(callback(published["id"], FakeCallbackRequest({
+        "status": 2, "url": f"{settings.onlyoffice_url}/published.docx",
+        "key": "published-key", "token": token,
+    })))
+    assert result == {"error": 1}
+    assert artifact.read_bytes() == frozen_bytes

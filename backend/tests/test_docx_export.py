@@ -115,7 +115,7 @@ def test_generation_and_history_download_use_clean_exports(tmp_path: Path, monke
     assert source.read_bytes() == original
 
 
-def test_user_download_cleans_controls_but_editor_keeps_them(tmp_path: Path) -> None:
+def test_user_download_and_editor_both_hide_content_controls(tmp_path: Path) -> None:
     import jwt
     from backend.app.report_word_api import create_report_word_router
 
@@ -125,12 +125,14 @@ def test_user_download_cleans_controls_but_editor_keeps_them(tmp_path: Path) -> 
     auth = Mock()
     item = {"id": "r1", "title": "报告", "created_by": "u1", "output_name": source.name}
     router = create_report_word_router(
-        Mock(), settings, auth, Mock(), lambda _: item, Mock(), Mock(), Mock(), Mock(), Mock(),
+        Mock(), settings, auth, lambda _: item, Mock(),
     )
     download = next(route.endpoint for route in router.routes if route.path.endswith("/file"))
     response = download("r1", user={"id": "u1", "permissions": ["REPORT_DOWNLOAD"]})
     with zipfile.ZipFile(io.BytesIO(response.body)) as archive:
         assert not etree.fromstring(archive.read(PARTS[0])).xpath(".//w:sdt", namespaces=NS)
     token = jwt.encode({"purpose": "report-file", "reportId": "r1"}, settings.onlyoffice_jwt_secret)
-    assert download("r1", document_token=token, user=None).path == source
+    editor_response = download("r1", document_token=token, user=None)
+    with zipfile.ZipFile(io.BytesIO(editor_response.body)) as archive:
+        assert not etree.fromstring(archive.read(PARTS[0])).xpath(".//w:sdt", namespaces=NS)
     assert source.read_bytes() == original

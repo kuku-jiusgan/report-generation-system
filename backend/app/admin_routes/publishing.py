@@ -1,4 +1,3 @@
-import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -9,7 +8,9 @@ from ..services.template_compiler import compile_template
 
 def register_publishing_routes(router: APIRouter, repository: RuleAdminRepository,
                                ensure_draft_template: Callable[[], Path],
-                               active_draft_template: Callable[[], Path], compiled_dir: Path) -> None:
+                               initialize_version_document: Callable[[str, Path], Path],
+                               publish_version_document: Callable[[str, str, Path], Path],
+                               compiled_dir: Path) -> None:
     def run_compile() -> tuple[Path, dict[str, Any]]:
         snapshot = repository.snapshot(); output = compiled_dir / f"report-template-bound-{uuid.uuid4().hex[:8]}.docx"
         return output, compile_template(ensure_draft_template(), output, snapshot["mappings"], snapshot["tableRules"])
@@ -19,10 +20,22 @@ def register_publishing_routes(router: APIRouter, repository: RuleAdminRepositor
     @router.post('/publish')
     def publish_rules(item: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
+            active = repository.active_workspace()
+            if not active or active.get("versionStatus") != "DRAFT":
+                raise HTTPException(409, "只有草稿版本可以发布")
             output, report = run_compile()
             if not report['valid']: raise HTTPException(422, {'message': '规则校验失败，不能发布', 'validation': report})
-            snapshot = repository.snapshot(); version_file = active_draft_template(); shutil.copy2(output, version_file)
-            return repository.publish_active_template_version(snapshot, report, str(version_file))
+            artifact = publish_version_document(active["templateId"], active["versionId"], output)
+            published = repository.publish_active_template_version(
+                repository.snapshot(), report, str(artifact),
+            )
+            draft = repository.create_template_version(
+                active["templateId"], published["id"], f"基于 V{published['versionNo']} 创建的草稿",
+            )
+            initialize_version_document(str(draft["id"]), artifact)
+            repository.activate_template_version(active["templateId"], str(draft["id"]))
+            repository.set_version_document_key(str(draft["id"]), None)
+            return published
         except HTTPException: raise
         except Exception as error: raise HTTPException(500, f'发布模板版本失败：{error}') from error
     @router.get('/versions')

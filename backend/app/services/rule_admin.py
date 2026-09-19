@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from ..database import Database, now_iso
-from ..repositories.lims_instances import SECTION_COLUMN, collection_storage
 from .template_catalog_repository import TemplateCatalogRepositoryMixin
 from .content_block_repository import ContentBlockRepositoryMixin
 from .mapping_validation_repository import MappingValidationRepositoryMixin
@@ -17,11 +16,11 @@ from .template_block_repository import TemplateBlockRepositoryMixin
 from .runtime_version_repository import RuntimeVersionRepositoryMixin
 from .rule_admin_defaults import (
     SEED_CLEAR_OBJECT_TABLES, SEED_MATRIX_LAYOUT, SEED_MATRIX_TABLES, SEED_PRESERVED_ROW_LABELS,
-    seed_physical_table_index, DEFAULT_TEMPLATE_CHAPTERS, SOLUTION_VIEW_COLLECTIONS,
-    STANDARD_FIELD_GROUP_NAMES, STRUCTURED_UNIT_COLLECTIONS,
+    seed_physical_table_index, DEFAULT_TEMPLATE_CHAPTERS,
+    STANDARD_FIELD_GROUP_NAMES,
 )
-from .lims_parser_profiles import HTML_TABLE_LEGACY_DEFAULTS, HTML_TABLE_PARSER_PROFILES
 from .lims_catalog_defaults import ensure_lims_catalog_defaults
+from .lims_direct_rule_migration import migrate_lims_direct_rules
 from .system_field_defaults import ensure_system_field_defaults
 from .system_field_groups import ensure_system_field_groups
 from .excel_rule_defaults import ensure_excel_field_rules
@@ -86,27 +85,14 @@ class RuleAdminRepository(
                 self.upsert_data_source({"code": code, "name": name, "sourceType": source_type,
                                          "priority": priority, "enabled": True, "config": config})
         self._assign_unmapped_chapters()
-        self._seed_lims_field_rules()
         ensure_system_field_defaults(self.database)
         ensure_system_field_groups(self.database)
         ensure_lims_catalog_defaults(self.database)
         ensure_excel_field_rules(self.database)
         self._localize_standard_field_groups()
-        self._annotate_lims_rules()
+        migrate_lims_direct_rules(self.database)
         self._seed_template_catalog()
         self.save_active_workspace()
-
-    def _seed_lims_field_rules(self) -> None:
-        """给还没有提取规则的目录字段补一条按标准路径取值的 LIMS 规则。"""
-        for field in self.database.list_lims_fields(True):
-            rules = self.database.list_system_field_rules(field["fieldCode"])
-            if field.get("legacyJsonPath") and not rules:
-                self.database.save_system_field_rule({
-                    "fieldCode": field["fieldCode"], "name": "已有标准数据路径",
-                    "sourceType": "LIMS", "transform": "TRIM", "priority": 100,
-                    "config": {"extractionType": "NORMALIZED_PATH",
-                               "sourcePath": field["legacyJsonPath"]}, "enabled": True,
-                })
 
     def _localize_standard_field_groups(self) -> None:
         """Translate known display groups without changing data collection codes."""
@@ -115,86 +101,6 @@ class RuleAdminRepository(
                 connection.execute(
                     "UPDATE lims_field_catalog SET group_code=%s,updated_at=%s WHERE group_code=%s",
                     (group_name, now_iso(), group_code),
-                )
-
-    def _annotate_lims_rules(self) -> None:
-        """Persist deterministic upstream parser details in generated field rules."""
-        with self.database.connect() as connection:
-            rows = connection.execute(
-                """SELECT r.id,r.field_code,r.name,r.config,
-                          COALESCE(gf.group_code, f.collection_code) AS collection_code,
-                          f.json_key,g.cardinality
-                   FROM system_field_rules r
-                   JOIN lims_field_catalog f ON f.field_code=r.field_code
-                   LEFT JOIN (
-                     SELECT field_code,MIN(group_code) AS group_code
-                     FROM system_field_group_fields GROUP BY field_code
-                   ) gf ON gf.field_code=f.field_code
-                   LEFT JOIN system_field_groups g
-                     ON BINARY g.group_code=BINARY COALESCE(gf.group_code, f.collection_code)
-                   WHERE r.source_type='LIMS'"""
-            ).fetchall()
-            for row in rows:
-                collection = str(row["collection_code"] or "")
-                # 段内字段读的是实验实例上的段列，不像记录型集合那样一行一条
-                stored_in_section = collection_storage(
-                    collection, str(row["cardinality"] or "")) == ("lims_experiments", SECTION_COLUMN)
-                config = json.loads(row["config"] or "{}")
-                section_pattern = str(config.get("sectionPattern") or "")
-                header_pattern = str(config.get("headerPattern") or "")
-                name = str(row["name"] or "")
-                if collection in HTML_TABLE_PARSER_PROFILES:
-                    profile, default_section, default_header = HTML_TABLE_PARSER_PROFILES[collection]
-                    generated = {
-                        "parser": "HTML_TABLE_GRID", "parserProfile": profile,
-                        "inputField": "UNITBODY", "unitType": "RichText", "tableSelector": "table",
-                        "outputCollection": collection, "outputField": row["json_key"] or "",
-                        "preserveEvidence": True,
-                    }
-                    legacy_defaults = HTML_TABLE_LEGACY_DEFAULTS.get(collection, ("", ""))
-                    if not section_pattern or section_pattern == legacy_defaults[0]:
-                        section_pattern = default_section
-                    if not header_pattern or header_pattern == legacy_defaults[1]:
-                        header_pattern = default_header
-                    if name in {"已有标准数据路径", "Existing normalized path"}:
-                        name = "HTML 表格解析 → 标准字段"
-                elif collection in SOLUTION_VIEW_COLLECTIONS:
-                    generated = {
-                        "parser": "HTML_TABLE_GRID", "parserProfile": "SOLUTION_PREPARATION_TABLE",
-                        "inputField": "UNITBODY", "unitType": "RichText", "tableSelector": "table",
-                        "outputCollection": collection, "outputField": row["json_key"] or "",
-                        "derivedFromCollection": "solutions", "preserveEvidence": True,
-                    }
-                    section_pattern = section_pattern or r"实验设计|溶液配制"
-                    header_pattern = header_pattern or r"溶液名称|名称.*配制方法|溶液配制"
-                    if name in {"已有标准数据路径", "Existing normalized path"}:
-                        name = "溶液表格解析 → 标准字段"
-                elif collection in STRUCTURED_UNIT_COLLECTIONS:
-                    generated = {
-                        "parser": "STRUCTURED_UNIT", "parserProfile": collection.upper(),
-                        "inputField": "UNITBODY", "unitType": "Structured",
-                        "outputCollection": collection, "outputField": row["json_key"] or "",
-                        "preserveEvidence": True,
-                    }
-                    if name in {"已有标准数据路径", "Existing normalized path"}:
-                        name = "结构化 UNITBODY → 标准字段"
-                elif stored_in_section:
-                    generated = {
-                        "parser": "INSTANCE_FIELD", "inputField": SECTION_COLUMN,
-                        "outputCollection": collection, "outputField": row["json_key"] or "",
-                    }
-                else:
-                    generated = {
-                        "parser": "NORMALIZED_JSON", "inputField": "UNITBODY",
-                        "outputCollection": collection, "outputField": row["json_key"] or "",
-                        "preserveEvidence": True,
-                    }
-                for key, value in generated.items():
-                    config.setdefault(key, value)
-                config.update({"sectionPattern": section_pattern, "headerPattern": header_pattern})
-                connection.execute(
-                    "UPDATE system_field_rules SET name=%s,config=%s,updated_at=%s WHERE id=%s",
-                    (name, json.dumps(config, ensure_ascii=False), now_iso(), row["id"]),
                 )
 
     def _seed_template_catalog(self) -> None:

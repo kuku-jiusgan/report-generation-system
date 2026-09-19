@@ -97,6 +97,7 @@ export interface ReportData {
 
 export interface ReportTask {
   id: string
+  report_number: string
   title: string
   status: string
   source_document_id?: string
@@ -317,4 +318,10 @@ export async function createVersion(id: string, note = '手工保存') {
 
 export async function getOnlyOfficeConfig(id: string) {
   return (await http.get<OnlyOfficeBootstrap>(`/onlyoffice/reports/${id}/config`)).data
+}
+
+export async function forceSaveOnlyOffice(id: string) {
+  return (
+    await http.post<{ saved: boolean; reportId: string }>(`/onlyoffice/reports/${id}/force-save`)
+  ).data
 }

@@ -125,7 +125,7 @@ onBeforeUnmount(() => observer?.disconnect())
               <button v-if="canOperate(row)" class="hub-report-link" type="button" @click="emit('open', row.report)">{{ row.title }}</button>
               <strong v-else class="hub-report-title">{{ row.title }}</strong>
             </el-tooltip>
-            <small>{{ row.reportNo }}<span v-if="row.sources"> · {{ row.sources }}</span></small>
+            <small :title="row.reportNumber">{{ row.reportNumber }}</small>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="108">

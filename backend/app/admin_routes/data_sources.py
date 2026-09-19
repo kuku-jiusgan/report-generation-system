@@ -18,7 +18,7 @@ def register_data_source_routes(router: APIRouter, repository: RuleAdminReposito
             groups = list_system_field_groups(database)
             return merge_instances(
                 [database.get_lims_normalized_payload(imported['id'], value) for value in ids],
-                fields=database.list_lims_fields(True), extraction_rules=database.list_lims_parser_rules(),
+                fields=database.list_lims_fields(True), extraction_rules=database.list_lims_extraction_rules(),
                 groups=groups, normalized=True,
             )
         except (KeyError, ValueError) as error: raise HTTPException(422, str(error)) from error

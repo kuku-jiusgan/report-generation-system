@@ -54,6 +54,28 @@ def _fill_group_heading(heading: etree._Element, mapping: dict[str, Any],
         set_control_text(control, value)
 
 
+def _clone_repeat_blocks(prototype: etree._Element, heading: etree._Element | None,
+                         group_count: int,
+                         ) -> tuple[list[etree._Element], list[etree._Element]]:
+    parent = prototype.getparent()
+    insert_at = parent.index(prototype) + 1
+    tables = [prototype]
+    headings = [heading] if heading is not None else []
+    for _ in range(1, group_count):
+        parent.insert(insert_at, etree.Element(f"{{{W_NS}}}p"))
+        insert_at += 1
+        if heading is not None:
+            cloned_heading = copy.deepcopy(heading)
+            parent.insert(insert_at, cloned_heading)
+            headings.append(cloned_heading)
+            insert_at += 1
+        cloned_table = copy.deepcopy(prototype)
+        parent.insert(insert_at, cloned_table)
+        tables.append(cloned_table)
+        insert_at += 1
+    return tables, headings
+
+
 def _relative_path(mapping: dict[str, Any], source: tuple[str, str]) -> str:
     parsed = repeat_source(mapping_source_path(mapping))
     return parsed[1] if parsed and parsed[0] == source[0] else ""
@@ -217,20 +239,10 @@ def fill_table_repeat(document: etree._Element, table_no: str, group: list[dict[
         warn("TABLE_REPEAT_GROUP_KEY_MISSING", table_no, str(error))
         return
     prototype = table_nodes[0]
-    parent, insert_at = prototype.getparent(), prototype.getparent().index(prototype)
     heading_config = _adjacent_group_heading(prototype, group, source, group_key)
-    headings = [heading_config[0]] if heading_config else []
-    tables = [prototype]
-    for offset in range(1, len(record_groups)):
-        cloned = copy.deepcopy(prototype)
-        if heading_config:
-            cloned_heading = copy.deepcopy(heading_config[0])
-            parent.insert(insert_at + (offset * 2) - 1, cloned_heading)
-            parent.insert(insert_at + (offset * 2), cloned)
-            headings.append(cloned_heading)
-        else:
-            parent.insert(insert_at + offset, cloned)
-        tables.append(cloned)
+    tables, headings = _clone_repeat_blocks(
+        prototype, heading_config[0] if heading_config else None, len(record_groups),
+    )
     if heading_config:
         for heading, grouped_records in zip(headings, record_groups):
             _fill_group_heading(heading, heading_config[1], grouped_records[0], group_key)

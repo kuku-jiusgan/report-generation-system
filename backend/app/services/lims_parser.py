@@ -80,39 +80,6 @@ def _evidence(row: dict[str, Any], path: list[str]) -> dict[str, Any]:
     }
 
 
-def _normalized_item(unit_type: str, item: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
-    ext = item.get("ext$") if isinstance(item.get("ext$"), dict) else {}
-    common = {"sourceRecordId": item.get("lesRecordId") or item.get("id"), "evidence": evidence}
-    if unit_type == "Sample":
-        return {**common, "sampleName": item.get("sampleName"), "batchNo": item.get("batchNo"),
-                "specification": ext.get("spackagetype"), "clientName": item.get("clientName"),
-                "remark": item.get("additionalContent"), "sampleNumber": item.get("sampleNumber"),
-                "manufacturer": item.get("manufactor"), "appearance": ext.get("samplecolor")}
-    if unit_type == "Standard":
-        return {**common, "name": ext.get("mtlname") or ext.get("stockmtlname"),
-                "content": ext.get("content") or ext.get("purity") or ext.get("titer"),
-                "batchNo": item.get("batchNo"), "manufacturer": item.get("manufacturerVendorId"),
-                "expiryDate": item.get("validDate"), "stockNo": item.get("stockNo")}
-    if unit_type == "Equipment":
-        return {**common, "instrumentName": item.get("equiptName"), "model": item.get("specification"),
-                "assetNo": item.get("equiptNo"), "manufacturer": item.get("prodVendorId"),
-                "calibrationExpiryDate": ext.get("checkvalidate"), "location": item.get("loc")}
-    if unit_type == "Chromatogram":
-        return {**common, "name": ext.get("model") or ext.get("stationaryphase"),
-                "specification": item.get("chromatogramSpec"), "serialNo": item.get("chromatogramNo"),
-                "manufacturer": item.get("vendorName"), "stationaryPhase": ext.get("stationaryphase")}
-    if unit_type == "Reagent":
-        return {**common, "name": ext.get("mtlname") or ext.get("stockmtlname"),
-                "grade": ext.get("mtllevel"), "batchNo": item.get("batchNo"),
-                "manufacturer": item.get("manufacturerVendorId"), "expiryDate": item.get("validDate"),
-                "stockNo": item.get("stockNo") or item.get("id")}
-    return {**common, "name": ext.get("mtlname") or ext.get("stockmtlname"),
-            "batchNo": item.get("batchNo"), "weight": item.get("weight"),
-            "weightUnit": item.get("weightUnit"), "weightDate": item.get("weightDate"),
-            "equipmentName": item.get("equiptName"), "equipmentNo": item.get("equiptNo"),
-            "responseValue": item.get("responseValue")}
-
-
 def parse_lims_query_rows(headers: list[Any], values_list: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
     normalized_headers = [str(value or "").strip().upper() for value in headers]
     if normalized_headers[:len(EXPECTED_PREFIX)] != EXPECTED_PREFIX:
@@ -161,7 +128,6 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
     first = rows[0]
     title_row = next((row for row in rows if row["type"] == "Section" and row["title"].startswith("实验名称")), None)
     title = title_row["title"].split("：", 1)[-1].strip() if title_row else ""
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     structured_counts: Counter[str] = Counter()
     rich_texts = []
     raw_structured = []
@@ -174,7 +140,6 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
         elif row["type"] in STRUCTURED_TYPES:
             for item in _body_items(row["body"]):
                 evidence = _evidence(row, section_path)
-                groups[row["type"]].append(_normalized_item(row["type"], item, evidence))
                 raw_structured.append({"unitType": row["type"], "data": item, "evidence": evidence})
                 structured_counts[row["type"]] += 1
         elif row["type"] == "RichText":
@@ -182,7 +147,7 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
                                "html": row["body"] if isinstance(row["body"], str) else "",
                                "imageUrls": _image_urls(row["body"]), "evidence": _evidence(row, section_path)})
 
-    approval = []
+    audit_events = []
     for role, name, date in (
         ("编制", first["record_created_by"], first["record_created_time"]),
         ("提交", first["submitted_by"], first["submitted_time"]),
@@ -190,7 +155,7 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
         ("批准", first["approved_by"], first["approved_time"]),
     ):
         if name:
-            approval.append({"field1": role, "field2": "", "field3": name, "field4": "", "date": date})
+            audit_events.append({"role": role, "name": name, "date": date})
 
     summary = {
         "instanceId": instance_id, "projectId": first["project_id"], "title": title,
@@ -204,13 +169,8 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
         return summary
     return absolute_lims_file_urls({
         **summary,
-        "project": {"id": first["project_id"], "name": title},
-        "document": {"code": instance_id, "version": str(first["record_version"] or 0)},
-        "approval": approval,
-        "samples": groups["Sample"], "referenceStandards": groups["Standard"],
-        "instruments": groups["Equipment"], "columns": groups["Chromatogram"],
-        "reagents": groups["Reagent"], "weighings": groups["Weighing"],
-        "sections": sections, "richTexts": rich_texts, "rawStructured": raw_structured,
+        "auditEvents": audit_events, "sections": sections,
+        "richTexts": rich_texts, "rawStructured": raw_structured,
     }, file_base_url)
 
 

@@ -28,12 +28,11 @@ export interface ReportHubRow {
   report: ReportTask
   id: string
   title: string
-  reportNo: string
+  reportNumber: string
   projectNumber: string
   updatedAt: string
   experimentNames: string
   creator: string
-  sources: string
   lifecycle: ReportLifecycle
   isOwned: boolean
 }

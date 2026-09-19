@@ -230,7 +230,13 @@ class ContentBlockRegressionTest(unittest.TestCase):
         self.assertIn("A-2", "".join(tables[0].xpath(".//w:t/text()", namespaces=NS)))
         self.assertNotIn("B-1", "".join(tables[0].xpath(".//w:t/text()", namespaces=NS)))
         self.assertIn("B-1", "".join(tables[1].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertEqual(document.xpath("count(./w:body/w:p)", namespaces=NS), 1.0)
+        children = document.xpath("./w:body/*", namespaces=NS)
+        word_tag = f"{{{NS['w']}}}"
+        self.assertEqual(
+            [item.tag for item in children],
+            [word_tag + "p", word_tag + "tbl", word_tag + "p", word_tag + "tbl"],
+        )
+        self.assertEqual(children[2].xpath(".//w:t/text()", namespaces=NS), [])
         self.assertFalse(warnings)
 
     def test_table_repeat_clones_adjacent_bound_group_heading(self) -> None:
@@ -264,16 +270,18 @@ class ContentBlockRegressionTest(unittest.TestCase):
             {"impurityName": "杂质A", "value": "A-2"},
             {"impurityName": "杂质B", "value": "B-1"},
         ]}, {}, {}, rules, lambda *args: warnings.append(args))
-        children = document.xpath("./w:body/*[self::w:sdt or self::w:tbl]", namespaces=NS)
+        children = document.xpath("./w:body/*", namespaces=NS)
         word_tag = f"{{{NS['w']}}}"
         self.assertEqual(
             [item.tag for item in children],
-            [word_tag + "sdt", word_tag + "tbl", word_tag + "sdt", word_tag + "tbl"],
+            [word_tag + "sdt", word_tag + "tbl", word_tag + "p",
+             word_tag + "sdt", word_tag + "tbl"],
         )
         self.assertEqual("".join(children[0].xpath(".//w:t/text()", namespaces=NS)), "杂质A")
         self.assertIn("A-2", "".join(children[1].xpath(".//w:t/text()", namespaces=NS)))
-        self.assertEqual("".join(children[2].xpath(".//w:t/text()", namespaces=NS)), "杂质B")
-        self.assertIn("B-1", "".join(children[3].xpath(".//w:t/text()", namespaces=NS)))
+        self.assertEqual(children[2].xpath(".//w:t/text()", namespaces=NS), [])
+        self.assertEqual("".join(children[3].xpath(".//w:t/text()", namespaces=NS)), "杂质B")
+        self.assertIn("B-1", "".join(children[4].xpath(".//w:t/text()", namespaces=NS)))
         self.assertFalse(warnings)
 
 

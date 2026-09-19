@@ -23,8 +23,7 @@ def migrate_standard_payload(payload: dict[str, Any]) -> bool:
             payload[GROUP_CODE] = payload[LEGACY_CODE]
         del payload[LEGACY_CODE]
         changed = True
-    for collection, field in (("solutions", "validationCode"),
-                              ("validationSummary", "validationItemCode")):
+    for collection, field in (("validationSummary", "validationItemCode"),):
         records = payload.get(collection)
         if not isinstance(records, list):
             continue

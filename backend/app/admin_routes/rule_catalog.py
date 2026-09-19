@@ -14,6 +14,7 @@ from ..services.system_field_groups import assign_field_to_group, assign_group_t
 from ..services.system_field_group_levels import delete_group_level, move_field_to_level, save_group_level, structure_preview
 from ..services.excel_standard_path import excel_target_path
 from ..services.protocol_rules import validate_protocol_conflicts
+from ..services.lims_rule_schema import validate_lims_rule_config
 
 
 CHAPTER_FIELD_PREFIXES = {
@@ -129,11 +130,16 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
     if source_type not in {"LIMS", "AI", "EXCEL", "PDF", "CALCULATED", "PROTOCOL"}:
         raise HTTPException(422, f"不支持的系统字段来源：{source_type}")
     config = item.get("config") if isinstance(item.get("config"), dict) else {}
+    if source_type == "LIMS":
+        try:
+            config = validate_lims_rule_config(config, str(item.get("transform") or "TRIM"))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
     if source_type == "EXCEL":
         field = repository.database.get_lims_field(field_code)
         if field:
             config = {**config, "sourcePath": excel_target_path(field, config.get("sourcePath"))}
-    for key in ("sectionPattern", "headerPattern", "valuePattern", "rowPattern"):
+    for key in ("sectionPattern", "headerPattern", "valuePattern", "rowPattern", "excludeRowPattern", "columnPattern", "replacePattern"):
         pattern = config.get(key)
         if pattern:
             try:

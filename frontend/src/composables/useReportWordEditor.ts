@@ -1,6 +1,6 @@
 import { nextTick, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getOnlyOfficeConfig } from '../api'
+import { forceSaveOnlyOffice, getOnlyOfficeConfig } from '../api'
 import { loadOnlyOfficeApi } from './onlyofficeApiLoader'
 
 type WordConnector = {
@@ -24,6 +24,7 @@ declare global {
 interface WordEditorOptions {
   reportId: () => string | undefined
   onDocumentSaved: (reportId: string) => void | Promise<void>
+  onRequestClose: () => void | Promise<void>
 }
 
 export function useReportWordEditor(options: WordEditorOptions) {
@@ -182,6 +183,7 @@ export function useReportWordEditor(options: WordEditorOptions) {
           if (event.data !== false) return
           window.setTimeout(() => void options.onDocumentSaved(reportId), 1500)
         },
+        onRequestClose: () => void options.onRequestClose(),
       }
       await loadOnlyOfficeApi(bootstrap.documentServerUrl)
       await nextTick()
@@ -201,6 +203,12 @@ export function useReportWordEditor(options: WordEditorOptions) {
     }
   }
 
+  async function save() {
+    const reportId = options.reportId()
+    if (!reportId || !editor) return
+    await forceSaveOnlyOffice(reportId)
+  }
+
   window.addEventListener('message', handleMessage)
   onUnmounted(() => {
     window.removeEventListener('message', handleMessage)
@@ -208,5 +216,5 @@ export function useReportWordEditor(options: WordEditorOptions) {
     close()
   })
 
-  return { loading, error, linkStatus, locate, open, close }
+  return { loading, error, linkStatus, locate, open, close, save }
 }

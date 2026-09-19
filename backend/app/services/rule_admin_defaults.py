@@ -31,14 +31,37 @@ STANDARD_FIELD_GROUP_NAMES = {
     "validationSummary": "验证结果汇总",
 }
 
-SOLUTION_VIEW_COLLECTIONS = {
-    "accuracySolutions", "intermediatePrecisionSolutions", "lodSolutions",
-    "repeatabilitySolutions", "robustnessSolutions", "specificitySolutions",
-    "stabilitySolutions", "systemSuitabilitySolutions",
+SOLUTION_TABLE_DEFAULTS = {
+    "systemSuitabilitySolutions": {
+        "chapterCode": "7.1", "rowPattern": r"(?:^|\|)验证项目=系统适用性(?:\||$)",
+    },
+    "specificitySolutions": {
+        "chapterCode": "7.2", "rowPattern": r"(?:^|\|)验证项目=专属性(?:\||$)",
+    },
+    "lodSolutions": {
+        "chapterCode": "7.3",
+        "rowPattern": r"(?:^|\|)验证项目=(?:检测限|定量限|检测限与定量限)(?:\||$)",
+    },
+    "repeatabilitySolutions": {
+        "chapterCode": "7.5", "rowPattern": r"(?:^|\|)验证项目=重复性(?:\||$)",
+    },
+    "intermediatePrecisionSolutions": {
+        "chapterCode": "7.6", "rowPattern": r"(?:^|\|)验证项目=中间精密度(?:\||$)",
+    },
+    "accuracySolutions": {
+        "chapterCode": "7.7", "rowPattern": r"(?:^|\|)验证项目=准确度(?:\||$)",
+    },
+    "stabilitySolutions": {
+        "chapterCode": "7.8", "rowPattern": r"(?:^|\|)验证项目=(?:溶液稳定性|稳定性)(?:\||$)",
+    },
+    "robustnessSolutions": {
+        "chapterCode": "7.9", "rowPattern": r"(?:^|\|)验证项目=耐用性(?:\||$)",
+    },
 }
 
-STRUCTURED_UNIT_COLLECTIONS = {
-    "approval", "columns", "instruments", "reagents", "referenceStandards", "samples",
+SOLUTION_TABLE_COLUMN_PATTERNS = {
+    "name": r"^(?:溶液名称|名称)$",
+    "preparation": r"^(?:配制方法|溶液配制)$",
 }
 
 DEFAULT_TEMPLATE_CHAPTERS = [

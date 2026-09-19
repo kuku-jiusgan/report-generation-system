@@ -105,6 +105,7 @@ class ReplaceSourceRequest(BaseModel):
 
 class ReportTask(BaseModel):
     id: str
+    report_number: str
     title: str
     status: str
     source_document_id: str | None = None

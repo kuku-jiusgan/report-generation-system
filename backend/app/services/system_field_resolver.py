@@ -65,20 +65,10 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
     source_type = str(rule.get("sourceType") or "LIMS").upper()
     field_code = field["fieldCode"]
     if source_type == "LIMS":
-        source_path = str(config.get("sourcePath") or field.get("legacyJsonPath") or field_code)
-        # 标准化 JSON 规则的目标路径由字段所属编组推导；历史规则里可能残留
-        # ``$[*]`` 这类旧路径，不能让它覆盖当前编组契约。其他 LIMS 解析器
-        # 仍使用各自配置的原始来源路径。
-        parser = str(config.get("parser") or "").upper()
-        extraction_type = str(config.get("extractionType") or "").upper()
-        if parser == "NORMALIZED_JSON" and extraction_type in {"", "NORMALIZED_PATH"}:
-            source_path = str(field.get("legacyJsonPath") or field_code)
-        # 如果在按记录生成上下文中，从当前记录读取
         if current_record:
-            # 提取字段的相对键名（最后一个点之后的部分）
-            relative_key = field_code.split(".")[-1] if "." in field_code else field_code
+            relative_key = str(field.get("jsonKey") or field_code.rsplit(".", 1)[-1])
             return current_record.get(relative_key)
-        return _read_path(payload, source_path)
+        return _read_path(payload, str(field.get("legacyJsonPath") or field_code))
     if source_type == "PROTOCOL":
         result = report_data.get("source_payloads", {}).get("PROTOCOL", {}).get("_meta", {}).get("fields", {}).get(field_code, {})
         return result.get("value") if result.get("status") == "SUCCESS" else None

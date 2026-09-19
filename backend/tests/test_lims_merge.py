@@ -1,15 +1,20 @@
-from backend.app.services.lims_normalizer import COLLECTION_ORDER, merge_instances
+from backend.app.services.lims_normalizer import merge_instances
 
 
 def normalized(instance_id: str, collection: str, record: dict) -> dict:
     return {
-        "project": {"id": "P1"},
-        "document": {},
-        "approval": [],
+        "projectId": "P1",
         "instances": [{"instanceId": instance_id, "title": instance_id}],
         "unmatched": [],
-        **{name: [record] if name == collection else [] for name in COLLECTION_ORDER},
+        collection: [record],
     }
+
+
+def many_group(collection: str, item_key: str = "") -> list[dict]:
+    return [{
+        "groupCode": collection, "label": collection, "cardinality": "MANY",
+        "itemKey": item_key, "enabled": True,
+    }]
 
 
 def test_identical_business_records_with_different_source_ids_are_deduplicated() -> None:
@@ -23,7 +28,7 @@ def test_identical_business_records_with_different_source_ids_are_deduplicated()
             "specification": "4.6x250mm", "sourceRecordId": "ROW-2",
         }),
     ]
-    result = merge_instances(records, normalized=True)
+    result = merge_instances(records, groups=many_group("columns", "serialNo"), normalized=True)
 
     assert result["duplicateCount"] == 1
     assert result["conflicts"] == []
@@ -44,7 +49,7 @@ def test_same_name_with_different_business_value_remains_a_conflict() -> None:
     result = merge_instances(records, fields=[{
         "fieldCode": "reagents.expiryDate", "jsonKey": "expiryDate",
         "collectionCode": "reagents", "label": "有效期",
-    }], normalized=True)
+    }], groups=many_group("reagents", "name"), normalized=True)
 
     assert result["duplicateCount"] == 0
     assert result["unresolvedConflictCount"] == 1
@@ -67,7 +72,7 @@ def test_same_reagent_batch_with_different_stock_numbers_are_separate_records() 
             "expiryDate": "2026-06-01", "sourceRecordId": "ROW-2",
         }),
     ]
-    result = merge_instances(records, normalized=True)
+    result = merge_instances(records, groups=many_group("reagents", "stockNo"), normalized=True)
 
     assert result["duplicateCount"] == 0
     assert result["conflicts"] == []
@@ -82,14 +87,16 @@ def test_validation_summary_uses_stable_code_across_experiments() -> None:
     records = [normalized("E1", "validationSummary", record),
                normalized("E2", "validationSummary", record)]
 
-    result = merge_instances(records, normalized=True)
+    result = merge_instances(
+        records, groups=many_group("validationSummary", "validationItemCode"), normalized=True,
+    )
 
     assert result["duplicateCount"] == 1
     assert result["conflicts"] == []
     assert len(result["payload"]["validationSummary"]) == 1
 
 
-def test_validation_summary_is_sorted_by_stable_business_code() -> None:
+def test_generic_collection_keeps_source_order() -> None:
     records = [
         normalized("E1", "validationSummary", {
             "validationItemCode": "accuracy", "field1": "准确度", "acceptanceCriteria": "A",
@@ -99,8 +106,10 @@ def test_validation_summary_is_sorted_by_stable_business_code() -> None:
         }),
     ]
 
-    result = merge_instances(records, normalized=True)
+    result = merge_instances(
+        records, groups=many_group("validationSummary", "validationItemCode"), normalized=True,
+    )
 
     assert [item["validationItemCode"] for item in result["payload"]["validationSummary"]] == [
-        "specificity", "accuracy",
+        "accuracy", "specificity",
     ]

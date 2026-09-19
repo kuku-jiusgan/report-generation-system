@@ -15,7 +15,9 @@ NS = {"w": W_NS}
 RULE = "PRESERVE_STYLE;EMPTY_AS_DASH"
 
 
-@pytest.mark.parametrize("value, expected", [(None, "-"), ("", "-"), ([None], "-"), ("实际目的", "实际目的")])
+@pytest.mark.parametrize("value, expected", [
+    (None, "-"), ("", "-"), ([], "-"), ([None], "-"), ("实际目的", "实际目的"),
+])
 @pytest.mark.parametrize("rule_key", ["fillRule", "standardFieldFillRule"])
 def test_direct_field_applies_empty_rule(tmp_path: Path, value, expected: str, rule_key: str) -> None:
     template = tmp_path / "template.docx"
@@ -59,3 +61,30 @@ def test_suffix_rule_can_be_combined_with_other_directives() -> None:
 
     assert format_value("杂质A", mapping) == "杂质A-结果表"
     assert format_value("", mapping) == "-"
+
+
+def test_missing_repeated_excel_field_uses_empty_rule(tmp_path: Path) -> None:
+    template = tmp_path / "template.docx"
+    output = tmp_path / "report.docx"
+    xml = f'''<w:document xmlns:w="{W_NS}"><w:body>
+      <w:sdt><w:sdtPr><w:tag w:val="conclusion"/></w:sdtPr>
+        <w:sdtContent><w:p><w:r><w:t>模板结论</w:t></w:r></w:p></w:sdtContent>
+      </w:sdt>
+    </w:body></w:document>'''
+    with zipfile.ZipFile(template, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+    mapping = {
+        "controlTag": "conclusion", "fieldCode": "report.conclusion",
+        "standardFieldCode": "uncategorized.field_002",
+        "sourcePath": "$.conclusions[*].text", "sourceType": "EXCEL",
+        "enabled": True, "fillRule": RULE,
+    }
+
+    build_mapped_docx(
+        template, output, [mapping], {"conclusions": []},
+        {"source_payloads": {"EXCEL": {"conclusions": []}}},
+    )
+
+    with zipfile.ZipFile(output) as archive:
+        document = etree.fromstring(archive.read("word/document.xml"))
+    assert document.xpath(".//w:sdt//w:t/text()", namespaces=NS) == ["-"]

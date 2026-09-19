@@ -29,7 +29,7 @@ GROUP_LABELS = {
 }
 
 _PATH_PATTERN = re.compile(r"^\$\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
-_SOURCE_TYPES = {"EXCEL", "LIMS", "PROTOCOL"}
+_SOURCE_TYPES = {"EXCEL", "PROTOCOL"}
 
 
 def _default_item_path(group_code: str) -> str:
@@ -73,7 +73,7 @@ def _validate_group_contract(item: dict[str, Any], fields: list[dict[str, Any]] 
             raise ValueError("编组来源映射的每一项必须是对象")
         source_type = str(mapping.get("sourceType") or "").upper()
         if source_type not in _SOURCE_TYPES:
-            raise ValueError("编组来源类型只能是 EXCEL、LIMS 或 PROTOCOL")
+            raise ValueError("编组来源类型只能是 EXCEL 或 PROTOCOL；LIMS 请在字段提取规则中配置")
         if source_type == "PROTOCOL":
             from .protocol_rules import validate_protocol_locator
             from .protocol_row_expansion import validate_row_expansion
@@ -138,8 +138,7 @@ def _migrate_legacy_group_names(connection: Any) -> None:
         ("jiancexian", "lod:%", "jiancexian:", "lod"),
     ).rowcount
     migrated_codes = 0
-    for collection, field in (("solutions", "validationCode"),
-                              ("validationSummary", "validationItemCode")):
+    for collection, field in (("validationSummary", "validationItemCode"),):
         migrated_codes += connection.execute(
             f"""UPDATE lims_standard_records
                 SET data_json=JSON_SET(data_json,'$.{field}',%s)

@@ -3,7 +3,7 @@ import re
 from typing import Any
 
 
-RELATIVE_FILE_PATTERN = re.compile(r"(%s<![A-Za-z0-9])/files/")
+RELATIVE_FILE_PATTERN = re.compile(r"(?<![A-Za-z0-9])/files/")
 logger = logging.getLogger(__name__)
 
 
@@ -20,5 +20,4 @@ def absolute_lims_file_urls(value: Any, base_url: str) -> Any:
     if isinstance(value, str):
         return RELATIVE_FILE_PATTERN.sub(f"{base}/files/", value)
     return value
-
 

@@ -1,4 +1,5 @@
 import json
+import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -24,6 +25,8 @@ class Database(
 
     def __init__(self, settings: Any):
         self.settings = settings
+        self._report_number_schema_ready = False
+        self._report_number_schema_lock = threading.Lock()
 
     @contextmanager
     def connect(self) -> Iterator[Any]:
@@ -38,6 +41,16 @@ class Database(
             ).fetchone()
         if not row or int(row["count"]) != 1:
             raise RuntimeError("MySQL 数据库未完成 schema 初始化")
+
+    def ensure_report_number_schema(self) -> None:
+        if self._report_number_schema_ready:
+            return
+        with self._report_number_schema_lock:
+            if self._report_number_schema_ready:
+                return
+            from .services.report_numbering import ensure_report_number_schema
+            ensure_report_number_schema(self)
+            self._report_number_schema_ready = True
 
     @staticmethod
     def _decode(row: Any | None, json_fields: tuple[str, ...]) -> dict[str, Any] | None:

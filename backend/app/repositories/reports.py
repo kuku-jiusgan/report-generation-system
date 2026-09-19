@@ -3,12 +3,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..database_common import now_iso
+from ..services.report_numbering import next_report_number, report_number_date
 
 
 class ReportRepositoryMixin:
     """Reports, audit changes, versions and immutable generation history."""
 
     def list_reports(self, owner_id: str | None = None) -> list[dict[str, Any]]:
+        self.ensure_report_number_schema()
         with self.connect() as connection:
             if owner_id:
                 rows = connection.execute(
@@ -24,17 +26,21 @@ class ReportRepositoryMixin:
         return [self._decode(row, ("resolved_data",)) for row in rows]
 
     def get_report(self, report_id: str) -> dict[str, Any] | None:
+        self.ensure_report_number_schema()
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM reports WHERE id=%s", (report_id,)).fetchone()
         return self._decode(row, ("resolved_data",))
 
     def create_report(self, item: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_report_number_schema()
+        date_key = report_number_date(item["created_at"], self.settings.report_number_timezone)
         with self.connect() as connection:
+            report_number = next_report_number(connection, date_key)
             connection.execute(
-                """INSERT INTO reports(id,title,status,source_document_id,resolved_data,output_name,
+                """INSERT INTO reports(id,report_number,title,status,source_document_id,resolved_data,output_name,
                    created_at,updated_at,created_by,updated_by,word_edit_locked,word_edited_at)
-                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (item["id"], item["title"], item["status"], item.get("source_document_id"),
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (item["id"], report_number, item["title"], item["status"], item.get("source_document_id"),
                  json.dumps(item["resolved_data"], ensure_ascii=False), item.get("output_name"),
                  item["created_at"], item["updated_at"], item.get("created_by"), item.get("updated_by"),
                  int(item.get("word_edit_locked", False)), item.get("word_edited_at")),

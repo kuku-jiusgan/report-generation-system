@@ -17,6 +17,7 @@ data/reports/*
 !data/reports/.gitkeep
 templates/compiled/
 templates/drafts/
+templates/published/
 .env
 *.log
 data/backups/

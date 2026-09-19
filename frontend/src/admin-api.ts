@@ -81,7 +81,7 @@ export interface SystemGroupColumnMapping {
 }
 
 export interface SystemGroupSourceMapping {
-  sourceType: 'EXCEL' | 'LIMS' | 'PROTOCOL';
+  sourceType: 'EXCEL' | 'PROTOCOL';
   endPattern?: string;
   rowPattern?: string;
   sectionPattern?: string;
@@ -108,23 +108,6 @@ export interface SystemFieldGroup {
   structurePreview?: Record<string, unknown>;
 }
 
-export interface LimsExtractionRule {
-  id: number;
-  fieldCode: string;
-  name: string;
-  sourceType: "NORMALIZED_PATH" | "RAW_UNIT_FIELD" | "RICH_TEXT_REGEX" | "HTML_TABLE_COLUMN";
-  sourceUnitType: string;
-  sourcePath: string;
-  sectionPattern: string;
-  headerPattern: string;
-  valuePattern: string;
-  transform: string;
-  priority: number;
-  config: Record<string, unknown>;
-  enabled: boolean;
-  updatedAt: string;
-}
-
 export interface SystemFieldRule {
   id: number;
   fieldCode: string;
@@ -135,6 +118,35 @@ export interface SystemFieldRule {
   transform: string;
   enabled: boolean;
   updatedAt: string;
+}
+
+export interface LimsRuleInput {
+  key: string;
+  label: string;
+  kind: "text" | "textarea" | "integer" | "select" | "tags";
+  placeholder?: string;
+  min?: number;
+  rows?: number;
+  allowCustom?: boolean;
+  options?: Array<string | { value: string; label: string }>;
+}
+
+export interface LimsRuleInputGroup {
+  columns: number;
+  fields: LimsRuleInput[];
+  when?: { key: string; value: string };
+}
+
+export interface LimsRuleMetadata {
+  sourceType: "LIMS";
+  extractionTypes: Array<{
+    value: string;
+    label: string;
+    defaultConfig: Record<string, unknown>;
+    groups: LimsRuleInputGroup[];
+  }>;
+  transforms: Array<{ value: string; label: string }>;
+  transformGroups: LimsRuleInputGroup[];
 }
 
 export interface AiServiceConfig {
@@ -186,6 +198,12 @@ export interface StandardFieldPreview {
     recognizedCount: number;
   }>;
   storageSupported: boolean;
+}
+
+export interface TemplateReference extends MappingRule {
+  templateName: string;
+  templateCode: string;
+  versionNo: number;
 }
 
 export interface AiRule {
@@ -460,7 +478,7 @@ export const adminApi = {
   deleteStandardField: async (fieldCode: string) =>
     (await http.delete(`/standard-fields/${encodeURIComponent(fieldCode)}`)).data,
   standardFieldReferences: async (fieldCode: string) =>
-    (await http.get<MappingRule[]>(`/standard-fields/${encodeURIComponent(fieldCode)}/references`)).data,
+    (await http.get<TemplateReference[]>(`/standard-fields/${encodeURIComponent(fieldCode)}/references`)).data,
   standardFieldPreview: async (fieldCode: string, limit = 12, instanceIds: string[] = []) =>
     (
       await http.get<StandardFieldPreview>(
@@ -485,6 +503,8 @@ export const adminApi = {
     ).data,
   systemFieldRules: async (fieldCode: string) =>
     (await http.get<SystemFieldRule[]>(`/system-fields/${encodeURIComponent(fieldCode)}/rules`)).data,
+  limsRuleMetadata: async () =>
+    (await http.get<LimsRuleMetadata>("/lims-rule-metadata")).data,
   createSystemFieldRule: async (fieldCode: string, data: Partial<SystemFieldRule>) =>
     (await http.post<SystemFieldRule>(`/system-fields/${encodeURIComponent(fieldCode)}/rules`, data)).data,
   updateSystemFieldRule: async (id: number, data: Partial<SystemFieldRule>) =>

@@ -92,7 +92,7 @@ function isLifecycleTab(tab: ReportHubTab): tab is ReportLifecycle {
 const filtered = computed(() => reports.value.filter((item) => {
   const data = item.resolved_data
   const samples = ((data.source_payloads?.LIMS?.samples || []) as Array<Record<string, unknown>>)
-  const searchable = [item.title, data.report_no, data.sample, data.project_name,
+  const searchable = [item.title, item.report_number, data.report_no, data.sample, data.project_name,
     ...samples.flatMap((sample) => [sample.sampleName, sample.batchNo])].join(' ').toLowerCase()
   const queryMatches = !filters.query.trim() || searchable.includes(filters.query.trim().toLowerCase())
   const statusMatches = !isLifecycleTab(activeTab.value) || lifecycle(item) === activeTab.value
@@ -123,23 +123,15 @@ function experimentRecordNames(item: ReportTask) {
   return [...new Set(names)].join('；') || '-'
 }
 
-function reportSources(item: ReportTask) {
-  const payloads = item.resolved_data.source_payloads || {}
-  return Object.keys(payloads)
-    .filter((key) => payloads[key as keyof typeof payloads])
-    .join(' / ')
-}
-
 const reportRows = computed<ReportHubRow[]>(() => filtered.value.map((item) => ({
   report: item,
   id: item.id,
   title: item.title,
-  reportNo: String(item.resolved_data.report_no || '暂无报告编号'),
+  reportNumber: item.report_number,
   projectNumber: projectNumber(item),
   updatedAt: new Date(item.updated_at).toLocaleString('zh-CN', { hour12: false }),
   experimentNames: experimentRecordNames(item),
   creator: item.creator_name || '未知用户',
-  sources: reportSources(item),
   lifecycle: lifecycle(item),
   isOwned: item.created_by === props.sessionUser.id,
 })))

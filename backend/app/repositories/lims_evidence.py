@@ -187,11 +187,9 @@ class LimsEvidenceRepositoryMixin:
             "recognizedTotal": recognized_total,
             "extractionRules": [{
                 "id": rule["id"], "name": rule["name"], "sourceType": rule["sourceType"],
-                "sourcePath": rule["sourcePath"], "sectionPattern": rule["sectionPattern"],
-                "headerPattern": rule["headerPattern"], "valuePattern": rule["valuePattern"],
                 "transform": rule["transform"], "priority": rule["priority"],
                 "config": rule["config"], "enabled": rule["enabled"],
-            } for rule in self.list_lims_parser_rules(field["fieldCode"])],
+            } for rule in self.list_lims_extraction_rules(field["fieldCode"])],
             "unitGroups": list(groups.values()),
         }
         return {
@@ -210,7 +208,7 @@ class LimsEvidenceRepositoryMixin:
             return self._preview_section_field(field, selected_instances, limit)
         if db_table == "lims_standard_records":
             return self._preview_standard_field(field, selected_instances, limit)
-        # 集合不落库（例如读取时才从 solutions 派生的溶液视图），没有证据可查。
+        # 无法从编组契约推导存储位置的集合没有证据可查。
         return {"fieldCode": field["fieldCode"], "total": 0, "items": [], "storageSupported": False}
 
     def preview_lims_group(self, group: dict[str, Any], limit: int = 12,

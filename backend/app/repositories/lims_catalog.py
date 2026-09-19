@@ -213,27 +213,9 @@ class LimsCatalogRepositoryMixin:
             ).fetchall()
         return [self._system_rule_to_api(row) for row in rows]
 
-    def list_lims_parser_rules(self, field_code: str = "") -> list[dict[str, Any]]:
-        rules = [rule for rule in self.list_system_field_rules(field_code)
-                 if rule.get("sourceType") == "LIMS"]
-        fields = {field["fieldCode"]: field for field in self.list_lims_fields(True)}
-        for rule in rules:
-            config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
-            extraction_type = str(config.get("extractionType", "NORMALIZED_PATH")).upper()
-            field = fields.get(rule.get("fieldCode"))
-            source_path = config.get("sourcePath", "")
-            if extraction_type == "NORMALIZED_PATH" and field:
-                # 标准化 JSON 的字段路径由编组契约统一推导，修正历史规则中残留的旧路径。
-                source_path = field.get("legacyJsonPath") or source_path
-            rule.update({
-                "sourceType": extraction_type,
-                "sourceUnitType": config.get("sourceUnitType", ""),
-                "sourcePath": source_path,
-                "sectionPattern": config.get("sectionPattern", ""),
-                "headerPattern": config.get("headerPattern", ""),
-                "valuePattern": config.get("valuePattern", ""),
-            })
-        return rules
+    def list_lims_extraction_rules(self, field_code: str = "") -> list[dict[str, Any]]:
+        return [rule for rule in self.list_system_field_rules(field_code)
+                if rule.get("sourceType") == "LIMS"]
 
     def save_system_field_rule(self, item: dict[str, Any], rule_id: int | None = None) -> dict[str, Any]:
         values = (

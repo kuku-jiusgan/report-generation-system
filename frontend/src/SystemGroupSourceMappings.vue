@@ -19,7 +19,7 @@ function update(index: number, value: Partial<SystemGroupSourceMapping>) {
 }
 function addMapping() {
   emit('update:modelValue', [...mappings.value, {
-    sourceType: props.protocolOnly ? 'PROTOCOL' : 'LIMS', sectionPattern: '', worksheetPattern: '', headerPattern: '', columnMappings: [],
+    sourceType: props.protocolOnly ? 'PROTOCOL' : 'EXCEL', sectionPattern: '', worksheetPattern: '', headerPattern: '', columnMappings: [],
   }])
 }
 function removeMapping(index: number) {
@@ -62,7 +62,6 @@ function updateExpansion(index: number, value: Partial<ProtocolRowExpansion>) {
       <div class="mapping-card-head">
         <b v-if="protocolOnly">Word 方案表格</b>
         <el-select v-else :model-value="mapping.sourceType" @update:model-value="update(index, { sourceType: $event })">
-          <el-option label="LIMS HTML 表格" value="LIMS" />
           <el-option label="Excel 工作表" value="EXCEL" />
           <el-option label="Word 方案表格" value="PROTOCOL" />
         </el-select>

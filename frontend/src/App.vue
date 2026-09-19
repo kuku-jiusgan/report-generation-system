@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import {
-  ArrowLeft, Clock, Coin, DataAnalysis, Delete, Document, Download, EditPen, Files, MoreFilled,
+  Clock, Coin, DataAnalysis, Delete, Document, Download, EditPen, Files, MoreFilled,
   Plus, Refresh, Search, SwitchButton, Upload, View,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
@@ -22,7 +22,7 @@ import ProtocolAttachment from './ProtocolAttachment.vue'
 import { useReportWordEditor } from './composables/useReportWordEditor'
 
 const props = defineProps<{ sessionUser: AuthUser; initialReportId?: string }>()
-defineEmits<{ logout: []; back: [] }>()
+const emit = defineEmits<{ logout: []; back: [] }>()
 
 const report = ref<ReportTask>()
 const reportTasks = ref<ReportTask[]>([])
@@ -40,7 +40,7 @@ const uploadPercent = ref(0)
 const sourceSearch = ref('')
 const editorMode = ref<'word' | 'fields'>('word')
 const savedAt = ref('')
-const busy = reactive({ init: true, save: false, export: false, upload: false })
+const busy = reactive({ init: true, save: false, export: false, upload: false, leave: false })
 const limsCapabilities = ref<LimsCapabilities>({ sqlEnabled: false, sqlConfigured: false })
 const limsImport = ref<LimsImport>()
 const limsDialogVisible = ref(false)
@@ -59,14 +59,20 @@ const {
   locate: locateWordField,
   open: openOnlyOffice,
   close: closeOnlyOffice,
+  save: saveOnlyOffice,
 } = useReportWordEditor({
   reportId: () => report.value?.id,
   onDocumentSaved: refreshSavedReport,
+  onRequestClose: returnToHub,
 })
 
 const limsCollectionLabels: Record<string, string> = {
   samples: '供试品', referenceStandards: '对照品', instruments: '仪器', columns: '色谱柱',
-  reagents: '试剂', weighings: '称量记录', solutions: '溶液配制', methodParameters: '方法参数',
+  reagents: '试剂', weighings: '称量记录', methodParameters: '方法参数',
+  systemSuitabilitySolutions: '系统适用性溶液', specificitySolutions: '专属性溶液',
+  lodSolutions: '检测限与定量限溶液', repeatabilitySolutions: '重复性溶液',
+  intermediatePrecisionSolutions: '中间精密度溶液', accuracySolutions: '准确度溶液',
+  stabilitySolutions: '溶液稳定性溶液', robustnessSolutions: '耐用性溶液',
   systemSuitability: '系统适用性', specificity: '专属性', jiancexian: '检测限', loq: '定量限',
   linearity: '线性与范围', repeatability: '重复性', intermediatePrecision: '中间精密度',
   accuracy: '准确度', solutionStability: '溶液稳定性', sampleResults: '样品结果',
@@ -274,6 +280,20 @@ async function refreshSavedReport(reportId: string) {
   } catch { /* ONLYOFFICE callback may still be committing. */ }
 }
 
+async function returnToHub() {
+  if (busy.leave) return
+  busy.leave = true
+  try {
+    await saveOnlyOffice()
+    closeOnlyOffice()
+    emit('back')
+  } catch (error) {
+    ElMessage.error(`报告尚未保存，已留在编辑页面：${errorText(error)}`)
+  } finally {
+    busy.leave = false
+  }
+}
+
 async function selectField(code: string) {
   selectedLimsDetail.value = undefined
   selectedCode.value = code
@@ -437,48 +457,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-loading.fullscreen.lock="busy.init" class="studio-shell">
+  <div
+    v-loading.fullscreen.lock="busy.init || busy.leave"
+    :element-loading-text="busy.leave ? '正在保存报告...' : '正在加载报告...'"
+    class="studio-shell"
+  >
     <main v-if="report" class="workspace">
-      <aside class="source-panel panel">
-        <div class="source-page-actions">
-          <el-button :icon="ArrowLeft" aria-label="返回报告大厅" title="返回报告大厅" @click="$emit('back')">返回报告大厅</el-button>
-        </div>
-        <div class="panel-header">
-          <div><h2>数据源</h2><p>LIMS 与 PDF</p></div>
-          <div class="word-link-indicator">
-            <span :class="wordLinkStatus.toLowerCase()"><i />{{ wordLinkStatus === 'PLUGIN' ? '定位已连接' : wordLinkStatus === 'CONNECTOR' ? 'Word 已连接' : '定位未连接' }}</span>
-            <el-button circle :icon="Refresh" aria-label="刷新数据源" title="刷新数据源" @click="refreshBindings" />
-          </div>
-        </div>
-        <el-input v-model="sourceSearch" placeholder="搜索字段或数据" :prefix-icon="Search" clearable />
-        <div class="source-scroll">
-          <div class="source-tools">
-            <div class="lims-actions">
-              <el-input v-model="limsProjectId" placeholder="项目编号，如 XM2024108" clearable
-                :disabled="!limsCapabilities.sqlEnabled || !limsCapabilities.sqlConfigured"
-                @keyup.enter="readLimsSql" />
-              <el-tooltip :content="limsCapabilities.sqlConfigured ? '从 LIMS 数据库读取' : '请联系系统管理员配置 SQL 连接'">
-                <el-button :icon="Coin" :loading="limsLoading" :disabled="!limsCapabilities.sqlEnabled || !limsCapabilities.sqlConfigured" @click="readLimsSql">查询 LIMS</el-button>
-              </el-tooltip>
-            </div>
-            <el-upload accept=".pdf" :show-file-list="false" :http-request="handleUpload" class="source-upload">
-              <el-button plain :icon="Upload" :loading="busy.upload" :disabled="report.word_edit_locked">添加 PDF 图谱</el-button>
-            </el-upload>
-            <el-progress v-if="busy.upload" :percentage="uploadPercent" :show-text="false" :stroke-width="3" />
-          </div>
-          <ProtocolAttachment :data="report.resolved_data" />
-          <el-tree :data="chapterTreeData" node-key="id" :expand-on-click-node="true"
-            highlight-current class="lims-data-tree chapter-source-tree" @node-click="selectLimsTreeNode">
-            <template #default="{ data }">
-              <span class="lims-tree-node" :class="{ directory: data.children?.length, field: !data.children?.length }">
-                <span>{{ data.label }}</span><small v-if="!data.children?.length">{{ data.value || '' }}</small>
-                <i v-if="data.sourceType" class="tree-source-mark" :class="data.sourceType.toLowerCase()">{{ sourceLabels[data.sourceType as SourceType] || '其他来源' }}</i>
-              </span>
-            </template>
-          </el-tree>
-        </div>
-      </aside>
-
       <section class="editor-panel">
         <div v-loading="onlyOfficeLoading" class="onlyoffice-shell">
           <el-result v-if="onlyOfficeError" icon="error" title="ONLYOFFICE 加载失败" :sub-title="onlyOfficeError">

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     mysql_database: str = "report_generation_system"
     mysql_user: str = "root"
     mysql_password: str = ""
+    report_number_timezone: str = "Asia/Shanghai"
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

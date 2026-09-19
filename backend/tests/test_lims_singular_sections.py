@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.app.services.lims_normalizer import COLLECTION_ORDER, record_collection_codes
+from backend.app.services.lims_normalizer import record_collection_codes
 from backend.tests.database_helpers import make_test_database
 
 
@@ -48,7 +48,7 @@ class LimsSingularSectionsTest(unittest.TestCase):
         })
 
     def _round_trip(self) -> dict:
-        self.database.replace_lims_instance("imp1", RAW, _normalized(), COLLECTION_ORDER)
+        self.database.replace_lims_instance("imp1", RAW, _normalized(), ["samples"])
         payload = self.database.get_lims_normalized_payload("imp1", "T0001")
         self.assertIsNotNone(payload)
         return payload
@@ -65,7 +65,7 @@ class LimsSingularSectionsTest(unittest.TestCase):
         """基数为 ONE 的编组段和 project 走同一条路，不需要再为每个段加代码。"""
         normalized = _normalized()
         normalized["Conclusion"] = {"text": "符合规定"}
-        self.database.replace_lims_instance("imp1", RAW, normalized, COLLECTION_ORDER)
+        self.database.replace_lims_instance("imp1", RAW, normalized, ["samples"])
         payload = self.database.get_lims_normalized_payload("imp1", "T0001")
         self.assertEqual(payload["Conclusion"], {"text": "符合规定"})
 

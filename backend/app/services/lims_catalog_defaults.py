@@ -18,17 +18,6 @@ LIMIT_CALCULATION_FIELDS = (
 )
 
 
-def _ensure_lims_rule(database: Any, field_code: str, source_path: str) -> None:
-    rules = [rule for rule in database.list_system_field_rules(field_code)
-             if rule.get("sourceType") == "LIMS"]
-    if not rules:
-        database.save_system_field_rule({
-            "fieldCode": field_code, "name": "已有标准数据路径", "sourceType": "LIMS",
-            "transform": "TRIM", "priority": 100, "enabled": True,
-            "config": {"extractionType": "NORMALIZED_PATH", "sourcePath": source_path},
-        })
-
-
 def ensure_lims_catalog_defaults(database: Any) -> None:
     for field_code, label, json_key, data_type in VALIDATION_SUMMARY_FIELDS:
         if not database.get_lims_field(field_code):
@@ -38,7 +27,6 @@ def ensure_lims_catalog_defaults(database: Any) -> None:
                 "jsonKey": json_key,
                 "legacyJsonPath": f"$.validationSummary[*].{json_key}", "enabled": True,
             })
-        _ensure_lims_rule(database, field_code, f"$.validationSummary[*].{json_key}")
     _ensure_limit_calculation_fields(database)
     # 标签前缀归一化自带 NOT LIKE 守卫，可安全重复执行
     with database.connect() as connection:
@@ -57,4 +45,3 @@ def _ensure_limit_calculation_fields(database: Any) -> None:
                 "jsonKey": json_key,
                 "legacyJsonPath": f"$.limit[*].{json_key}", "enabled": True,
             })
-        _ensure_lims_rule(database, field_code, f"$.limit[*].{json_key}")

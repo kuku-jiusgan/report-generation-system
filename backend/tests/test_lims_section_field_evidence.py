@@ -54,9 +54,11 @@ class CollectionStorageTest(unittest.TestCase):
         self.assertEqual(collection_storage("project", "ONE"), ("lims_experiments", SECTION_COLUMN))
         self.assertEqual(collection_storage("Conclusion", "ONE"), ("lims_experiments", SECTION_COLUMN))
 
-    def test_collections_that_are_never_persisted_have_no_storage(self) -> None:
-        """溶液视图是读取时从 solutions 派生的，没有自己的记录行，也就没有证据可查。"""
-        self.assertIsNone(collection_storage("specificitySolutions", "MANY"))
+    def test_many_collections_live_in_the_standard_records_table(self) -> None:
+        self.assertEqual(
+            collection_storage("specificitySolutions", "MANY"),
+            ("lims_standard_records", "data_json"),
+        )
         self.assertEqual(
             collection_storage("custom", "MANY"), ("lims_standard_records", "data_json"),
         )

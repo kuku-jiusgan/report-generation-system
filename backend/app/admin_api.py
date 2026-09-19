@@ -1,7 +1,5 @@
 import hashlib
-import json
 import logging
-import shutil
 import time
 import uuid
 import urllib.request
@@ -23,8 +21,12 @@ from .onlyoffice_callback import (
 from .services.rule_admin import RuleAdminRepository
 from .services.docx_control_index import control_locations, describe_binding
 from .services.designer_blocks import designer_blocks
-from .services.docx_language import ensure_simplified_chinese
+from .services.onlyoffice_force_save import (
+    OnlyOfficeForceSaveError, request_onlyoffice_force_save, wait_for_file_update,
+)
+from .services.template_file_store import TemplateFileStore
 from .admin_routes.protocol_rules import register_protocol_rule_routes
+from .admin_routes.lims_rules import register_lims_rule_routes
 from .admin_routes.rule_catalog import register_rule_catalog_routes
 from .admin_routes.data_sources import register_data_source_routes
 from .admin_routes.publishing import register_publishing_routes
@@ -41,52 +43,25 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     )
     compiled_dir = settings.template_path.parent / "compiled"
     compiled_dir.mkdir(parents=True, exist_ok=True)
-    draft_dir = settings.template_path.parent / "drafts"
-    draft_dir.mkdir(parents=True, exist_ok=True)
-
+    file_store = TemplateFileStore(repository, settings.template_path)
+    migrated_versions = file_store.migrate_legacy_published_versions()
+    if migrated_versions:
+        logger.info("已迁移历史发布模板到独立存储 migrated_versions=%s", migrated_versions)
     chapter_titles, section_titles = CHAPTER_TITLES, SECTION_TITLES
 
-    def version_draft_template(version_id: str) -> Path:
-        return draft_dir / f"report-template-{version_id}.docx"
-
-    def active_draft_template() -> Path:
-        workspace = repository.active_workspace()
-        version_id = workspace["versionId"] if workspace else "default"
-        return version_draft_template(version_id)
-
-    def ensure_version_draft_template(version_id: str) -> Path:
-        draft_template = version_draft_template(version_id)
-        if draft_template.exists():
-            ensure_simplified_chinese(draft_template)
-            return draft_template
-        version = repository.get_template_version(version_id)
-        if not version:
-            raise ValueError("模板版本不存在")
-        stored_file = Path(version["templateFile"]) if version.get("templateFile") else None
-        if stored_file and stored_file.exists() and stored_file.resolve() != draft_template.resolve():
-            shutil.copy2(stored_file, draft_template)
-        else:
-            shutil.copy2(settings.template_path, draft_template)
-        repository.set_template_version_file(version_id, str(draft_template))
-        ensure_simplified_chinese(draft_template)
-        return draft_template
-
-    def ensure_draft_template() -> Path:
+    def ensure_editable_workspace() -> dict[str, Any]:
         workspace = repository.active_workspace()
         if not workspace:
-            return settings.template_path
-        return ensure_version_draft_template(workspace["versionId"])
-
-    def initialize_version_document(version_id: str, source: Path) -> Path:
-        if not source.exists():
-            source = settings.template_path
-        target = version_draft_template(version_id)
-        if source.resolve() != target.resolve():
-            shutil.copy2(source, target)
-        repository.set_template_version_file(version_id, str(target))
-        # 文档已被替换为非编辑器内容，此前签发的文档 key 全部失效
-        repository.set_version_document_key(version_id, None)
-        return target
+            raise ValueError("没有活动模板版本")
+        if workspace["versionStatus"] == "DRAFT":
+            return workspace
+        draft = repository.create_template_version(
+            workspace["templateId"], workspace["versionId"],
+            f"基于 V{workspace['versionNo']} 创建的草稿",
+        )
+        source = Path(draft["templateFile"]) if draft.get("templateFile") else settings.template_path
+        file_store.initialize_version(str(draft["id"]), source)
+        return repository.activate_template_version(workspace["templateId"], str(draft["id"]))
 
     def designer_payload() -> dict[str, Any]:
         mappings = repository.list_mappings()
@@ -123,7 +98,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         return {
             "template": {"id": "primary-report-template",
                          "name": active.get("templateName") if active else settings.template_path.name,
-                         "draftFile": active_draft_template().name,
+                         "draftFile": file_store.active_draft_path().name,
                          "templateId": active.get("templateId") if active else None,
                          "templateName": active.get("templateName") if active else settings.template_path.name,
                          "versionId": active.get("versionId") if active else None,
@@ -155,7 +130,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         try:
             result = repository.create_template(item)
             version = repository.list_template_versions(result["id"])[0]
-            initialize_version_document(str(version["id"]), settings.template_path)
+            file_store.initialize_version(str(version["id"]), settings.template_path)
             return result
         except Exception as error:
             raise HTTPException(400, f"创建模板失败：{error}") from error
@@ -170,7 +145,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         suffix = Path(template_file.filename or "").suffix.lower()
         if suffix not in {".docx", ".docm"}:
             raise HTTPException(422, "模板基座必须是 .docx 或 .docm 文件")
-        upload_path = draft_dir / f"uploaded-{uuid.uuid4().hex}{suffix}"
+        upload_path = file_store.draft_dir / f"uploaded-{uuid.uuid4().hex}{suffix}"
         try:
             upload_path.write_bytes(await template_file.read())
             if upload_path.stat().st_size == 0:
@@ -180,7 +155,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                 template_file=str(upload_path),
             )
             version = repository.list_template_versions(result["id"])[0]
-            initialize_version_document(str(version["id"]), upload_path)
+            file_store.initialize_version(str(version["id"]), upload_path)
             return result
         except HTTPException:
             raise
@@ -200,7 +175,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         try:
             result = repository.delete_template(template_id)
             for version_id in result["versionIds"]:
-                version_draft_template(str(version_id)).unlink(missing_ok=True)
+                file_store.version_draft_path(str(version_id)).unlink(missing_ok=True)
             return {"deleted": True, **result}
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
@@ -217,7 +192,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                 template_id, options.get("baseVersionId"), options.get("note", "新建草稿版本")
             )
             source = Path(result["templateFile"]) if result.get("templateFile") else settings.template_path
-            initialize_version_document(str(result["id"]), source)
+            file_store.initialize_version(str(result["id"]), source)
             return repository.get_template_version(str(result["id"])) or result
         except ValueError as error:
             raise HTTPException(404, str(error)) from error
@@ -226,7 +201,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     def delete_template_version(template_id: str, version_id: str) -> dict[str, Any]:
         try:
             result = repository.delete_template_version(template_id, version_id)
-            version_draft_template(version_id).unlink(missing_ok=True)
+            file_store.version_draft_path(version_id).unlink(missing_ok=True)
             return {"deleted": True, **result}
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
@@ -234,8 +209,18 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     @router.post("/templates/{template_id}/versions/{version_id}/activate")
     def activate_template_version(template_id: str, version_id: str) -> dict[str, Any]:
         try:
+            version = repository.get_template_version(version_id)
+            if not version or version["templateId"] != template_id:
+                raise ValueError("模板版本不存在")
+            if version["status"] != "DRAFT":
+                draft = repository.create_template_version(
+                    template_id, version_id, f"基于 V{version['versionNo']} 创建的草稿",
+                )
+                source = Path(draft["templateFile"]) if draft.get("templateFile") else settings.template_path
+                file_store.initialize_version(str(draft["id"]), source)
+                version_id = str(draft["id"])
             workspace = repository.activate_template_version(template_id, version_id)
-            ensure_draft_template()
+            file_store.ensure_active_draft()
             # 切换活动版本后，该版本此前签发的文档 key 不再代表当前草稿
             repository.set_version_document_key(version_id, None)
             return workspace
@@ -244,7 +229,8 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
 
     @router.get("/designer")
     def template_designer() -> dict[str, Any]:
-        ensure_draft_template()
+        ensure_editable_workspace()
+        file_store.ensure_active_draft()
         return designer_payload()
 
     @router.get("/chapters")
@@ -312,7 +298,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                     if str(row.get("standardFieldCode") or "").startswith(f"{group_code}.") and row.get("controlTag")]
             if tags:
                 try:
-                    with zipfile.ZipFile(ensure_draft_template()) as archive:
+                    with zipfile.ZipFile(file_store.ensure_active_draft()) as archive:
                         root = etree.fromstring(archive.read("word/document.xml"))
                     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
                     tables = root.xpath("./w:body/w:tbl", namespaces=ns)
@@ -423,8 +409,11 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
             raise HTTPException(401, "ONLYOFFICE 模板访问签名无效") from error
         if claims.get("purpose") != "template-file" or claims.get("versionId") != version_id:
             raise HTTPException(403, "ONLYOFFICE 模板访问签名不匹配")
+        version = repository.get_template_version(version_id)
+        if not version or version["status"] != "DRAFT":
+            raise HTTPException(409, "已发布模板不可进入编辑器，请创建新的草稿版本")
         try:
-            path = ensure_version_draft_template(version_id)
+            path = file_store.ensure_version_draft(version_id)
         except ValueError as error:
             raise HTTPException(404, str(error)) from error
         return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -432,7 +421,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
 
     @router.get("/template/file")
     def template_file() -> FileResponse:
-        path = ensure_draft_template()
+        path = file_store.ensure_active_draft()
         return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             filename=settings.template_path.name)
 
@@ -440,11 +429,14 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     def template_onlyoffice_config() -> dict[str, Any]:
         if not settings.onlyoffice_jwt_secret:
             raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请通过 start.ps1 启动服务")
-        workspace = repository.active_workspace()
+        try:
+            workspace = ensure_editable_workspace()
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
         if not workspace:
             raise HTTPException(409, "没有活动模板版本")
         version_id = str(workspace["versionId"])
-        path = ensure_draft_template()
+        path = file_store.ensure_active_draft()
         file_token = jwt.encode(
             {"purpose": "template-file", "versionId": version_id, "exp": int(time.time()) + 600},
             settings.onlyoffice_jwt_secret, algorithm="HS256",
@@ -484,36 +476,28 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         workspace = repository.active_workspace()
         if not workspace:
             raise HTTPException(409, "没有活动模板版本")
+        if workspace["versionStatus"] != "DRAFT":
+            raise HTTPException(409, "已发布模板不可保存，请创建新的草稿版本")
         version_id = str(workspace["versionId"])
-        path = ensure_version_draft_template(version_id)
+        path = file_store.ensure_version_draft(version_id)
         signature = f"admin-template:{version_id}:{path.stat().st_mtime_ns}:{path.stat().st_size}"
         document_key = str(workspace.get("documentKey") or "")
         if not document_key:
             document_key = hashlib.sha256(signature.encode()).hexdigest()[:20]
         before = path.stat().st_mtime_ns
-        command: dict[str, Any] = {"c": "forcesave", "key": document_key, "userdata": version_id}
-        command["token"] = jwt.encode(command, settings.onlyoffice_jwt_secret, algorithm="HS256")
-        request = urllib.request.Request(
-            f"{settings.onlyoffice_url.rstrip('/')}/coauthoring/CommandService.ashx",
-            data=json.dumps(command).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                result = json.loads(response.read().decode("utf-8"))
-        except (OSError, ValueError) as error:
+            save_requested = request_onlyoffice_force_save(
+                settings.onlyoffice_url, settings.onlyoffice_jwt_secret, document_key, version_id,
+            )
+        except OnlyOfficeForceSaveError as error:
             raise HTTPException(502, f"请求 ONLYOFFICE 保存模板失败：{error}") from error
-        error_code = int(result.get("error", -1))
-        if error_code not in (0, 4):
-            raise HTTPException(502, f"ONLYOFFICE 保存模板失败，错误码：{result.get('error')}")
-        if error_code == 4:
+        if not save_requested:
             return {"saved": False, "versionId": version_id}
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            if path.exists() and path.stat().st_mtime_ns > before:
-                return {"saved": True, "versionId": version_id}
-            time.sleep(0.25)
-        raise HTTPException(504, "Word 绑定已完成，但模板保存回调超时，请稍后重试")
+        try:
+            wait_for_file_update(path, before)
+        except TimeoutError as error:
+            raise HTTPException(504, "Word 绑定已完成，但模板保存回调超时，请稍后重试") from error
+        return {"saved": True, "versionId": version_id}
 
     @router.post("/onlyoffice/callback/{version_id}")
     async def template_onlyoffice_callback(version_id: str, request: Request) -> dict[str, int]:
@@ -521,6 +505,10 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         if callback_status(payload) not in (2, 6):
             return {"error": 0}
         assert_document_server_url(payload.get("url"), settings)
+        version = repository.get_template_version(version_id)
+        if not version or version["status"] != "DRAFT":
+            logger.warning("ONLYOFFICE 模板回调目标不是草稿版本，拒绝保存 version_id=%s", version_id)
+            return {"error": 1}
         callback_key = str(payload.get("key") or "")
         if not callback_key:
             raise HTTPException(400, "ONLYOFFICE 回调缺少文档 key")
@@ -538,7 +526,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         if not payload.get("url"):
             raise HTTPException(400, "ONLYOFFICE 回调缺少文件地址")
         try:
-            output = ensure_version_draft_template(version_id)
+            output = file_store.ensure_version_draft(version_id)
         except ValueError as error:
             raise HTTPException(404, str(error)) from error
         # 唯一临时名：并发的保存不能互相截断对方的半截文件
@@ -555,8 +543,12 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         return {"error": 0}
 
     register_rule_catalog_routes(router, repository)
+    register_lims_rule_routes(router)
     register_protocol_rule_routes(router, repository, settings)
     register_data_source_routes(router, repository)
-    register_publishing_routes(router, repository, ensure_draft_template, active_draft_template, compiled_dir)
+    register_publishing_routes(
+        router, repository, file_store.ensure_active_draft, file_store.initialize_version,
+        file_store.publish_version, compiled_dir,
+    )
 
     return router

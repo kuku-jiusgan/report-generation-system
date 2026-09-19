@@ -63,7 +63,6 @@ def query_lims_project(settings: Settings, project_id: str) -> tuple[dict[str, A
         source_name = names_by_source.get(source_id, "")
         if source_name:
             instance["title"] = source_name
-            instance["project"]["name"] = source_name
     titles = {item["instanceId"]: item["title"] for item in instances}
     for item in summary["instances"]:
         item["title"] = titles.get(item["instanceId"], item["title"])

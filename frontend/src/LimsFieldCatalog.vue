@@ -4,9 +4,9 @@ import { ArrowDown, ArrowUp, Coin, Delete, EditPen, Plus, Refresh, Search } from
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   adminApi,
-  type LimsExtractionRule,
+  type LimsRuleMetadata,
   type StandardField,
-  type MappingRule,
+  type TemplateReference,
   type StandardFieldCatalogChapter,
   type SystemFieldRule,
   type SystemFieldGroup,
@@ -19,9 +19,8 @@ import SystemFieldCatalogTree from "./SystemFieldCatalogTree.vue";
 import FieldOwnershipMover from "./FieldOwnershipMover.vue";
 import FieldOutputFormatSelect from "./FieldOutputFormatSelect.vue";
 import FieldExtractionRuleForm from "./FieldExtractionRuleForm.vue";
-import { sourceTypes, sourceTypeLabel, transforms, parsers, limsExtractionTypes } from "./fieldRuleOptions";
-import { workbookLocation } from "./excelWorkbookLocation";
-type CatalogRule = Omit<LimsExtractionRule, "sourceType"> & SystemFieldRule;
+import { sourceTypeLabel, transforms } from "./fieldRuleOptions";
+type CatalogRule = SystemFieldRule;
 const loading = ref(false);
 const saving = ref(false);
 const fields = ref<StandardField[]>([]);
@@ -43,7 +42,8 @@ const draftStandardPath = computed(() => { const group = draftGroup.value; const
 const selectedChapter = ref<StandardFieldCatalogChapter>();
 const draft = ref<Partial<StandardField>>();
 const rules = ref<CatalogRule[]>([]);
-const references = ref<MappingRule[]>([]);
+const references = ref<TemplateReference[]>([]);
+const limsMetadata = ref<LimsRuleMetadata>();
 const search = ref("");
 const ruleDialog = ref(false);
 const ruleSaving = ref(false);
@@ -68,36 +68,37 @@ const groupDisplay = (field?: Partial<StandardField>) => {
 
 
 
-const parserLabel = (rule: CatalogRule) => {
-  const parser = String(rule.config?.parser || "");
-  return parsers.find((item) => item.value === parser)?.label || sourceTypeLabel(rule.sourceType);
-};
 function ruleOrigin(rule: Partial<CatalogRule>) {
-  const parser = String(rule.config?.parser || "");
   if (rule.sourceType !== "LIMS") return sourceTypeLabel(String(rule.sourceType));
-  if (parser === "HTML_TABLE_GRID") return "LIMS SQL：UNITBODY（TYPE=RichText）内的 HTML 表格";
-  if (parser === "STRUCTURED_UNIT") return "LIMS SQL：结构化 UNITBODY";
-  if (parser === "INSTANCE_FIELD") return `LIMS 实验实例字段：${String(rule.config?.inputField || "")}`;
-  const extractionType = String(rule.config?.extractionType || "NORMALIZED_PATH");
-  if (extractionType === "NORMALIZED_PATH") return "LIMS 数据：标准化中间 JSON";
-  if (extractionType === "RAW_UNIT_FIELD") return `LIMS 数据：UNITBODY → data[]${rule.sourceUnitType ? `（TYPE=${rule.sourceUnitType}）` : ""}`;
-  if (extractionType === "RICH_TEXT_REGEX") return "LIMS 数据：UNITBODY 富文本";
-  if (extractionType === "HTML_TABLE_COLUMN") return "LIMS 数据：UNITBODY HTML 表格";
-  return "未指定来源";
+  const extractionType = String(rule.config?.extractionType || "");
+  const definition = limsMetadata.value?.extractionTypes.find((item) => item.value === extractionType);
+  return definition ? `LIMS：${definition.label}` : "LIMS：未指定提取方式";
 }
-function transformLabel(value: string) {
-  return transforms.find((item) => item.value === value)?.label || value || "不转换";
+function transformLabel(value: string, sourceType: string) {
+  const options = sourceType === "LIMS" ? limsMetadata.value?.transforms || [] : transforms;
+  return options.find((item) => item.value === value)?.label || value || "不转换";
 }
 function ruleMethodNote(rule: CatalogRule) {
-  const parser = String(rule.config?.parser || "");
-  const extractionType = String(rule.config?.extractionType || "NORMALIZED_PATH");
-  if (parser === "HTML_TABLE_GRID") return `按章节和表头正则定位表格，使用 ${String(rule.config?.parserProfile || "未指定配置")} 解析行列后写入标准 JSON`;
-  if (parser === "STRUCTURED_UNIT") return `按 ${String(rule.config?.parserProfile || rule.sourceUnitType || "UNIT 类型")} 识别结构化单元，再读取目标属性`;
-  if (extractionType === "NORMALIZED_PATH") return rule.valuePattern ? "JSONPath 读取后再用正则捕获" : "按 JSONPath 直接读取";
-  if (extractionType === "RAW_UNIT_FIELD") return rule.valuePattern ? "按字段路径读取后再用正则捕获" : "按原始 JSON 字段路径直接读取";
-  if (extractionType === "RICH_TEXT_REGEX") return "先用章节正则筛选正文，再用取值正则捕获";
-  if (extractionType === "HTML_TABLE_COLUMN") return "依次用章节、表头和列标题正则定位，再读取单元格";
-  return "";
+  if (rule.sourceType !== "LIMS") return "";
+  const config = rule.config || {};
+  const definition = limsMetadata.value?.extractionTypes.find(
+    (item) => item.value === String(config.extractionType || ""),
+  );
+  const visibleFields = (definition?.groups || [])
+    .filter((group) => !group.when || config[group.when.key] === group.when.value)
+    .flatMap((group) => group.fields);
+  const details = visibleFields.flatMap((field) => {
+    const value = config[field.key];
+    if (value === undefined || value === null || value === "" || (Array.isArray(value) && !value.length)) return [];
+    const option = field.options?.find((item) =>
+      typeof item === "string" ? item === value : item.value === value,
+    );
+    const displayValue = Array.isArray(value)
+      ? value.join("、")
+      : typeof option === "object" ? option.label : String(value);
+    return [`${field.label}：${displayValue}`];
+  });
+  return details.slice(0, 3).join("；") || "尚未配置提取参数";
 }
 interface FieldChapterNode {
   id: number;
@@ -291,12 +292,16 @@ async function selectField(field: StandardField, chapterId?: number) {
   await Promise.all([loadRules(field.fieldCode), loadReferences(field.fieldCode)]);
 }
 async function loadRules(fieldCode: string) {
-  try { rules.value = (await adminApi.systemFieldRules(fieldCode)).map((rule) => ({ ...rule.config, ...rule })) as CatalogRule[]; }
+  try { rules.value = await adminApi.systemFieldRules(fieldCode) as CatalogRule[]; }
   catch (error) { ElMessage.error(errorText(error)); }
 }
 async function loadReferences(fieldCode: string) {
   try { references.value = await adminApi.standardFieldReferences(fieldCode) }
   catch (error) { references.value = []; ElMessage.error(errorText(error)) }
+}
+async function loadLimsMetadata() {
+  try { limsMetadata.value = await adminApi.limsRuleMetadata(); }
+  catch (error) { ElMessage.error(`LIMS 提取规则配置加载失败：${errorText(error)}`); }
 }
 async function newField(groupCode = selectedGroupCode.value, chapterId = selectedChapter.value?.id) {
   try {
@@ -342,15 +347,9 @@ function editRule(rule?: CatalogRule) {
   if (!draft.value?.fieldCode) return ElMessage.warning("请先保存标准字段，再配置提取规则");
   const nextRule: Partial<CatalogRule> = rule ? JSON.parse(JSON.stringify(rule)) : (rules.value[0] ? JSON.parse(JSON.stringify(rules.value[0])) : {
     fieldCode: draft.value.fieldCode, name: "新来源规则", sourceType: "LIMS",
-    sourceUnitType: "", sourcePath: draft.value.legacyJsonPath || "", sectionPattern: "",
-    headerPattern: "", valuePattern: "", transform: "TRIM", priority: (rules.value.length + 1) * 10,
-    config: { parser: "NORMALIZED_JSON", extractionType: "NORMALIZED_PATH" }, enabled: true,
+    transform: "TRIM", priority: (rules.value.length + 1) * 10,
+    config: JSON.parse(JSON.stringify(limsMetadata.value?.extractionTypes[0]?.defaultConfig || {})), enabled: true,
   });
-  const legacyType = String(nextRule.sourceType || "LIMS");
-  if (limsExtractionTypes.some((item) => item.value === legacyType)) {
-    nextRule.sourceType = "LIMS";
-    nextRule.config = { ...(nextRule.config || {}), extractionType: legacyType };
-  }
   ruleDraft.value = nextRule;
   ruleConfig.value = JSON.parse(JSON.stringify(nextRule.config || {}));
   ruleDialog.value = true;
@@ -363,22 +362,14 @@ async function saveRule() {
   try {
     const savedConfig = JSON.parse(JSON.stringify(ruleConfig.value));
     (savedConfig.contextVariables || []).forEach((item: Record<string, unknown>) => delete item.previewValue);
-    // 构建保存的规则对象，确保所有必需字段都有值
-    const ruleToSave: Record<string, any> = {
+    const ruleToSave: Partial<SystemFieldRule> = {
       fieldCode: ruleDraft.value.fieldCode || selected.value.fieldCode,
       name: ruleDraft.value.name?.trim() || "",
       sourceType: ruleDraft.value.sourceType || "LIMS",
       priority: ruleDraft.value.priority ?? 100,
       transform: ruleDraft.value.transform || "TRIM",
       enabled: ruleDraft.value.enabled !== undefined ? ruleDraft.value.enabled : true,
-      config: ruleDraft.value.sourceType === "LIMS" ? {
-        ...savedConfig,
-        sourceUnitType: ruleDraft.value.sourceUnitType || "",
-        sourcePath: ruleDraft.value.sourcePath || "",
-        sectionPattern: ruleDraft.value.sectionPattern || "",
-        headerPattern: ruleDraft.value.headerPattern || "",
-        valuePattern: ruleDraft.value.valuePattern || ""
-      } : savedConfig
+      config: savedConfig,
     };
     if (ruleDraft.value.id) await adminApi.updateSystemFieldRule(ruleDraft.value.id, ruleToSave);
     else await adminApi.createSystemFieldRule(selected.value.fieldCode, ruleToSave);
@@ -395,7 +386,7 @@ async function removeRule(rule: CatalogRule) {
     rules.value = rules.value.filter((item) => item.id !== rule.id);
   } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(errorText(error)); }
 }
-onMounted(() => loadFields());
+onMounted(() => { void Promise.all([loadLimsMetadata(), loadFields()]); });
 </script>
 <template>
   <div class="lims-catalog">
@@ -470,6 +461,9 @@ onMounted(() => loadFields());
             <div class="rules-head"><div><h2>模板引用</h2></div></div>
             <el-table v-if="references.length" :data="references" size="small">
               <el-table-column label="模板" prop="templateName" min-width="200" />
+              <el-table-column label="版本" width="72">
+                <template #default="{ row }">V{{ row.versionNo }}</template>
+              </el-table-column>
               <el-table-column label="模板字段" prop="wordLabel" min-width="150" />
               <el-table-column label="字段编码" prop="fieldCode" min-width="170" />
               <el-table-column label="绑定状态" width="150">
@@ -494,8 +488,8 @@ onMounted(() => loadFields());
             <div class="rules-head"><div><h2>提取规则</h2></div><el-button type="primary" plain :icon="EditPen" @click="editRule(rules[0])">配置规则</el-button></div>
             <el-table :data="rules" row-key="id">
               <el-table-column prop="name" label="规则名称" min-width="150" />
-              <el-table-column label="原始数据库字段" min-width="260"><template #default="scope"><span class="rule-source"><b>{{ ruleOrigin(scope.row) }}</b><small>{{ ruleMethodNote(scope.row) }}</small></span></template></el-table-column>
-              <el-table-column label="结果处理" min-width="130"><template #default="scope"><span class="rule-transform"><b>{{ transformLabel(scope.row.transform) }}</b><small>写入 {{ draft.legacyJsonPath || draft.fieldCode }}</small></span></template></el-table-column>
+              <el-table-column label="字段提取来源" min-width="260"><template #default="scope"><span class="rule-source"><b>{{ ruleOrigin(scope.row) }}</b><small>{{ ruleMethodNote(scope.row) }}</small></span></template></el-table-column>
+              <el-table-column label="结果处理" min-width="130"><template #default="scope"><span class="rule-transform"><b>{{ transformLabel(scope.row.transform, scope.row.sourceType) }}</b><small>写入 {{ draft.legacyJsonPath || draft.fieldCode }}</small></span></template></el-table-column>
               <el-table-column label="状态" width="76"><template #default="scope"><el-tag size="small" :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '启用' : '停用' }}</el-tag></template></el-table-column>
               <el-table-column label="操作" width="130" align="right"><template #default="scope"><el-button link type="primary" :icon="EditPen" @click="editRule(scope.row)" /><el-button link type="danger" :icon="Delete" @click="removeRule(scope.row)" /></template></el-table-column>
             </el-table>

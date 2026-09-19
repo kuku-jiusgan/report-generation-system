@@ -47,7 +47,7 @@ def create_report_lims_router(
             recognition = merge_instances(
                 instances, request.conflict_resolutions,
                 fields=database.list_lims_fields(True),
-                extraction_rules=database.list_lims_parser_rules(), groups=groups, normalized=True,
+                extraction_rules=database.list_lims_extraction_rules(), groups=groups, normalized=True,
             )
             if recognition["unresolvedConflictCount"]:
                 raise HTTPException(409, {

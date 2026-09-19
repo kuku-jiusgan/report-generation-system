@@ -1,30 +1,31 @@
 from collections import defaultdict
 from typing import Any
 
-from .lims_configured_extractor import apply_configured_extraction
 from .lims_normalizer import (
-    COLLECTION_LABELS, COLLECTION_ORDER, _add_solution_views, _content_hash,
-    _comparison_content, _hash, _semantic, normalize_instance, record_collection_codes,
-    sort_validation_summary,
+    _content_hash, _comparison_content, _hash, _semantic, normalize_instance,
+    record_collection_codes,
 )
 
 
-def _identity(collection: str, item: dict[str, Any]) -> str:
-    if collection == "validationSummary":
-        return _semantic(item.get("validationItemCode") or item.get("field1"))
-    keys = {
-        "samples": ("sampleName", "batchNo"),
-        "referenceStandards": ("name", "batchNo"),
-        "instruments": ("assetNo", "instrumentName", "model"),
-        "columns": ("serialNo", "name"),
-        "reagents": ("name", "batchNo", "stockNo"),
-        "impurity": ("impurityName",), "limit": ("impurityName",),
-        "solutions": ("validationCode", "name"),
-        "methodParameters": ("field1", "field2"),
-    }.get(collection)
-    if not keys:
-        return _hash({key: value for key, value in item.items() if key != "evidence"})
-    return "|".join(_semantic(item.get(key)) for key in keys)
+def _identity(item: dict[str, Any], item_key: str) -> str:
+    if item_key:
+        return _semantic(item.get(item_key))
+    return _content_hash(item)
+
+
+def _group_metadata(groups: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    return {
+        str(group.get("groupCode") or ""): group
+        for group in groups or [] if group.get("enabled", True) and group.get("groupCode")
+    }
+
+
+def _payload_collections(payloads: list[dict[str, Any]], kind: type) -> list[str]:
+    reserved = {"instances", "unmatched"}
+    return list(dict.fromkeys(
+        key for payload in payloads for key, value in payload.items()
+        if key not in reserved and isinstance(value, kind)
+    ))
 
 
 def _field_labels(collection: str, fields: list[dict[str, Any]] | None) -> dict[str, str]:
@@ -60,19 +61,33 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
     normalized_instances = instances if normalized else [
         normalize_instance(item, fields, extraction_rules, groups) for item in instances
     ]
-    payload: dict[str, Any] = {
-        "project": normalized_instances[0]["project"], "document": normalized_instances[0]["document"],
-        "approval": [], "instances": [], "unmatched": [],
-    }
+    metadata = _group_metadata(groups)
+    many_codes = list(dict.fromkeys([
+        *record_collection_codes(groups, fields), *_payload_collections(normalized_instances, list),
+    ]))
+    one_codes = list(dict.fromkeys([
+        *(code for code, group in metadata.items()
+          if str(group.get("cardinality") or "ONE").upper() == "ONE"),
+        *_payload_collections(normalized_instances, dict),
+    ]))
+    payload: dict[str, Any] = {"instances": [], "unmatched": []}
+    for collection in one_codes:
+        payload[collection] = next(
+            (source[collection] for source in normalized_instances
+             if isinstance(source.get(collection), dict) and source[collection]),
+            {},
+        )
     conflicts = []
     duplicate_count = 0
     resolutions = resolutions or {}
-    collection_codes = record_collection_codes(groups)
-    for collection in ["approval", *collection_codes]:
+    for collection in many_codes:
+        group = metadata.get(collection, {})
+        item_key = str(group.get("itemKey") or "")
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for source in normalized_instances:
             for item in source.get(collection, []):
-                buckets[_identity(collection, item)].append(item)
+                if isinstance(item, dict):
+                    buckets[_identity(item, item_key)].append(item)
         merged = []
         for identity, candidates in buckets.items():
             unique: dict[str, dict[str, Any]] = {}
@@ -80,10 +95,7 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
                 unique.setdefault(_content_hash(candidate), candidate)
             duplicate_count += len(candidates) - len(unique)
             choices = list(unique.values())
-            if len(choices) == 1 or collection not in {
-                "samples", "referenceStandards", "instruments", "columns", "reagents",
-                "impurity", "limit", "validationSummary", "solutions", "methodParameters",
-            }:
+            if len(choices) == 1 or not item_key:
                 merged.extend(choices)
                 continue
             conflict_id = _hash({"collection": collection, "identity": identity})
@@ -92,32 +104,22 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
             selected_id = resolutions.get(conflict_id)
             selected = next((item for item in choices if _content_hash(item) == selected_id), None)
             conflicts.append({"id": conflict_id, "collection": collection,
-                              "label": COLLECTION_LABELS.get(collection, collection),
+                              "label": str(group.get("label") or collection),
                               "identity": identity,
                               "differingFields": _differing_fields(collection, choices, fields),
                               "options": options, "resolved": bool(selected)})
             if selected:
                 merged.append(selected)
         payload[collection] = merged
-    payload["validationSummary"] = sort_validation_summary(payload.get("validationSummary", []))
-    payload["lodConclusion"] = next((item.get("conclusion", "") for item in payload.get("jiancexian", [])
-                                     if item.get("conclusion")), "")
     for source in normalized_instances:
-        payload["instances"].extend(source["instances"])
-        payload["unmatched"].extend(source["unmatched"])
-    _add_solution_views(payload)
-    if fields and extraction_rules:
-        apply_configured_extraction({}, payload, fields, extraction_rules)
-    recognized = {name: len(payload.get(name, [])) for name in collection_codes if payload.get(name)}
-    validation_names = [name for name in (
-        "systemSuitability", "specificity", "jiancexian", "loq", "linearity", "repeatability",
-        "intermediatePrecision", "accuracy", "solutionStability", "robustnessResult", "sampleResults",
-    ) if payload.get(name)]
+        payload["instances"].extend(source.get("instances", []))
+        payload["unmatched"].extend(source.get("unmatched", []))
+    recognized = {name: len(payload.get(name, [])) for name in many_codes if payload.get(name)}
     return {
         "payload": payload,
         "recognizedCounts": recognized,
         "recognizedTotal": sum(recognized.values()),
-        "validationSections": validation_names,
+        "validationSections": list(recognized),
         "duplicateCount": duplicate_count,
         "conflicts": conflicts,
         "unresolvedConflictCount": sum(not item["resolved"] for item in conflicts),
@@ -126,7 +128,7 @@ def merge_instances(instances: list[dict[str, Any]], resolutions: dict[str, str]
             "recognizedTables": len({(item.get("evidence", {}).get("instanceId"),
                                       item.get("evidence", {}).get("richTextId"),
                                       item.get("evidence", {}).get("tableIndex"))
-                                     for name in collection_codes for item in payload.get(name, [])
+                                     for name in many_codes for item in payload.get(name, [])
                                      if item.get("evidence", {}).get("tableIndex")}),
             "unmatchedTables": len(payload["unmatched"]),
         },

@@ -241,10 +241,23 @@ def _fill_rule_directives(mapping: dict[str, Any]) -> list[str]:
     return directives
 
 
+def _is_empty_render_value(value: Any) -> bool:
+    """判断字段是否没有可渲染内容，避免空集合被写成 ``[]``/``{}``。"""
+    if value is None or value == "":
+        return True
+    if isinstance(value, (list, tuple, set, dict)):
+        if not value:
+            return True
+        if isinstance(value, dict):
+            return False
+        return all(item is None or item == "" for item in value)
+    return False
+
+
 def format_value(value: Any, mapping: dict[str, Any], use_empty_rule: bool = True) -> str:
     directives = _fill_rule_directives(mapping)
 
-    if value in (None, ""):
+    if _is_empty_render_value(value):
         return "-" if use_empty_rule and "EMPTY_AS_DASH" in directives else ""
     formatted: str | None = None
     if "VERSION_2_DIGITS" in directives:

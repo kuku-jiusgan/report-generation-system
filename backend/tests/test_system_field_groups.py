@@ -114,11 +114,10 @@ def test_existing_detection_limit_records_migrate_to_group_code() -> None:
         raw = {"instanceId": "EXP-LOD", "projectId": "P1"}
         normalized = {
             "project": {"id": "P1"}, "document": {}, "lod": [{"name": "杂质A"}],
-            "solutions": [{"name": "检测限溶液", "validationCode": "lod"}],
             "validationSummary": [{"validationItemCode": "lod", "field1": "检测限"}],
         }
         database.replace_lims_instance(
-            "legacy-lod", raw, normalized, ["lod", "solutions", "validationSummary"],
+            "legacy-lod", raw, normalized, ["lod", "validationSummary"],
         )
 
         ensure_system_field_groups(database)
@@ -126,7 +125,6 @@ def test_existing_detection_limit_records_migrate_to_group_code() -> None:
         payload = database.get_lims_normalized_payload("legacy-lod", "EXP-LOD")
         assert "lod" not in payload
         assert payload["jiancexian"][0]["name"] == "杂质A"
-        assert payload["solutions"][0]["validationCode"] == "jiancexian"
         assert payload["validationSummary"][0]["validationItemCode"] == "jiancexian"
 
 

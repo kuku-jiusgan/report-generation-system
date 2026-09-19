@@ -122,8 +122,12 @@ def _apply_content_block_rules(snapshot: dict) -> list[dict]:
     )
 
 
-def runtime_template_and_mappings(template_id: str | None = None):
-    return resolve_runtime_template(settings, rule_admin, _apply_content_block_rules, template_id)
+def runtime_template_and_mappings(
+    template_id: str | None = None, template_version_id: str | None = None,
+):
+    return resolve_runtime_template(
+        settings, rule_admin, _apply_content_block_rules, template_id, template_version_id,
+    )
 
 
 def record_generation(report_id: str, data: dict, phase: str, actor: str = "",
@@ -151,7 +155,9 @@ def record_generation(report_id: str, data: dict, phase: str, actor: str = "",
 
 def render_report_word(item: dict, data: dict, payload: dict | None = None,
                        output_suffix: str = "", phase: str = "", actor: str = "") -> str:
-    template, mappings, table_rules, template_meta = runtime_template_and_mappings(data.get("template_id") or None)
+    template, mappings, table_rules, template_meta = runtime_template_and_mappings(
+        data.get("template_id") or None, data.get("template_catalog_version_id") or None,
+    )
     data.update(template_meta)
     output_name = (f"report-{item['id']}-{output_suffix}.docx" if output_suffix
                    else f"report-{item['id']}-working.docx")
@@ -231,8 +237,7 @@ def favicon() -> Response:
 @app.get(f"{settings.api_prefix}/reports", response_model=list[ReportTask])
 def list_reports(scope: Literal["mine", "all"] = "mine",
                  user: dict = Depends(auth.require_any("REPORT_EDIT", "REPORT_ALL_VIEW"))) -> list[ReportTask]:
-    # GET 保持纯读：模板元数据的惰性补写由 ensure_report_file 在生成文件时完成，
-    # 这里若边读边写，会与并发保存的 sync_word_fields 互相覆盖（丢失更新）
+    # GET 保持纯读，避免列表查询产生报告状态或内容变更。
     if scope == "all" and "REPORT_ALL_VIEW" not in user["permissions"]:
         raise HTTPException(403, "没有查看全部用户报告的权限")
     owner_id = None if scope == "all" else user["id"]
@@ -544,9 +549,7 @@ def rebuild_report_word(report_id: str, user: dict = Depends(auth.require("REPOR
 
 
 app.include_router(create_report_word_router(
-    database, settings, auth, rule_admin, required_report, required_owned_report,
-    runtime_template_and_mappings, render_report_word, require_automatic_edit_allowed,
-    _apply_content_block_rules,
+    database, settings, auth, required_report, required_owned_report,
 ))
 app.include_router(create_report_source_router(database, settings, auth, required_owned_report,
                                                report_response, render_report_word))

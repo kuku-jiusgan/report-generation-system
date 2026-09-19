@@ -55,7 +55,7 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
         )
         if isinstance(value, list) and len(value) == 1:
             value = value[0]
-        if not isinstance(value, (dict, list)):
+        if not isinstance(value, (dict, list)) or not value:
             formatted = format_value(value, mapping)
             if value is not None or formatted:
                 values[tag] = formatted

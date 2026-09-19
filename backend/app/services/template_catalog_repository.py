@@ -74,9 +74,12 @@ class TemplateCatalogRepositoryMixin:
                 raise ValueError("模板不存在")
             if connection.execute("SELECT COUNT(*) FROM admin_templates").fetchone()[0] <= 1:
                 raise ValueError("系统至少需要保留一个报告模板")
-            version_ids = [row["id"] for row in connection.execute(
-                "SELECT id FROM admin_template_versions WHERE template_id=%s", (template_id,),
-            ).fetchall()]
+            versions = connection.execute(
+                "SELECT id,status FROM admin_template_versions WHERE template_id=%s", (template_id,),
+            ).fetchall()
+            if any(row["status"] != "DRAFT" for row in versions):
+                raise ValueError("包含已发布或历史版本的模板不能删除")
+            version_ids = [row["id"] for row in versions]
         active = self.active_workspace()
         if active and active["templateId"] == template_id:
             with self.database.connect() as connection:
@@ -122,8 +125,8 @@ class TemplateCatalogRepositoryMixin:
             ).fetchone()
             if not version:
                 raise ValueError("模板版本不存在")
-            if version["status"] == "PUBLISHED":
-                raise ValueError("不能删除当前发布版本")
+            if version["status"] != "DRAFT":
+                raise ValueError("不能删除已发布或历史模板版本")
             version_count = connection.execute(
                 "SELECT COUNT(*) FROM admin_template_versions WHERE template_id=%s", (template_id,),
             ).fetchone()[0]
@@ -183,7 +186,8 @@ class TemplateCatalogRepositoryMixin:
     def activate_template_version(self, template_id: str, version_id: str) -> dict[str, Any]:
         active = self.active_workspace()
         if active and active["versionId"] != version_id:
-            self.save_active_workspace()
+            if active["versionStatus"] == "DRAFT":
+                self.save_active_workspace()
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM admin_template_versions WHERE id=%s AND template_id=%s", (version_id, template_id),

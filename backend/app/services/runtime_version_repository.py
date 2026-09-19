@@ -40,17 +40,31 @@ class RuntimeVersionRepositoryMixin:
             ).fetchone()
         return (json.loads(legacy["snapshot"]), legacy["compiled_template"]) if legacy else (self.snapshot(), None)
 
-    def active_runtime_template(self, template_id: str | None = None) -> dict[str, Any] | None:
-        scope = "t.id=%s AND t.status='ACTIVE'" if template_id else "t.id=(SELECT active_template_id FROM admin_template_workspace WHERE id=1)"
+    def active_runtime_template(
+        self, template_id: str | None = None, version_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if version_id:
+            if not template_id:
+                raise ValueError("按版本读取运行时模板时必须提供模板 ID")
+            scope = "t.id=%s AND v.id=%s AND v.status IN ('PUBLISHED','ARCHIVED')"
+            parameters = (template_id, version_id)
+        elif template_id:
+            scope = "t.id=%s AND t.status='ACTIVE' AND v.status='PUBLISHED'"
+            parameters = (template_id,)
+        else:
+            scope = "t.id=(SELECT active_template_id FROM admin_template_workspace WHERE id=1) AND v.status='PUBLISHED'"
+            parameters = ()
         with self.database.connect() as connection:
             row = connection.execute(
                 f"""SELECT t.id AS template_id,t.code AS template_code,t.name AS template_name,v.id AS version_id,
                           v.version_no,v.snapshot,v.template_file FROM admin_template_versions v
                    JOIN admin_templates t ON t.id=v.template_id
-                   WHERE {scope} AND v.status='PUBLISHED' ORDER BY v.version_no DESC LIMIT 1""",
-                (template_id,) if template_id else (),
+                   WHERE {scope} ORDER BY v.version_no DESC LIMIT 1""",
+                parameters,
             ).fetchone()
         if not row:
+            if version_id:
+                raise ValueError("报告绑定的模板发布版本不存在")
             if template_id:
                 raise ValueError("所选报告模板不存在、已停用或没有已发布版本")
             return None

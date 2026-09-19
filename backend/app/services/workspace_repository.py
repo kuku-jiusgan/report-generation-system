@@ -48,6 +48,8 @@ class WorkspaceRepositoryMixin:
         active = self.active_workspace()
         if not active:
             return
+        if active["versionStatus"] != "DRAFT":
+            raise ValueError("已发布模板不可修改，请先创建新的草稿版本")
         values: list[Any] = [json.dumps(self.snapshot(), ensure_ascii=False)]
         assignment = "snapshot=%s"
         if template_file is not None:

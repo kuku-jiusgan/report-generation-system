@@ -1,6 +1,8 @@
 import asyncio
 import io
+import json
 import threading
+import urllib.request
 import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,10 +16,9 @@ from backend.app.config import Settings
 from backend.app.database import Database, now_iso
 from backend.app.onlyoffice_callback import is_current_document_key
 from backend.app.report_word_api import create_report_word_router
-from backend.app.services.rule_admin import RuleAdminRepository
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from backend.app.services.onlyoffice_force_save import (
+    OnlyOfficeForceSaveError, request_onlyoffice_force_save,
+)
 SECRET = "test-secret"
 REPORT_ID = "rep1"
 USER = {"id": "u1", "permissions": ["REPORT_EDIT"], "display_name": "测试"}
@@ -34,6 +35,20 @@ class FakeCallbackRequest:
         return self._body
 
 
+class FakeCommandResponse:
+    def __init__(self, payload: object):
+        self.body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
 def _minimal_docx(value: str) -> bytes:
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -47,6 +62,14 @@ def _minimal_docx(value: str) -> bytes:
     # 字节级断言会在跨时间边界时偶发失败
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            zipfile.ZipInfo("[Content_Types].xml", date_time=(1980, 1, 1, 0, 0, 0)),
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            '</Types>',
+        )
         archive.writestr(
             zipfile.ZipInfo("word/document.xml", date_time=(1980, 1, 1, 0, 0, 0)),
             document_xml,
@@ -77,12 +100,15 @@ def build_env(tmp_path: Path, secret: str = SECRET):
         onlyoffice_jwt_secret=secret,
     )
     settings.ensure_directories()
-    state = {"revision": "r1"}
     database = Database(settings)
     database.initialize()
     database.create_report({
         "id": REPORT_ID, "title": "测试报告", "status": "EDITING",
-        "resolved_data": {"template_revision": state["revision"], "report_no": "OLD"},
+        "resolved_data": {
+            "template_id": "deleted-template", "template_catalog_version_id": "deleted-version",
+            "template_revision": "r1", "report_no": "OLD",
+            "field_sources": {"report_no": {"type": "LIMS", "record_id": "source-1"}},
+        },
         "created_at": now_iso(), "updated_at": now_iso(),
         "created_by": "u1", "updated_by": "u1",
     })
@@ -101,27 +127,9 @@ def build_env(tmp_path: Path, secret: str = SECRET):
             raise HTTPException(404, "报告不存在")
         return row
 
-    def runtime_template_and_mappings(template_id: str | None = None):
-        return settings.template_path, [], [], {"template_revision": state["revision"]}
-
-    rendered: list[str] = []
-
-    def render_report_word(item: dict, data: dict, payload: dict | None = None,
-                           output_suffix: str = "") -> str:
-        # 与 main.render_report_word 一致：重渲染会把新模板元数据写回 data
-        *_, template_meta = runtime_template_and_mappings()
-        data.update(template_meta)
-        rendered.append(item["id"])
-        name = f"report-{item['id']}-working.docx"
-        (settings.reports_dir / name).write_bytes(_minimal_docx("RENDERED"))
-        return name
-
     router = create_report_word_router(
         database, settings, AuthManager(database, settings),
-        RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json"),
         required_report, required_owned_report,
-        runtime_template_and_mappings, render_report_word,
-        lambda item: None, lambda snapshot: [],
     )
     config_endpoint = next(
         route.endpoint for route in router.routes
@@ -131,12 +139,16 @@ def build_env(tmp_path: Path, secret: str = SECRET):
         route.endpoint for route in router.routes
         if route.path == "/api/v1/onlyoffice/callback/{report_id}"
     )
+    force_save_endpoint = next(
+        route.endpoint for route in router.routes
+        if route.path == "/api/v1/onlyoffice/reports/{report_id}/force-save"
+    )
     return {
         "settings": settings, "database": database,
         "working": working, "served_dir": served_dir,
         "config_endpoint": config_endpoint, "callback_endpoint": callback_endpoint,
-        "rendered": rendered, "server": server, "docserver_url": docserver_url,
-        "set_revision": lambda value: state.update(revision=value),
+        "force_save_endpoint": force_save_endpoint,
+        "server": server, "docserver_url": docserver_url,
     }
 
 
@@ -161,8 +173,13 @@ def post_callback(env: dict, *, status: int = 2, url: str | None = None,
 
 
 @pytest.fixture()
-def env(tmp_path: Path) -> dict:
+def env(tmp_path: Path, monkeypatch) -> dict:
     built = build_env(tmp_path)
+    direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    monkeypatch.setattr(
+        "backend.app.report_word_api.urllib.request.urlopen",
+        lambda request, timeout=60: direct_opener.open(request, timeout=timeout),
+    )
     yield built
     built["server"].shutdown()
 
@@ -204,14 +221,17 @@ def test_callback_rejects_missing_and_stale_document_key(env: dict) -> None:
     assert status == 400, "缺少 key 必须拒绝"
 
     status, body = post_callback(env, key="stale-key", token=token)
-    assert status == 200
+    assert status == 200, body
     assert body == {"error": 1}
     assert env["working"].read_bytes() == _minimal_docx("ORIGINAL"), "陈旧 key 不得覆盖工作文件"
 
     status, body = post_callback(env, key=issued, token=token)
-    assert status == 200
+    assert status == 200, body
     assert body == {"error": 0}
     assert env["working"].read_bytes() == _minimal_docx("SAVED-EDIT")
+    saved = env["database"].get_report(REPORT_ID)
+    assert saved["resolved_data"]["report_no"] == "OLD", "Word 保存不得反写结构化数据"
+    assert saved["resolved_data"]["field_sources"]["report_no"]["type"] == "LIMS"
 
 
 def test_current_document_key_rejects_stale_editor_session() -> None:
@@ -223,6 +243,7 @@ def test_current_document_key_rejects_stale_editor_session() -> None:
 def test_repeated_autosaves_keep_working_with_same_key(env: dict) -> None:
     issued = issue_key(env)
     token = _signed_token({"status": 2})
+    original_data = env["database"].get_report(REPORT_ID)["resolved_data"]
 
     # 文档 key 在整个编辑会话中保持不变，而每次保存后文件内容都会变化：
     # 校验必须对照签发记录，而不是与保存后的内容重新比较，
@@ -230,33 +251,44 @@ def test_repeated_autosaves_keep_working_with_same_key(env: dict) -> None:
     for round_no in (1, 2, 3):
         (env["served_dir"] / "final.docx").write_bytes(_minimal_docx(f"SAVED-{round_no}"))
         status, body = post_callback(env, key=issued, token=token)
-        assert status == 200
+        assert status == 200, body
         assert body == {"error": 0}
         assert env["working"].read_bytes() == _minimal_docx(f"SAVED-{round_no}")
     assert env["database"].get_report(REPORT_ID)["word_edit_locked"] == 1
-    assert any(version["note"] == "ONLYOFFICE 自动保存"
-               for version in env["database"].list_versions(REPORT_ID))
+    assert env["database"].get_report(REPORT_ID)["resolved_data"] == original_data
+    assert env["database"].list_versions(REPORT_ID) == []
+    assert env["database"].list_changes(REPORT_ID) == []
 
 
-def test_template_change_invalidates_open_session(env: dict) -> None:
+def test_callback_does_not_require_the_source_template(env: dict) -> None:
     issued = issue_key(env)
     token = _signed_token({"status": 2})
 
-    # 模板发布新版本后，未保存的旧编辑会话不得覆盖新渲染结果
-    env["set_revision"]("r2")
+    # 报告里仅保留已删除模板的来源标识，保存仍必须成功。
     status, body = post_callback(env, key=issued, token=token)
-    assert status == 200
-    assert body == {"error": 1}
-    assert env["rendered"] == [REPORT_ID], "检测到模板变更时必须重渲染"
-    assert env["working"].read_bytes() == _minimal_docx("RENDERED"), "陈旧会话不得覆盖新渲染"
-
-    # 重新打开编辑器（新会话）后可以正常保存
-    fresh_key = issue_key(env)
-    assert fresh_key != issued
-    status, body = post_callback(env, key=fresh_key, token=token)
-    assert status == 200
+    assert status == 200, body
     assert body == {"error": 0}
     assert env["working"].read_bytes() == _minimal_docx("SAVED-EDIT")
+
+
+def test_callback_rejects_invalid_docx_without_replacing_working_file(env: dict) -> None:
+    issued = issue_key(env)
+    token = _signed_token({"status": 2})
+    original = env["working"].read_bytes()
+    (env["served_dir"] / "final.docx").write_bytes(b"not-a-docx")
+
+    status, body = post_callback(env, key=issued, token=token)
+
+    assert status == 502
+    assert "DOCX" in str(body)
+    assert env["working"].read_bytes() == original
+
+
+def test_config_requires_an_existing_generated_working_file(env: dict) -> None:
+    env["working"].unlink()
+    with pytest.raises(HTTPException, match="请先重新生成报告") as error:
+        env["config_endpoint"](REPORT_ID, USER)
+    assert error.value.status_code == 409
 
 
 def test_config_issued_key_is_persisted(env: dict) -> None:
@@ -268,4 +300,80 @@ def test_config_issued_key_is_persisted(env: dict) -> None:
     assert len(key) == len(REPORT_ID) + 1 + 16
     assert key == env["database"].get_report(REPORT_ID)["onlyoffice_document_key"]
     assert config["editorConfig"]["callbackUrl"].endswith(f"/onlyoffice/callback/{REPORT_ID}")
+    assert "plugins" not in config["editorConfig"]
+    assert config["editorConfig"]["customization"]["goback"] == {
+        "requestClose": True, "text": "返回报告大厅",
+    }
     assert config["token"]
+
+
+def test_force_save_waits_for_working_file_update(env: dict, monkeypatch) -> None:
+    issued = issue_key(env)
+    captured: dict[str, str] = {}
+
+    def request_save(url: str, secret: str, key: str, userdata: str) -> bool:
+        captured.update(url=url, secret=secret, key=key, userdata=userdata)
+        env["working"].write_bytes(_minimal_docx("FORCED-SAVE"))
+        return True
+
+    monkeypatch.setattr("backend.app.report_word_api.request_onlyoffice_force_save", request_save)
+    result = env["force_save_endpoint"](REPORT_ID, USER)
+
+    assert result == {"saved": True, "reportId": REPORT_ID}
+    assert captured == {
+        "url": env["settings"].onlyoffice_url,
+        "secret": SECRET,
+        "key": issued,
+        "userdata": REPORT_ID,
+    }
+
+
+def test_force_save_allows_return_when_document_has_no_changes(env: dict, monkeypatch) -> None:
+    issue_key(env)
+    monkeypatch.setattr(
+        "backend.app.report_word_api.request_onlyoffice_force_save", lambda *_args: False,
+    )
+
+    assert env["force_save_endpoint"](REPORT_ID, USER) == {
+        "saved": False, "reportId": REPORT_ID,
+    }
+
+
+def test_force_save_requires_an_editor_session(env: dict) -> None:
+    with pytest.raises(HTTPException, match="编辑器会话不存在") as error:
+        env["force_save_endpoint"](REPORT_ID, USER)
+    assert error.value.status_code == 409
+
+
+@pytest.mark.parametrize(("error_code", "expected"), [(0, True), (4, False)])
+def test_force_save_command_uses_current_document_key(
+    monkeypatch, error_code: int, expected: bool,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def urlopen(request, timeout: float):
+        captured.update(url=request.full_url, timeout=timeout, body=json.loads(request.data))
+        return FakeCommandResponse({"error": error_code})
+
+    monkeypatch.setattr(
+        "backend.app.services.onlyoffice_force_save.urllib.request.urlopen", urlopen,
+    )
+
+    assert request_onlyoffice_force_save(
+        "http://onlyoffice.test/", SECRET, "current-key", REPORT_ID,
+    ) is expected
+    assert captured["url"] == "http://onlyoffice.test/coauthoring/CommandService.ashx"
+    command = captured["body"]
+    assert command["c"] == "forcesave"
+    assert command["key"] == "current-key"
+    assert command["userdata"] == REPORT_ID
+    assert jwt.decode(command["token"], SECRET, algorithms=["HS256"])["key"] == "current-key"
+
+
+def test_force_save_command_rejects_malformed_response(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.app.services.onlyoffice_force_save.urllib.request.urlopen",
+        lambda *_args, **_kwargs: FakeCommandResponse([]),
+    )
+    with pytest.raises(OnlyOfficeForceSaveError, match="响应结构无效"):
+        request_onlyoffice_force_save("http://onlyoffice.test", SECRET, "current-key", REPORT_ID)

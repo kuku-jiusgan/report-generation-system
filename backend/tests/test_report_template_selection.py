@@ -25,6 +25,25 @@ def test_selected_template_lookup_is_independent_of_workspace():
     assert result["templateId"] == "selected"
 
 
+def test_report_template_lookup_is_pinned_to_exact_published_or_archived_version():
+    repository = RuntimeVersionRepositoryMixin()
+    repository.database = MagicMock()
+    connection = repository.database.connect.return_value.__enter__.return_value
+    connection.execute.return_value.fetchone.return_value = {
+        "template_id": "selected", "template_code": "CODE", "template_name": "所选模板",
+        "version_id": "report-version", "version_no": 1, "snapshot": '{"tableRules": []}',
+        "template_file": "published-v1.docx",
+    }
+
+    result = repository.active_runtime_template("selected", "report-version")
+
+    query, parameters = connection.execute.call_args.args
+    assert "v.id=%s" in query
+    assert "v.status IN ('PUBLISHED','ARCHIVED')" in query
+    assert parameters == ("selected", "report-version")
+    assert result["versionId"] == "report-version"
+
+
 def test_unavailable_selected_template_is_rejected():
     repository = RuntimeVersionRepositoryMixin()
     repository.database = MagicMock()
@@ -52,6 +71,7 @@ def test_selected_template_uses_its_own_rules(tmp_path: Path, monkeypatch):
     assert mappings == snapshot["mappings"]
     assert tables == snapshot["tableRules"]
     assert metadata["template_id"] == "selected"
+    repository.active_runtime_template.assert_called_with("selected", None)
     repository.list_table_rules.assert_not_called()
     repository.active_runtime_rules.assert_not_called()
     assert compiler.call_args.args[0] == source

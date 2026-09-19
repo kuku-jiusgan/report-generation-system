@@ -3,19 +3,12 @@ import json
 from typing import Any
 
 from ..database_common import now_iso
-from ..services.lims_normalizer import COLLECTION_ORDER, DERIVED_COLLECTION_CODES
-
-
 # 归一化载荷里不成行的段（project、document，以及基数为 ONE 的编组）整段存这一列。
 # 记录型集合（samples、weighings……）仍然一行一条存在 lims_standard_records。
 # 过去这些段只被投影成 project_id/project_name/document_code/document_version 四个列，
 # 键名写死在代码里，段里其余的键落库时就丢了——客户名称走 `$.project.clientName`，
 # 原始数据里有值，存完却取不到，生成报告时整个字段是空的。
 SECTION_COLUMN = "sections_json"
-
-# 导入时一行一条写进 lims_standard_records 的集合。
-RECORD_COLLECTIONS = frozenset({"approval", *COLLECTION_ORDER})
-
 
 def collection_storage(collection_code: str, cardinality: str) -> tuple[str, str] | None:
     """某个集合的数据落在哪张表哪一列，没落库的返回 None。
@@ -24,13 +17,10 @@ def collection_storage(collection_code: str, cardinality: str) -> tuple[str, str
     迟早会对不上：客户名称的集合是 project（不成行的段），声明却写着"一行一条存在
     lims_standard_records"，而 project 从来没有记录行，取值预览因此永远是 0 条。
 
-    基数为 ONE 的编组是不成行的段，整段存在段列里；其余集合（例如溶液视图，读取时才从
-    solutions 派生）根本不落库，没有自己的证据可查。
+    基数为 ONE 的编组是不成行的段，整段存在段列里。
     """
-    configured_many = (
-        str(cardinality or "").upper() == "MANY" and collection_code not in DERIVED_COLLECTION_CODES
-    )
-    if collection_code in RECORD_COLLECTIONS or configured_many:
+    del collection_code
+    if str(cardinality or "").upper() == "MANY":
         return "lims_standard_records", "data_json"
     if str(cardinality or "").upper() == "ONE":
         return "lims_experiments", SECTION_COLUMN
@@ -66,7 +56,7 @@ class LimsInstanceRepositoryMixin:
         with self.connect() as connection:
             self._upsert_experiment(connection, import_id, instance_id, raw, normalized)
             self._replace_standard_records(
-                connection, import_id, instance_id, normalized, ["approval", *collection_names],
+                connection, import_id, instance_id, normalized, collection_names,
             )
             self._replace_unrecognized(connection, import_id, instance_id, normalized.get("unmatched", []))
 
@@ -174,7 +164,7 @@ class LimsInstanceRepositoryMixin:
         return {
             # 段整段还原，键名不在这里写死：段里存了什么键就还回什么键。
             **json.loads(experiment[SECTION_COLUMN] or "{}"),
-            "approval": [], "instances": [{
+            "instances": [{
                 "instanceId": instance_id, "title": experiment["title"] or "",
                 "projectId": experiment["project_id"] or "", "version": experiment["experiment_version"] or "",
                 "createdBy": experiment["created_by"] or "", "createdTime": experiment["created_at_source"],

@@ -59,7 +59,7 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
         if not instances:
             raise HTTPException(404, f"项目编号 {request.project_id} 未查询到 LIMS 数据")
         fields = database.list_lims_fields()
-        rules = database.list_lims_parser_rules()
+        rules = database.list_lims_extraction_rules()
         groups = list_system_field_groups(database)
         # 先完成全部归一化：任一实例解析失败时不留下 0 实例的孤儿导入记录
         try:
@@ -78,7 +78,7 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
             "created_at": now_iso(),
         })
         for raw, payload in normalized:
-            database.replace_lims_instance(import_id, raw, payload, record_collection_codes(groups))
+            database.replace_lims_instance(import_id, raw, payload, record_collection_codes(groups, fields))
         return import_response(item)
 
     @router.get("/queries")
@@ -105,7 +105,7 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
             groups = list_system_field_groups(database)
             return merge_instances(
                 instances, fields=database.list_lims_fields(True),
-                extraction_rules=database.list_lims_parser_rules(), groups=groups, normalized=True,
+                extraction_rules=database.list_lims_extraction_rules(), groups=groups, normalized=True,
             )
         except KeyError as error:
             raise HTTPException(404, f"LIMS 实验记录不存在：{error.args[0]}") from error
