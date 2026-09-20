@@ -173,11 +173,11 @@ class LimsCatalogRepositoryMixin:
         with self.connect() as connection:
             rows = connection.execute(
                 """SELECT DISTINCT field_code FROM (
-                   SELECT gf.field_code FROM system_field_group_chapters gc
+                   SELECT gf.field_code FROM system_field_catalog_groups gc
                    JOIN system_field_group_fields gf ON gf.group_code=gc.group_code
                    WHERE gc.chapter_id=%s
                    UNION ALL
-                   SELECT sf.field_code FROM system_field_chapters sf
+                   SELECT sf.field_code FROM system_field_catalog_fields sf
                    WHERE sf.chapter_id=%s
                 ) chapter_fields""",
                 (chapter_id, chapter_id),
@@ -191,7 +191,7 @@ class LimsCatalogRepositoryMixin:
             connection.execute("DELETE FROM system_field_rules WHERE field_code=%s", (field_code,))
             if self._group_tables_exist(connection):
                 connection.execute("DELETE FROM system_field_group_fields WHERE field_code=%s", (field_code,))
-            connection.execute("DELETE FROM system_field_chapters WHERE field_code=%s", (field_code,))
+            connection.execute("DELETE FROM system_field_catalog_fields WHERE field_code=%s", (field_code,))
             cursor = connection.execute("DELETE FROM lims_field_catalog WHERE field_code=%s", (field_code,))
         return bool(cursor.rowcount)
 
@@ -225,12 +225,28 @@ class LimsCatalogRepositoryMixin:
         )
         with self.connect() as connection:
             if rule_id is None:
+                existing = connection.execute(
+                    "SELECT id FROM system_field_rules WHERE field_code=%s", (item["fieldCode"],),
+                ).fetchone()
+                if existing:
+                    raise ValueError(f"系统字段 {item['fieldCode']} 已有提取规则，请编辑现有规则")
                 cursor = connection.execute(
                     """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
                        transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", values,
                 )
                 rule_id = int(cursor.lastrowid)
             else:
+                current = connection.execute(
+                    "SELECT id FROM system_field_rules WHERE id=%s", (rule_id,),
+                ).fetchone()
+                if not current:
+                    raise KeyError(rule_id)
+                conflict = connection.execute(
+                    "SELECT id FROM system_field_rules WHERE field_code=%s AND id<>%s",
+                    (item["fieldCode"], rule_id),
+                ).fetchone()
+                if conflict:
+                    raise ValueError(f"系统字段 {item['fieldCode']} 已有提取规则")
                 connection.execute(
                     """UPDATE system_field_rules SET field_code=%s,name=%s,source_type=%s,priority=%s,config=%s,
                        transform=%s,enabled=%s,updated_at=%s WHERE id=%s""", (*values, rule_id),

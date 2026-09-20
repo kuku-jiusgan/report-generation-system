@@ -4,17 +4,20 @@ from backend.app.services.template_block_rules import apply_template_block_rules
 
 
 GROUPS = [
-    {"groupCode": "systemSuitability", "fields": [
-        {"fieldCode": "systemSuitability.impurityName"},
-        {"fieldCode": "systemSuitability.retentionTime"},
+    {"groupCode": "systemSuitability", "itemPath": "$.systemSuitability", "cardinality": "MANY",
+     "chapterIds": [107], "chapterCodes": ["7"], "fields": [
+        {"fieldCode": "systemSuitability.impurityName", "fieldPath": "impurityName"},
+        {"fieldCode": "systemSuitability.retentionTime", "fieldPath": "retentionTime"},
     ]},
-    {"groupCode": "systemSuitabilitySolutions", "fields": [
-        {"fieldCode": "systemSuitabilitySolutions.name"},
+    {"groupCode": "systemSuitabilitySolutions", "itemPath": "$.systemSuitabilitySolutions",
+     "cardinality": "MANY", "chapterIds": [], "chapterCodes": [], "fields": [
+        {"fieldCode": "systemSuitabilitySolutions.name", "fieldPath": "name"},
     ]},
 ]
 
 CATALOG = [
-    {"fieldCode": "systemSuitability.impurityName", "dataType": "string", "outputFormat": ""},
+    {"fieldCode": "systemSuitability.impurityName", "collectionCode": "systemSuitability",
+     "dataType": "string", "outputFormat": ""},
 ]
 
 
@@ -79,3 +82,38 @@ def test_field_catalog_metadata_is_attached() -> None:
 
     assert mappings["systemSuitability.impurityName"]["standardFieldDataType"] == "string"
     assert "standardFieldDataType" not in mappings["systemSuitability.retentionTime"]
+
+
+def test_chapter_selects_contextual_path_when_field_belongs_to_multiple_groups() -> None:
+    groups = [
+        {"groupCode": "conclusions", "itemPath": "$.conclusions", "cardinality": "MANY",
+         "chapterIds": [], "chapterCodes": [], "fields": [
+             {"fieldCode": "uncategorized.field_002", "fieldPath": "text"},
+         ]},
+        {"groupCode": "validationSummary", "itemPath": "$.validationSummary", "cardinality": "MANY",
+         "chapterIds": [116], "chapterCodes": ["7.6"], "fields": [
+             {"fieldCode": "uncategorized.field_002", "fieldPath": "injections[*].text"},
+         ]},
+    ]
+    snapshot = {
+        "chapters": [{"id": 16, "code": "7.6"}],
+        "mappings": [{
+            "standardFieldCode": "uncategorized.field_002", "chapterId": 16,
+            "tableNo": "TEXT", "repeatType": "NONE",
+        }],
+        "templateBlocks": [{
+            "standardGroupCode": "validationSummary", "kind": "REPEATING_TABLE",
+            "tableNo": "T10", "sourcePath": "", "enabled": True,
+        }],
+    }
+    catalog = [{
+        "fieldCode": "uncategorized.field_002", "collectionCode": "conclusions",
+        "legacyJsonPath": "$.conclusions[*].text",
+    }]
+
+    mapping = apply_template_block_rules(snapshot, groups, catalog)[0]
+
+    assert mapping["standardGroupCode"] == "validationSummary"
+    assert mapping["sourcePath"] == "$.validationSummary[*].injections[*].text"
+    assert mapping["groupItemPath"] == "$.validationSummary[*]"
+    assert mapping["repeatType"] == "ROW"

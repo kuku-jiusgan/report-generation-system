@@ -1,3 +1,4 @@
+import base64
 import tempfile
 from pathlib import Path
 
@@ -88,3 +89,28 @@ def test_chart_images_in_row_order_pair_by_position(monkeypatch) -> None:
     assert values[0] == values[1]
     assert values[2] == values[3]
     assert values[0] != values[2]
+
+
+def test_chart_images_can_select_intermediate_precision_charts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        excel_chart_extractor, "_rendered_chart_images",
+        lambda path: [(4, b"normal-1"), (16, b"middle-1"), (28, b"normal-2"), (40, b"middle-2")],
+    )
+
+    values = excel_chart_extractor.extract_residual_chart_values(WORKBOOK, 1, 1, 2)
+
+    expected = [b"middle-1", b"middle-2"]
+    assert [value.split(",", 1)[1] for value in values] == [
+        base64.b64encode(content).decode("ascii") for content in expected
+    ]
+
+
+@pytest.mark.parametrize(("start_index", "step"), [(-1, 2), (0, 0), (10, 2)])
+def test_chart_selection_rejects_invalid_or_empty_selection(monkeypatch, start_index, step) -> None:
+    monkeypatch.setattr(
+        excel_chart_extractor, "_rendered_chart_images",
+        lambda path: [(4, b"p1"), (16, b"p2"), (28, b"p3"), (40, b"p4")],
+    )
+
+    with pytest.raises(excel_chart_extractor.ExcelChartError):
+        excel_chart_extractor.extract_residual_chart_values(WORKBOOK, 1, start_index, step)

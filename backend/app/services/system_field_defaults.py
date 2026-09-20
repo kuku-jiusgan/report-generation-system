@@ -13,22 +13,13 @@ def _field_code(database: Database, legacy: str) -> str:
 
 
 def ensure_system_field_defaults(database: Database) -> None:
-    with database.connect() as connection:
-        connection.execute(
-            """CREATE TABLE IF NOT EXISTS system_field_chapters (
-               field_code TEXT NOT NULL, chapter_id INTEGER NOT NULL, order_no INTEGER NOT NULL DEFAULT 0,
-               PRIMARY KEY(field_code,chapter_id),
-               FOREIGN KEY(field_code) REFERENCES lims_field_catalog(field_code)
-                   ON UPDATE CASCADE ON DELETE CASCADE,
-               FOREIGN KEY(chapter_id) REFERENCES admin_template_chapters(id) ON DELETE CASCADE)"""
-        )
     field_code = _field_code(database, "narrative.chapter")
     if not database.get_lims_field(field_code):
         database.upsert_lims_field({
             "fieldCode": field_code, "label": "章节", "groupCode": "概述",
             "collectionCode": "narrative", "dataType": "richText", "cardinality": "ONE",
             "jsonKey": "chapter",
-            "legacyJsonPath": "$.narrative.chapter", "description": "由 AI 生成的概述章节内容",
+            "legacyJsonPath": "$.narrative.chapter", "description": "概述章节内容",
             "outputFormat": "", "defaultValue": "", "validationRegex": "",
             "orderNo": 0, "enabled": True,
         })
@@ -45,31 +36,4 @@ def ensure_system_field_defaults(database: Database) -> None:
         database.save_system_field_rule({
             "fieldCode": executor_code, "name": "默认执行单位", "sourceType": "FIXED", "priority": 100,
             "config": {"value": "山东大学淄博生物医药研究院"}, "transform": "TRIM", "enabled": True,
-        })
-    ai_rules = [rule for rule in database.list_system_field_rules(field_code) if rule.get("sourceType") == "AI"]
-    project_code = _field_code(database, "project.name")
-    client_code = _field_code(database, "samples.clientName")
-    validation_code = _field_code(database, "validationSummary.field1")
-    ai_config = {
-        "contextVariables": [
-            {"fieldCode": project_code, "required": True, "mode": "FIRST", "separator": "、", "defaultValue": ""},
-            {"fieldCode": client_code, "required": True, "mode": "FIRST", "separator": "、", "defaultValue": ""},
-            {"fieldCode": executor_code, "required": True, "mode": "FIRST", "separator": "、", "defaultValue": ""},
-            {"fieldCode": validation_code, "required": True, "mode": "JOIN_UNIQUE", "separator": "、", "defaultValue": ""},
-        ],
-        "promptTemplate": (
-            "请仅根据以下事实生成一个正式、简洁的中文概述段落，不得补充未提供的信息：\n"
-            f"方法名称：{{{{{project_code}}}}}\n委托单位：{{{{{client_code}}}}}\n"
-            f"开发及验证单位：{{{{{executor_code}}}}}\n"
-            f"验证内容：{{{{{validation_code}}}}}\n"
-            "句式要求：说明该方法由委托单位委托执行单位开发并进行方法学验证，随后列出验证内容。"
-        ),
-        "outputType": "richText", "model": "", "maxLength": 800,
-        "requireCitations": True, "requiresApproval": True,
-    }
-    if not ai_rules:
-        database.save_system_field_rule({
-            "fieldCode": field_code, "name": "AI 生成概述章节", "sourceType": "AI", "priority": 10,
-            "config": ai_config,
-            "transform": "TRIM", "enabled": True,
         })

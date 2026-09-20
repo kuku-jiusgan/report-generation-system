@@ -27,7 +27,6 @@ const fields = ref<StandardField[]>([]);
 const chapters = ref<StandardFieldCatalogChapter[]>([]);
 const groups = ref<SystemFieldGroup[]>([]);
 const catalogUnmappedFields = ref<StandardField[]>([]);
-const expandedChapters = ref<Set<number>>(new Set());
 const selected = ref<StandardField>();
 const selectedChapterId = ref<number>();
 const selectedGroupCode = ref("");
@@ -100,48 +99,6 @@ function ruleMethodNote(rule: CatalogRule) {
   });
   return details.slice(0, 3).join("；") || "尚未配置提取参数";
 }
-interface FieldChapterNode {
-  id: number;
-  code: string;
-  title: string;
-  enabled: boolean;
-  fields: StandardField[];
-  children: FieldChapterNode[];
-  fieldCount: number;
-}
-function buildChapterNode(chapter: StandardFieldCatalogChapter, keyword: string): FieldChapterNode | undefined {
-  const chapterMatches = !keyword || `${chapter.code} ${chapter.title}`.toLowerCase().includes(keyword);
-  const directFields = chapter.fields
-    .filter((item) => chapterMatches || `${item.label} ${item.fieldCode} ${item.groupCode}`.toLowerCase().includes(keyword))
-    .sort((a, b) => a.orderNo - b.orderNo || a.id - b.id);
-  const children = chapter.children
-    .map((item) => buildChapterNode(item, keyword))
-    .filter((item): item is FieldChapterNode => Boolean(item));
-  if (keyword && !chapterMatches && !directFields.length && !children.length) return undefined;
-  const subtreeCodes = new Set(directFields.map((item) => item.fieldCode));
-  for (const child of children) {
-    collectNodeFieldCodes(child, subtreeCodes);
-  }
-  return {
-    id: chapter.id,
-    code: chapter.code,
-    title: chapter.title,
-    enabled: chapter.enabled,
-    fields: directFields,
-    children,
-    fieldCount: subtreeCodes.size,
-  };
-}
-function collectNodeFieldCodes(node: FieldChapterNode, result: Set<string>) {
-  node.fields.forEach((item) => result.add(item.fieldCode));
-  node.children.forEach((item) => collectNodeFieldCodes(item, result));
-}
-const chapterTree = computed(() => {
-  const keyword = search.value.trim().toLowerCase();
-  return chapters.value
-    .map((item) => buildChapterNode(item, keyword))
-    .filter((item): item is FieldChapterNode => Boolean(item));
-});
 const directoryOrderedGroups = computed(() => {
   const ordered: SystemFieldGroup[] = [];
   const added = new Set<string>();
@@ -162,31 +119,6 @@ const directoryOrderedGroups = computed(() => {
   });
   return ordered;
 });
-const visibleChapterRows = computed(() => {
-  const rows: Array<{ node: FieldChapterNode; depth: number; open: boolean }> = [];
-  const searching = Boolean(search.value.trim());
-  function visit(items: FieldChapterNode[], depth: number) {
-    for (const node of items) {
-      const open = searching || expandedChapters.value.has(node.id);
-      rows.push({ node, depth, open });
-      if (open) visit(node.children, depth + 1);
-    }
-  }
-  visit(chapterTree.value, 0);
-  return rows;
-});
-const unmappedFields = computed(() => {
-  const keyword = search.value.trim().toLowerCase();
-  return catalogUnmappedFields.value.filter((item) =>
-    !keyword || `${item.label} ${item.fieldCode} ${item.groupCode}`.toLowerCase().includes(keyword),
-  );
-});
-function toggleChapter(id: number) {
-  const next = new Set(expandedChapters.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  expandedChapters.value = next;
-}
 function selectGroup(group: SystemFieldGroup) {
   selectedGroupCode.value = group.groupCode;
   groupDraft.value = { itemPath: "", sourceMappings: [], ...JSON.parse(JSON.stringify(group)) };
@@ -401,7 +333,7 @@ onMounted(() => { void Promise.all([loadLimsMetadata(), loadFields()]); });
       <aside class="field-index">
         <div class="index-head"><h1>标准字段目录</h1><span>{{ fields.length }} 个字段</span></div>
         <el-input v-model="search" :prefix-icon="Search" placeholder="搜索字段名称或编码" clearable />
-        <SystemFieldCatalogTree :chapters="chapterTree" :groups="directoryOrderedGroups" :fields="fields" :selected-code="selected?.fieldCode" @select="selectField" @group="selectGroup" @chapter="selectChapter" />
+        <SystemFieldCatalogTree :chapters="chapters" :groups="directoryOrderedGroups" :fields="fields" :unmapped-fields="catalogUnmappedFields" :keyword="search" :selected-code="selected?.fieldCode" @select="selectField" @group="selectGroup" @chapter="selectChapter" />
       </aside>
       <section class="field-workspace">
         <section v-if="selectedGroup && !draft" class="definition-band">

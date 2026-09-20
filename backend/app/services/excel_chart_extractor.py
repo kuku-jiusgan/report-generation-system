@@ -70,7 +70,22 @@ def _rendered_chart_images(path: Path) -> list[tuple[int, bytes]]:
         return images
 
 
-def extract_residual_chart_values(path: Path, points_per_test: int = 5) -> list[str]:
+def _select_charts(items: list, start_index: int, step: int) -> list:
+    if start_index < 0:
+        raise ExcelChartError("图表起始序号不能小于 0")
+    if step < 1:
+        raise ExcelChartError("图表选择步长必须是正整数")
+    selected = items[start_index::step]
+    if not selected:
+        raise ExcelChartError(
+            f"图表选择配置未命中任何图表：起始序号 {start_index}，步长 {step}，图表总数 {len(items)}"
+        )
+    return selected
+
+
+def extract_residual_chart_values(
+    path: Path, points_per_test: int = 5, chart_start_index: int = 0, chart_step: int = 2,
+) -> list[str]:
     workbook = load_workbook(path, data_only=False, read_only=False, keep_vba=True)
     if "线性" not in workbook.sheetnames:
         raise ExcelChartError("Excel 缺少“线性”工作表")
@@ -83,9 +98,9 @@ def extract_residual_chart_values(path: Path, points_per_test: int = 5) -> list[
     rows = [row for row, _ in images]
     if any(current < previous for previous, current in zip(rows, rows[1:])):
         raise ExcelChartError("图表图片渲染顺序与图表行序不一致，无法可靠配对图片")
-    normal_images = [image for index, (_, image) in enumerate(images) if index % 2 == 0]
+    selected_images = _select_charts(images, chart_start_index, chart_step)
     values: list[str] = []
-    for image in normal_images:
+    for _, image in selected_images:
         data_url = "data:image/png;base64," + base64.b64encode(image).decode("ascii")
         values.extend([data_url] * points_per_test)
     return values
@@ -99,15 +114,18 @@ def _peak_area_reference(x_reference: str) -> str:
     return f"{match.group(1)}{row}{match.group(3)}{row}"
 
 
-def extract_regression_chart_values(path: Path, points_per_test: int = 1) -> list[str]:
+def extract_regression_chart_values(
+    path: Path, points_per_test: int = 1, chart_start_index: int = 0, chart_step: int = 2,
+) -> list[str]:
     """用 Excel 的实际浓度和峰面积生成每个杂质的线性回归曲线图。"""
     workbook = load_workbook(path, data_only=False, read_only=False, keep_vba=False)
     if "线性" not in workbook.sheetnames:
         raise ExcelChartError("Excel 缺少“线性”工作表")
     sheet = workbook["线性"]
-    charts = sorted(sheet._charts, key=_chart_row)[::2]
+    charts = sorted(sheet._charts, key=_chart_row)
     if not charts:
         raise ExcelChartError("Excel 的“线性”工作表缺少可用于生成回归曲线的图表")
+    charts = _select_charts(charts, chart_start_index, chart_step)
     for chart in charts:
         if len(chart.ser) != 1:
             raise ExcelChartError("线性图表必须且只能包含一个数据系列")

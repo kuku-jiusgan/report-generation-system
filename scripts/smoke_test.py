@@ -21,7 +21,7 @@ def request(path: str, method: str = "GET", body: dict | None = None):
 
 reports = request("/reports")
 report = next((item for item in reports if item["resolved_data"].get("test_items")), None)
-report = report or request("/reports", "POST", {})
+report = report or request("/reports", "POST", {"title": "冒烟测试报告"})
 bindings = request(f"/reports/{report['id']}/bindings")
 
 item = report["resolved_data"]["test_items"][0]

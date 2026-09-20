@@ -68,7 +68,7 @@ class ReportData(BaseModel):
 
 
 class ApplyLimsRequest(BaseModel):
-    import_id: str
+    project_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     instance_ids: list[str] = Field(min_length=1)
     conflict_resolutions: dict[str, str] = Field(default_factory=dict)
     force: bool = False
@@ -84,10 +84,11 @@ class QueryLimsRequest(BaseModel):
 
 class CreateReportRequest(BaseModel):
     template_id: str | None = Field(default=None, min_length=1)
-    title: str | None = None
+    title: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
     source_document_id: str | None = None
     excel_document_id: str | None = None
     protocol_document_id: str | None = Field(default=None, min_length=1)
+    defer_word_generation: bool = False
     data: ReportData | None = None
 
 

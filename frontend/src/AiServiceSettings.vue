@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { Connection, Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { adminApi, type AiServiceConfig } from './admin-api'
+import { AI_MAX_OUTPUT_TOKENS, adminApi, type AiServiceConfig } from './admin-api'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -52,7 +52,7 @@ onMounted(load)
           <el-form-item label="请求超时（秒）"><el-input-number v-model="config.timeout" :min="5" :max="300" controls-position="right" /></el-form-item>
         </div>
         <div class="form-row">
-          <el-form-item label="默认最大输出 Token 数"><el-input-number v-model="config.maxTokens" :min="100" :max="8000" controls-position="right" /></el-form-item>
+          <el-form-item label="默认最大输出 Token 数"><el-input-number v-model="config.maxTokens" :min="100" :max="AI_MAX_OUTPUT_TOKENS" controls-position="right" /></el-form-item>
           <el-form-item label="思考模式"><el-switch v-model="config.thinkingEnabled" active-text="开启" inactive-text="关闭" /></el-form-item>
         </div>
         <el-form-item label="API Key">

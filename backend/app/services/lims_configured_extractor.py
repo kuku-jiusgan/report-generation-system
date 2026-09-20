@@ -4,6 +4,8 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .system_field_rule_invariant import rules_by_field
+
 from lxml import html
 
 from .lims_table_utils import table_grid
@@ -283,8 +285,15 @@ def _matrix_values(rows: list[list[str]], rule: dict[str, Any]) -> list[tuple[in
     exclude_pattern = str(config.get("excludeRowPattern") or "")
     column_pattern = str(config.get("columnPattern") or "")
     headers = _column_headers(rows, header_rows)
+    if row_start >= len(rows):
+        return []
     output = []
-    for row in range(row_start, len(rows), row_stride):
+    # A fixed value row (for example the impurity name in the matrix header)
+    # defines one record per selected column.  Iterating every data row would
+    # repeat that same header value once for each injection.
+    row_indexes = ([row_start] if config.get("valueRowIndex") not in (None, "")
+                   else range(row_start, len(rows), row_stride))
+    for row in row_indexes:
         row_text = "|".join(rows[row])
         if (row_pattern and not _matches(row_pattern, row_text)) or (exclude_pattern and _matches(exclude_pattern, row_text)):
             continue
@@ -444,31 +453,27 @@ def apply_configured_extraction(
     fields: list[dict[str, Any]],
     rules: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    by_field: dict[str, list[dict[str, Any]]] = {}
-    for rule in rules:
-        if rule.get("enabled", True):
-            by_field.setdefault(str(rule.get("fieldCode") or ""), []).append(rule)
+    by_field = rules_by_field(rules)
     for field in fields:
         if not field.get("enabled", True):
             continue
-        candidates = sorted(by_field.get(field["fieldCode"], []), key=lambda item: item.get("priority", 100))
-        for rule in candidates:
-            extracted = _extract(instance, payload, rule)
-            values = extracted if isinstance(extracted, list) else [extracted]
-            raw_values = [value.value if isinstance(value, _LocatedValue) else value for value in values]
-            evidences = [value.evidence if isinstance(value, _LocatedValue) else None for value in values]
-            transformed = [_transform(_capture(value, str(_rule_config(rule).get("valuePattern") or ""), field.get("fieldCode", "")),
-                                       field, rule)
-                           for value in raw_values]
-            target_path = str(field.get("legacyJsonPath") or field.get("fieldCode") or "")
-            if field.get("cardinality") == "MANY" or "[*]" in target_path:
-                if any(value not in (None, "") for value in transformed):
-                    # 保留行位置：空值不回填，避免后续行整体前移错位
-                    _write(payload, field, transformed, evidences)
-                    break
-                continue
-            available = next((value for value in transformed if value not in (None, "")), None)
-            if available is not None:
-                _write(payload, field, available)
-                break
+        rule = by_field.get(field["fieldCode"])
+        if not rule or not rule.get("enabled", True):
+            continue
+        extracted = _extract(instance, payload, rule)
+        values = extracted if isinstance(extracted, list) else [extracted]
+        raw_values = [value.value if isinstance(value, _LocatedValue) else value for value in values]
+        evidences = [value.evidence if isinstance(value, _LocatedValue) else None for value in values]
+        transformed = [_transform(_capture(value, str(_rule_config(rule).get("valuePattern") or ""), field.get("fieldCode", "")),
+                                  field, rule)
+                       for value in raw_values]
+        target_path = str(field.get("legacyJsonPath") or field.get("fieldCode") or "")
+        if field.get("cardinality") == "MANY" or "[*]" in target_path:
+            if any(value not in (None, "") for value in transformed):
+                # 保留行位置：空值不回填，避免后续行整体前移错位
+                _write(payload, field, transformed, evidences)
+            continue
+        available = next((value for value in transformed if value not in (None, "")), None)
+        if available is not None:
+            _write(payload, field, available)
     return payload

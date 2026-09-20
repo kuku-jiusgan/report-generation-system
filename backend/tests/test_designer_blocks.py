@@ -9,24 +9,32 @@ class DesignerRepositoryStub:
     database = object()
 
     @staticmethod
+    def list_templates() -> list[dict]:
+        return []
+
+    @staticmethod
     def list_mappings() -> list[dict]:
         return []
 
     @staticmethod
-    def active_workspace() -> None:
-        return None
+    def active_workspace() -> dict:
+        return {
+            "templateId": "template-1", "templateName": "测试模板",
+            "versionId": "version-1", "versionNo": 1,
+            "versionStatus": "DRAFT", "templateFile": None,
+        }
 
     @staticmethod
     def standard_field_catalog() -> dict:
         return {
             "chapters": [{
-                "id": 71, "code": "7.1", "title": "系统适用性",
+                "id": 171, "code": "7.1", "title": "系统适用性",
                 "fields": [{"fieldCode": "method.testMethod", "label": "试验方法", "enabled": True}],
                 "children": [],
             }],
             "groups": [{
                 "groupCode": "systemSuitability", "label": "系统适用性结果",
-                "chapterIds": [71], "fields": [], "enabled": True,
+                "chapterIds": [171], "chapterCodes": ["7.1"], "fields": [], "enabled": True,
             }],
         }
 
@@ -39,6 +47,10 @@ class DesignerRepositoryStub:
 
     @staticmethod
     def list_table_rules() -> list[dict]:
+        return []
+
+    @staticmethod
+    def list_template_blocks(_version_id: str) -> list[dict]:
         return []
 
 
@@ -95,12 +107,16 @@ class TemplateBlockRepositoryStub(DesignerRepositoryStub):
 def test_designer_blocks_include_direct_fields_and_groups_without_mixing() -> None:
     direct_field = {"fieldCode": "method.testMethod", "label": "试验方法", "enabled": True}
     grouped_field = {"fieldCode": "systemSuitability.peakArea", "label": "峰面积", "enabled": True}
-    chapters = [{
-        "id": 71, "code": "7.1", "title": "系统适用性", "fields": [direct_field], "children": [],
+    catalog_chapters = [{
+        "id": 171, "code": "7.1", "title": "系统适用性", "fields": [direct_field], "children": [],
+    }]
+    template_chapters = [{
+        "id": 71, "code": "7.1", "title": "系统适用性", "children": [],
     }]
     groups = [{
         "groupCode": "systemSuitability", "label": "系统适用性结果",
-        "chapterIds": [71], "fields": [grouped_field], "enabled": True,
+        "chapterIds": [171], "chapterCodes": ["7.1"],
+        "fields": [grouped_field], "enabled": True,
     }]
     mappings = [{
         "id": 11, "chapterId": 71, "standardFieldCode": "method.testMethod",
@@ -110,7 +126,9 @@ def test_designer_blocks_include_direct_fields_and_groups_without_mixing() -> No
         "controlTag": "cc.peak-area", "sourceType": "LIMS",
     }]
 
-    blocks, groups_by_chapter = designer_blocks(chapters, groups, mappings, {}, [])
+    blocks, groups_by_chapter = designer_blocks(
+        catalog_chapters, template_chapters, groups, mappings, {}, [],
+    )
 
     assert groups_by_chapter[71] == groups
     assert [block["title"] for block in blocks[71]] == ["章节字段", "系统适用性结果"]
@@ -123,21 +141,31 @@ def test_designer_blocks_include_direct_fields_and_groups_without_mixing() -> No
 
 
 def test_designer_blocks_include_direct_fields_from_nested_chapters() -> None:
-    chapters = [{
-        "id": 7, "fields": [], "children": [{
-            "id": 71, "fields": [{"fieldCode": "method.testMethod", "label": "试验方法"}],
+    catalog_chapters = [{
+        "id": 107, "code": "7", "fields": [], "children": [{
+            "id": 171, "code": "7.1",
+            "fields": [{"fieldCode": "method.testMethod", "label": "试验方法"}],
             "children": [],
         }],
     }]
+    template_chapters = [{
+        "id": 7, "code": "7", "children": [{"id": 71, "code": "7.1", "children": []}],
+    }]
 
-    blocks, _ = designer_blocks(chapters, [], [], {}, [])
+    blocks, _ = designer_blocks(catalog_chapters, template_chapters, [], [], {}, [])
 
     assert 7 not in blocks
     assert blocks[71][0]["standardFields"][0]["label"] == "试验方法"
 
 
-def test_designer_route_includes_chapter_fields_from_standard_catalog(tmp_path: Path) -> None:
+def test_designer_route_includes_chapter_fields_from_standard_catalog(
+    tmp_path: Path, monkeypatch,
+) -> None:
     settings = Settings(data_dir=tmp_path / "data", template_path=tmp_path / "template.docx")
+    monkeypatch.setattr(
+        "backend.app.services.template_file_store.TemplateFileStore.ensure_active_draft",
+        lambda self: self.template_path,
+    )
     router = create_admin_router(DesignerRepositoryStub(), settings, AuthStub())
     endpoint = next(route.endpoint for route in router.routes if route.path == "/api/v1/admin/designer")
 

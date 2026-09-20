@@ -7,6 +7,8 @@ import type {
   DesignerBlock, DesignerChapter, MappingRule, TableRule, TemplateDesigner,
 } from "./admin-designer-types";
 
+export const AI_MAX_OUTPUT_TOKENS = 80000;
+
 const http = axios.create({ baseURL: "/api/v1/admin", timeout: 120000 });
 http.interceptors.response.use(undefined, (error) => {
   if (error.response?.status === 401) window.dispatchEvent(new Event("auth-expired"));
@@ -102,7 +104,8 @@ export interface SystemFieldGroup {
   /** 由 groupCode 推导的标准数据集合路径；仅用于展示，不能手动修改。 */
   itemPath: string; itemKey: string; orderNo: number; enabled: boolean; fieldCount: number;
   sourceMappings: SystemGroupSourceMapping[];
-  chapterIds: number[]; fields: Array<{ fieldCode: string; label: string; dataType: string; cardinality: string; fieldPath: string; jsonKey: string; levelKey: string; enabled: boolean }>;
+  chapterIds: number[]; chapterCodes: string[];
+  fields: Array<{ fieldCode: string; label: string; dataType: string; cardinality: string; fieldPath: string; jsonKey: string; levelKey: string; enabled: boolean }>;
   levels: SystemFieldGroupLevel[];
   /** 按当前层级配置生成的记录结构预览，取值用字段名占位 */
   structurePreview?: Record<string, unknown>;

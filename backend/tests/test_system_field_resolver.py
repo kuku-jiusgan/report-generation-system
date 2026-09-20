@@ -15,11 +15,10 @@ def rule(field: str, source: str, priority: int, config: dict, rule_id: int) -> 
     }
 
 
-def test_priority_fallback_and_text_composition() -> None:
+def test_single_rule_and_text_composition() -> None:
     payload = {"sample": {"name": "阿司匹林"}}
     report_data: dict = {"source_payloads": {"AI": {}}}
     rules = [
-        rule("sample.name", "AI", 10, {}, 1),
         rule("sample.name", "LIMS", 20, {}, 2),
         rule("report.title", "CALCULATED", 30, {
             "dependencies": ["sample.name"], "textTemplate": "{sample.name}分析报告",

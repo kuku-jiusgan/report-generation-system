@@ -162,7 +162,7 @@ function format(value: unknown): string {
 
     <h3>字段取值与来源 <small>{{ fieldRows.length }} 个字段</small></h3>
     <div v-if="catalog" class="field-directory">
-      <SystemFieldCatalogTree :chapters="catalog.chapters" :groups="catalog.groups" :fields="catalog.fields"
+      <SystemFieldCatalogTree :chapters="catalog.chapters" :groups="catalog.groups" :fields="catalog.fields" :unmapped-fields="catalog.unmappedFields"
         :selected-code="selectedField?.fieldCode" :selected-group="selectedGroup?.groupCode"
         @select="selectField" @group="selectGroup" />
       <section class="field-inspector">

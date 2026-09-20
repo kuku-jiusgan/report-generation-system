@@ -236,7 +236,7 @@ async function applySelectedLims() {
     closeOnlyOffice()
     report.value = await applyLimsToReport(
       report.value.id,
-      limsImport.value.id,
+      limsProjectId.value.trim(),
       selectedLimsInstances.value.map((item) => item.instanceId),
       { ...conflictResolutions },
       force,

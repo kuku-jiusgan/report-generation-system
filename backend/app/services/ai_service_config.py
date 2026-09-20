@@ -6,6 +6,9 @@ from typing import Any
 from ..config import get_settings
 
 
+MAX_OUTPUT_TOKENS = 80_000
+
+
 def _path() -> Path:
     return get_settings().data_dir / "ai-service.json"
 
@@ -24,7 +27,7 @@ def load_ai_service_config(include_secret: bool = False) -> dict[str, Any]:
         "baseUrl": str(stored.get("baseUrl") or settings.ai_base_url),
         "model": str(stored.get("model") or settings.ai_model),
         "timeout": float(stored.get("timeout") or settings.ai_timeout),
-        "maxTokens": max(100, min(int(stored.get("maxTokens", settings.ai_max_tokens)), 8000)),
+        "maxTokens": max(100, min(int(stored.get("maxTokens", settings.ai_max_tokens)), MAX_OUTPUT_TOKENS)),
         "thinkingEnabled": bool(stored.get("thinkingEnabled", settings.ai_thinking_enabled)),
         "apiKeyConfigured": bool(api_key),
         "apiKeyMasked": f"{api_key[:3]}***{api_key[-3:]}" if len(api_key) >= 8 else ("******" if api_key else ""),
@@ -41,7 +44,7 @@ def save_ai_service_config(item: dict[str, Any]) -> dict[str, Any]:
         "baseUrl": str(item.get("baseUrl") or "").strip().rstrip("/"),
         "apiKey": api_key, "model": str(item.get("model") or "").strip(),
         "timeout": max(5.0, min(float(item.get("timeout") or 60), 300.0)),
-        "maxTokens": max(100, min(int(item.get("maxTokens") or 800), 8000)),
+        "maxTokens": max(100, min(int(item.get("maxTokens") or 800), MAX_OUTPUT_TOKENS)),
         "thinkingEnabled": bool(item.get("thinkingEnabled", False)),
     }
     path = _path()

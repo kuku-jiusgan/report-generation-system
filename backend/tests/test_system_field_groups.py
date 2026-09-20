@@ -7,6 +7,7 @@ from backend.app.database import Database
 from backend.app.services.system_field_group_levels import save_group_level
 from backend.app.services.system_field_groups import (
     assign_field_to_group,
+    delete_system_field_group,
     ensure_system_field_groups,
     list_system_field_groups,
     move_field_ownership,
@@ -157,9 +158,10 @@ def test_field_catalog_uses_formal_group_relationship_for_display() -> None:
 def test_chapter_field_list_only_uses_groups_assigned_to_that_chapter() -> None:
     with tempfile.TemporaryDirectory() as directory:
         database = _database(Path(directory))
+        ensure_system_field_groups(database)
         with database.connect() as connection:
             chapter_id = connection.execute(
-                """INSERT INTO admin_template_chapters(code,title,order_no,enabled,updated_at)
+                """INSERT INTO system_field_catalog_chapters(code,title,order_no,enabled,updated_at)
                    VALUES('7.3','检测限与定量限',1,1,'now')"""
             ).lastrowid
         for code, label in (("specificity.name", "专属性杂质"), ("detection.name", "检测限杂质")):
@@ -176,7 +178,7 @@ def test_chapter_field_list_only_uses_groups_assigned_to_that_chapter() -> None:
         assign_field_to_group(database, "detection", "detection.name")
         with database.connect() as connection:
             connection.execute(
-                "INSERT INTO system_field_group_chapters(group_code,chapter_id) VALUES('detection',%s)",
+                "INSERT INTO system_field_catalog_groups(group_code,chapter_id) VALUES('detection',%s)",
                 (chapter_id,),
             )
 
@@ -198,14 +200,15 @@ def test_move_field_ownership_replaces_every_previous_directory_location() -> No
         save_system_field_group(database, {"groupCode": "source", "label": "原编组"})
         save_system_field_group(database, {"groupCode": "target", "label": "目标编组"})
         assign_field_to_group(database, "source", "custom.target")
+        ensure_system_field_groups(database)
         with database.connect() as connection:
             chapter_id = connection.execute(
-                """INSERT INTO admin_template_chapters(code,title,order_no,enabled,updated_at)
+                """INSERT INTO system_field_catalog_chapters(code,title,order_no,enabled,updated_at)
                    VALUES('8','目标章节',8,1,'now')"""
             ).lastrowid
             # 构造历史脏数据，验证迁移不会留下双重目录归属。
             connection.execute(
-                "INSERT INTO system_field_chapters(field_code,chapter_id,order_no) VALUES(%s,%s,%s)",
+                "INSERT INTO system_field_catalog_fields(field_code,chapter_id,order_no) VALUES(%s,%s,%s)",
                 ("custom.target", chapter_id, 7),
             )
 
@@ -217,7 +220,7 @@ def test_move_field_ownership_replaces_every_previous_directory_location() -> No
                 "SELECT group_code FROM system_field_group_fields WHERE field_code=%s", ("custom.target",),
             ).fetchall()
             chapter_rows = connection.execute(
-                "SELECT chapter_id FROM system_field_chapters WHERE field_code=%s", ("custom.target",),
+                "SELECT chapter_id FROM system_field_catalog_fields WHERE field_code=%s", ("custom.target",),
             ).fetchall()
         assert [row["group_code"] for row in group_rows] == ["target"]
         assert chapter_rows == []
@@ -229,7 +232,83 @@ def test_move_field_ownership_replaces_every_previous_directory_location() -> No
                 "SELECT group_code FROM system_field_group_fields WHERE field_code=%s", ("custom.target",),
             ).fetchall()
             chapter_rows = connection.execute(
-                "SELECT chapter_id,order_no FROM system_field_chapters WHERE field_code=%s", ("custom.target",),
+                "SELECT chapter_id,order_no FROM system_field_catalog_fields WHERE field_code=%s", ("custom.target",),
             ).fetchall()
         assert group_rows == []
         assert [(row["chapter_id"], row["order_no"]) for row in chapter_rows] == [(chapter_id, 7)]
+
+
+def test_delete_group_with_fields_is_rejected_without_changing_field() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = _database(Path(directory))
+        database.upsert_lims_field({
+            "fieldCode": "custom.target", "label": "目标字段", "groupCode": "未分类",
+            "collectionCode": "custom", "dataType": "string", "cardinality": "MANY",
+            "dbTable": "lims_standard_records", "dbColumn": "data_json", "jsonKey": "target",
+            "legacyJsonPath": "$.custom.target", "description": "", "outputFormat": "",
+            "defaultValue": "", "validationRegex": "", "orderNo": 1, "enabled": True,
+        })
+        save_system_field_group(database, {
+            "groupCode": "legacy", "label": "历史编组", "cardinality": "MANY",
+        })
+        assign_field_to_group(database, "legacy", "custom.target")
+
+        with pytest.raises(ValueError, match="仍包含 1 个字段"):
+            delete_system_field_group(database, "legacy")
+
+        field = database.get_lims_field("custom.target")
+        assert field is not None
+        assert field["groupCodes"] == ["legacy"]
+        assert field["groupCode"] == "未分类"
+        assert field["collectionCode"] == "legacy"
+        assert field["legacyJsonPath"] == "$.legacy[*].target"
+
+
+def test_delete_group_with_duplicate_field_membership_is_also_rejected() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = _database(Path(directory))
+        database.upsert_lims_field({
+            "fieldCode": "custom.conclusion", "label": "验证结论", "groupCode": "验证结论",
+            "collectionCode": "legacy", "dataType": "string", "cardinality": "MANY",
+            "dbTable": "lims_standard_records", "dbColumn": "data_json", "jsonKey": "text",
+            "legacyJsonPath": "$.legacy[*].text", "description": "", "outputFormat": "",
+            "defaultValue": "", "validationRegex": "", "orderNo": 1, "enabled": True,
+        })
+        save_system_field_group(database, {
+            "groupCode": "legacy", "label": "历史编组", "cardinality": "MANY",
+        })
+        save_system_field_group(database, {
+            "groupCode": "summary", "label": "结果汇总", "cardinality": "MANY",
+        })
+        save_group_level(database, "summary", {
+            "levelKey": "injections", "kind": "ARRAY", "orderNo": 1,
+        })
+        assign_field_to_group(database, "legacy", "custom.conclusion")
+        assign_field_to_group(database, "summary", "custom.conclusion")
+        with database.connect() as connection:
+            connection.execute(
+                "UPDATE system_field_group_fields SET level_key='injections' "
+                "WHERE group_code='summary' AND field_code='custom.conclusion'"
+            )
+        before = database.get_lims_field("custom.conclusion")
+
+        with pytest.raises(ValueError, match="仍包含 1 个字段"):
+            delete_system_field_group(database, "legacy")
+
+        field = database.get_lims_field("custom.conclusion")
+        assert field is not None
+        assert before is not None
+        assert field["groupCodes"] == ["legacy", "summary"]
+        assert field["collectionCode"] == before["collectionCode"]
+        assert field["legacyJsonPath"] == before["legacyJsonPath"]
+
+
+def test_delete_empty_group_succeeds() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = _database(Path(directory))
+        save_system_field_group(database, {
+            "groupCode": "empty", "label": "空编组", "cardinality": "ONE",
+        })
+
+        assert delete_system_field_group(database, "empty") is True
+        assert all(group["groupCode"] != "empty" for group in list_system_field_groups(database))

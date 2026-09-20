@@ -8,9 +8,8 @@ import { adminErrorText } from '../admin/designer-formatters'
 
 interface PublishingOptions {
   sources: Ref<DataSourceRule[]>
-  versions: Ref<RuleVersion[]>
   limsImports: Ref<LimsImport[]>
-  reloadDesigner: () => Promise<void>
+  onPublished: (version: RuleVersion) => void
 }
 
 export function useAdminPublishing(options: PublishingOptions) {
@@ -67,9 +66,8 @@ export function useAdminPublishing(options: PublishingOptions) {
       })
       publishing.value = true
       const version = await adminApi.publish(result.value)
-      options.versions.value = await adminApi.versions()
-      await options.reloadDesigner()
       ElMessage.success(`模板规则 V${version.versionNo} 已发布`)
+      options.onPublished(version)
     } catch (error) {
       if (error !== 'cancel' && error !== 'close') ElMessage.error(adminErrorText(error))
     } finally {

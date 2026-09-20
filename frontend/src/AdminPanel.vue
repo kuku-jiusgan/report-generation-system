@@ -45,7 +45,7 @@ defineProps<{
   catalogVersion?: AdminTemplateVersion;
   sessionUser: AuthUser;
 }>();
-defineEmits<{ back: []; logout: [] }>();
+const emit = defineEmits<{ back: []; logout: [] }>();
 type WorkspaceMode = "designer" | "sources" | "versions";
 
 const loading = ref(true);
@@ -158,9 +158,8 @@ const {
   runRecognition,
 } = useAdminPublishing({
   sources,
-  versions,
   limsImports,
-  reloadDesigner: () => loadDesigner(true),
+  onPublished: () => emit("back"),
 });
 const {
   onSourceTypeChange,

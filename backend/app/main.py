@@ -42,6 +42,7 @@ from .services.excel_report_source import apply_excel_source, apply_pdf_source, 
 from .services.rule_admin import RuleAdminRepository
 from .services.protocol_report_source import refresh_protocol_source
 from .services.protocol_document import apply_protocol_document
+from .services.report_lims_refresh import refresh_report_lims_payload
 from .services.report_template_runtime import resolve_runtime_template
 from .source_api import create_source_router
 from .report_utils import (
@@ -162,6 +163,8 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
     output_name = (f"report-{item['id']}-{output_suffix}.docx" if output_suffix
                    else f"report-{item['id']}-working.docx")
     refresh_protocol_source(database, settings, data)
+    if payload is None and str(data.get("active_source_type") or "").upper() == "LIMS":
+        refresh_report_lims_payload(database, settings, data)
     source_payloads = data.get("source_payloads", {})
     active_payload = payload or active_standard_payload(data)
     apply_group_contracts(active_payload, list_system_field_groups(database))
@@ -362,8 +365,15 @@ def create_report(request: CreateReportRequest,
                 "updated_by": user["id"],
             }
         )
+        if not request.defer_word_generation:
+            output_name = render_report_word(item, data, phase="创建报告", actor=user["id"])
+            item = database.update_report(
+                report_id, status="EDITING", output_name=output_name,
+                resolved_data=data, updated_by=user["id"],
+            )
+            if not item:
+                raise RuntimeError("报告工作文件已生成，但报告状态更新失败")
         database.create_version(report_id, data, "初始版本")
-        record_generation(report_id, data, "创建报告", user["id"])
         return report_response(item)
     except HTTPException:
         raise
@@ -372,6 +382,7 @@ def create_report(request: CreateReportRequest,
         if report_id:
             try:
                 database.delete_report(report_id)
+                (settings.reports_dir / f"report-{report_id}-working.docx").unlink(missing_ok=True)
             except Exception:
                 logger.exception("清理失败的报告草稿失败 report_id=%s", report_id)
         raise HTTPException(500, f"创建报告失败：{error}") from error
@@ -535,14 +546,15 @@ def rebuild_report_word(report_id: str, user: dict = Depends(auth.require("REPOR
     item = required_owned_report(report_id, user)
     require_automatic_edit_allowed(item)
     try:
-        output_name = render_report_word(item, item["resolved_data"],
+        data = dict(item["resolved_data"])
+        output_name = render_report_word(item, data,
                                          phase="重建 Word", actor=user["id"])
     except Exception as error:
         logger.exception("Word 重建失败 report_id=%s", report_id)
         raise HTTPException(500, f"Word 重建失败：{error}") from error
     return report_response(database.update_report(
         report_id, status="EDITING", output_name=output_name,
-        resolved_data=item["resolved_data"], updated_by=user["id"],
+        resolved_data=data, updated_by=user["id"],
         # 文件已重建，未保存的编辑会话不得再回写覆盖
         onlyoffice_document_key=None,
     ))

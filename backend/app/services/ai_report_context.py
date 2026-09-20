@@ -4,9 +4,22 @@ from typing import Any
 from .ai_field_generator import AiGenerationError, context_variables, needs_per_record_generation, resolve_context_values
 from .standard_payloads import standard_context_payload
 from .ai_context_inputs import prepare_ai_context
+from .system_field_resolver import _read_path
 
 
 logger = logging.getLogger(__name__)
+
+
+def _snapshot_field_value(code: str, active: dict[str, Any], original: dict[str, Any],
+                          fields: dict[str, dict[str, Any]]) -> Any:
+    if code in original:
+        return original[code]
+    field = fields.get(code)
+    if field is not None:
+        path = str(field.get("legacyJsonPath") or "")
+        if path.startswith("$."):
+            return _read_path(active, path)
+    return None
 
 
 def report_ai_context(generation: dict[str, Any], config: dict[str, Any],
@@ -26,10 +39,12 @@ def report_ai_context(generation: dict[str, Any], config: dict[str, Any],
         raise AiGenerationError("该生成记录的数据源快照格式无效") from error
     active, _ = prepare_ai_context(config, active, None, target_field)
     values = {}
+    fields_by_code = {str(field["fieldCode"]): field for field in context_fields or []}
     for variable in context_variables(config):
         group = variable.get("groupCode")
         code = str(group or variable["fieldCode"])
-        values[code] = active.get(code) if group else original.get(code)
+        values[code] = (active.get(code) if group else
+                        _snapshot_field_value(code, active, original, fields_by_code))
     records = []
     current_record = None
     per_record = needs_per_record_generation(config)

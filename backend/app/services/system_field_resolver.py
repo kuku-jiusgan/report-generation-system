@@ -1,16 +1,42 @@
 import logging
 import re
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any
 
 from .calculation_engine import CalculationError, evaluate_formula
-from .ai_field_generator import AiGenerationError, context_variables, generate_ai_text, resolve_context_values, needs_per_record_generation
+from .ai_field_generator import (
+    AiGenerationError, context_variables, generate_ai_text, needs_per_record_generation,
+    resolve_context_values,
+)
 from .excel_standard_path import excel_target_path
 from .payload_paths import PayloadPathError, set_payload_path
 from .ai_context_inputs import prepare_ai_context
 from .standard_payloads import standard_group_values
+from .system_field_rule_invariant import rules_by_field
 
 
 logger = logging.getLogger(__name__)
+AI_MAX_CONCURRENCY = 200
+_AI_EXECUTOR = ThreadPoolExecutor(max_workers=AI_MAX_CONCURRENCY,
+                                  thread_name_prefix="report-ai")
+
+
+@dataclass(frozen=True)
+class _AiCall:
+    field_code: str
+    rule: dict[str, Any]
+    inputs: dict[str, Any]
+    current_record: dict[str, Any] | None
+    record_index: int | None = None
+
+
+@dataclass
+class _AiFieldBatch:
+    field: dict[str, Any]
+    rule: dict[str, Any]
+    calls: list[_AiCall]
+    record_count: int | None = None
 
 
 def _read_path(source: Any, path: str) -> Any:
@@ -59,8 +85,7 @@ def _template_value(template: str, values: dict[str, Any]) -> str | None:
 
 def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, Any],
                 report_data: dict[str, Any], values: dict[str, Any],
-                current_record: dict[str, Any] | None = None,
-                context_fields: list[dict[str, Any]] | None = None) -> Any:
+                current_record: dict[str, Any] | None = None) -> Any:
     config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
     source_type = str(rule.get("sourceType") or "LIMS").upper()
     field_code = field["fieldCode"]
@@ -83,12 +108,6 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
     if source_type == "EXCEL":
         excel = report_data.get("source_payloads", {}).get("EXCEL", {})
         return _read_path(excel, excel_target_path(field, config.get("sourcePath")))
-    if source_type == "AI":
-        existing = report_data.get("source_payloads", {}).get("AI", {}).get(field_code)
-        if existing:
-            return existing
-        inputs, record = prepare_ai_context(config, values, current_record, field)
-        return generate_ai_text(field_code, rule, inputs, record, context_fields)
     if source_type == "FIXED":
         return config.get("value")
     if source_type == "MANUAL":
@@ -110,12 +129,98 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
     return None
 
 
+def _require_ai_dependencies(config: dict[str, Any], values: dict[str, Any],
+                             current_record: dict[str, Any] | None) -> None:
+    _, missing = resolve_context_values(config, values, current_record)
+    if missing:
+        raise AiGenerationError(f"AI 上下文字段缺失：{', '.join(missing)}")
+
+
+def _prepare_ai_batch(field: dict[str, Any], rule: dict[str, Any],
+                      values: dict[str, Any]) -> _AiFieldBatch:
+    config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
+    field_code = field["fieldCode"]
+    if not needs_per_record_generation(config):
+        inputs, record = prepare_ai_context(config, values, None, field)
+        _require_ai_dependencies(config, inputs, record)
+        return _AiFieldBatch(field, rule, [_AiCall(field_code, rule, inputs, record)])
+
+    collection_code = field.get("collectionCode")
+    if not collection_code:
+        raise AiGenerationError(f"AI字段 {field_code} 使用 CURRENT_RECORD 模式但不属于任何编组")
+    records = values.get(collection_code)
+    if not isinstance(records, list):
+        raise AiGenerationError(f"编组 {collection_code} 的数据不是数组，无法按记录生成")
+    calls = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        inputs, ai_record = prepare_ai_context(config, values, record, field)
+        _require_ai_dependencies(config, inputs, ai_record)
+        calls.append(_AiCall(field_code, rule, inputs, ai_record, index))
+    return _AiFieldBatch(field, rule, calls, len(records))
+
+
+def _run_ai_batches(batches: list[_AiFieldBatch], context_fields: list[dict[str, Any]]) \
+        -> tuple[dict[str, Any], dict[str, Exception]]:
+    calls = [call for batch in batches for call in batch.calls]
+    results: dict[str, Any] = {}
+    per_record = {
+        batch.field["fieldCode"]: [None] * batch.record_count
+        for batch in batches if batch.record_count is not None
+    }
+    if not calls:
+        return per_record, {}
+    logger.info("开始并发生成AI字段 fields=%d requests=%d concurrency=%d",
+                len(batches), len(calls), min(AI_MAX_CONCURRENCY, len(calls)))
+    failures: dict[str, Exception] = {}
+    futures: dict[Future[str], _AiCall] = {
+        _AI_EXECUTOR.submit(generate_ai_text, call.field_code, call.rule, call.inputs,
+                            call.current_record, context_fields): call
+        for call in calls
+    }
+    for future in as_completed(futures):
+        call = futures[future]
+        try:
+            value = future.result()
+        except AiGenerationError as error:
+            failures.setdefault(call.field_code, error)
+            continue
+        if call.record_index is None:
+            results[call.field_code] = value
+        else:
+            per_record[call.field_code][call.record_index] = value
+    for field_code, values in per_record.items():
+        if field_code not in failures:
+            results[field_code] = values
+    logger.info("AI字段并发生成完成 fields=%d succeeded=%d failed=%d",
+                len(batches), len(results), len(failures))
+    return results, failures
+
+
+def _store_resolved_value(field_code: str, field: dict[str, Any], rule: dict[str, Any],
+                          value: Any, payload: dict[str, Any], report_data: dict[str, Any],
+                          values: dict[str, Any]) -> None:
+    source_type = str(rule.get("sourceType") or "LIMS").upper()
+    values[field_code] = value
+    if source_type != "PROTOCOL":
+        _write_path(payload, str(field.get("legacyJsonPath") or field_code), value)
+    report_data.setdefault("original_values", {})[field_code] = value
+    if source_type == "PROTOCOL":
+        return
+    report_data.setdefault("field_sources", {})[field_code] = {
+        "type": rule.get("sourceType", "LIMS"), "ruleId": rule.get("id"),
+        "ruleName": rule.get("name", ""),
+        "sourcePath": (
+            excel_target_path(field, (rule.get("config") or {}).get("sourcePath"))
+            if source_type == "EXCEL" else (rule.get("config") or {}).get("sourcePath", "")
+        ),
+    }
+
+
 def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, Any]],
                           payload: dict[str, Any], report_data: dict[str, Any]) -> dict[str, Any]:
-    by_field: dict[str, list[dict[str, Any]]] = {}
-    for rule in rules:
-        if rule.get("enabled", True):
-            by_field.setdefault(str(rule.get("fieldCode") or ""), []).append(rule)
+    by_field = rules_by_field(rules)
     # values 包含两类：字段值（fieldCode）和编组数据（groupCode）
     values = {
         field["fieldCode"]: _read_path(payload, str(field.get("legacyJsonPath") or field["fieldCode"]))
@@ -134,68 +239,65 @@ def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, An
     )
     pending = {field["fieldCode"]: field for field in fields if field.get("enabled", True)}
     failures: dict[str, Exception] = {}
-    for _ in range(len(pending) + 1):
+    failed_ai_rules: set[tuple[str, Any]] = set()
+    while pending:
         progressed = False
+        ai_batches: list[_AiFieldBatch] = []
         for field_code, field in list(pending.items()):
-            for rule in sorted(by_field.get(field_code, []), key=lambda item: (item.get("priority", 100), item.get("id", 0))):
+            rule = by_field.get(field_code)
+            if rule and rule.get("enabled", True):
+                config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
+                source_type = str(rule.get("sourceType") or "LIMS").upper()
+                rule_key = (field_code, rule.get("id", id(rule)))
+                if source_type == "AI" and rule_key in failed_ai_rules:
+                    continue
                 try:
-                    # 检查是否需要按记录生成
-                    config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
-                    source_type = str(rule.get("sourceType") or "LIMS").upper()
                     # 前序规则可能刚写入或替换编组数据；每次执行都读取当前标准载荷。
                     values.update(standard_group_values(report_data, payload, group_codes))
-
-                    if source_type == "AI" and needs_per_record_generation(config):
-                        # 按记录生成：遍历编组的每条记录
-                        collection_code = field.get("collectionCode")
-                        if not collection_code:
-                            raise AiGenerationError(f"AI字段 {field_code} 使用 CURRENT_RECORD 模式但不属于任何编组")
-
-                        records = values.get(collection_code)
-                        if not isinstance(records, list):
-                            raise AiGenerationError(f"编组 {collection_code} 的数据不是数组，无法按记录生成")
-
-                        # 为每条记录生成AI字段值
-                        generated_values = []
-                        for record in records:
-                            if isinstance(record, dict):
-                                inputs, ai_record = prepare_ai_context(config, values, record, field)
-                                record_value = generate_ai_text(field_code, rule, inputs, ai_record, fields)
-                                generated_values.append(record_value)
-                            else:
-                                generated_values.append(None)
-
-                        value = generated_values
+                    if source_type == "AI":
+                        existing = report_data.get("source_payloads", {}).get("AI", {}).get(field_code)
+                        if _available(existing):
+                            value = existing
+                        else:
+                            ai_batches.append(_prepare_ai_batch(field, rule, values))
+                            continue
                     else:
-                        # 常规生成：整个字段一次性生成
-                        value = _rule_value(rule, field, payload, report_data, values, context_fields=fields)
+                        value = _rule_value(rule, field, payload, report_data, values)
                 except (CalculationError, AiGenerationError) as error:
                     failures[field_code] = error
                     logger.info("系统字段规则等待依赖 field=%s rule=%s reason=%s", field_code, rule.get("name"), error)
                     continue
                 if not _available(value):
                     continue
-                values[field_code] = value
-                if source_type != "PROTOCOL":
-                    _write_path(payload, str(field.get("legacyJsonPath") or field_code), value)
-                report_data.setdefault("original_values", {})[field_code] = value
-                if source_type == "PROTOCOL":
-                    del pending[field_code]
-                    progressed = True
-                    break
-                report_data.setdefault("field_sources", {})[field_code] = {
-                    "type": rule.get("sourceType", "LIMS"), "ruleId": rule.get("id"),
-                    "ruleName": rule.get("name", ""),
-                    "sourcePath": (
-                        excel_target_path(field, (rule.get("config") or {}).get("sourcePath"))
-                        if str(rule.get("sourceType") or "").upper() == "EXCEL"
-                        else (rule.get("config") or {}).get("sourcePath", "")
-                    ),
-                }
+                _store_resolved_value(field_code, field, rule, value, payload, report_data, values)
                 del pending[field_code]
                 progressed = True
-                break
-        if not progressed:
+
+        # 先让本轮所有本地规则落位，使 AI 读取到这一轮能产生的完整上下文。
+        if progressed:
+            continue
+        if not ai_batches:
+            break
+        ai_results, ai_failures = _run_ai_batches(ai_batches, fields)
+        failed_this_round = False
+        for batch in ai_batches:
+            field_code = batch.field["fieldCode"]
+            failure = ai_failures.get(field_code)
+            if failure is not None:
+                failures[field_code] = failure
+                failed_ai_rules.add((field_code, batch.rule.get("id", id(batch.rule))))
+                logger.info("AI字段并发生成失败 field=%s rule=%s reason=%s",
+                            field_code, batch.rule.get("name"), failure)
+                failed_this_round = True
+                continue
+            value = ai_results.get(field_code)
+            if not _available(value):
+                continue
+            _store_resolved_value(field_code, batch.field, batch.rule, value,
+                                  payload, report_data, values)
+            del pending[field_code]
+            progressed = True
+        if not progressed and not failed_this_round:
             break
     if pending:
         logger.info("系统字段未产生结果 fields=%s", ",".join(sorted(pending)))

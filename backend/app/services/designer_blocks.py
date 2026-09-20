@@ -11,6 +11,26 @@ def _catalog_fields_by_chapter(chapters: list[dict[str, Any]]) -> dict[int, list
     return result
 
 
+def _chapter_ids_by_code(chapters: list[dict[str, Any]]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    pending = list(chapters)
+    while pending:
+        chapter = pending.pop()
+        result[str(chapter["code"])] = int(chapter["id"])
+        pending.extend(chapter.get("children", []))
+    return result
+
+
+def _catalog_codes_by_id(chapters: list[dict[str, Any]]) -> dict[int, str]:
+    result: dict[int, str] = {}
+    pending = list(chapters)
+    while pending:
+        chapter = pending.pop()
+        result[int(chapter["id"])] = str(chapter["code"])
+        pending.extend(chapter.get("children", []))
+    return result
+
+
 def _mappings_for_fields(
     mappings: list[dict[str, Any]], chapter_id: int, fields: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -80,20 +100,26 @@ def _group_block(
 
 
 def designer_blocks(
-    catalog_chapters: list[dict[str, Any]], standard_groups: list[dict[str, Any]],
+    catalog_chapters: list[dict[str, Any]], template_chapters: list[dict[str, Any]],
+    standard_groups: list[dict[str, Any]],
     mappings: list[dict[str, Any]], configured_blocks: dict[str, dict[str, Any]],
     table_rules: list[dict[str, Any]],
 ) -> tuple[dict[int, list[dict[str, Any]]], dict[int, list[dict[str, Any]]]]:
+    template_ids = _chapter_ids_by_code(template_chapters)
+    catalog_codes = _catalog_codes_by_id(catalog_chapters)
     groups_by_chapter: dict[int, list[dict[str, Any]]] = {}
     for group in standard_groups:
-        for chapter_id in group.get("chapterIds", []):
-            groups_by_chapter.setdefault(int(chapter_id), []).append(group)
+        for chapter_code in group.get("chapterCodes", []):
+            template_id = template_ids.get(str(chapter_code))
+            if template_id is not None:
+                groups_by_chapter.setdefault(template_id, []).append(group)
 
     blocks_by_chapter: dict[int, list[dict[str, Any]]] = {}
-    for chapter_id, fields in _catalog_fields_by_chapter(catalog_chapters).items():
-        if fields:
-            blocks_by_chapter.setdefault(chapter_id, []).append(
-                _field_block(chapter_id, fields, mappings)
+    for catalog_id, fields in _catalog_fields_by_chapter(catalog_chapters).items():
+        template_id = template_ids.get(catalog_codes[catalog_id])
+        if fields and template_id is not None:
+            blocks_by_chapter.setdefault(template_id, []).append(
+                _field_block(template_id, fields, mappings)
             )
     for chapter_id, groups in groups_by_chapter.items():
         for index, group in enumerate(groups):

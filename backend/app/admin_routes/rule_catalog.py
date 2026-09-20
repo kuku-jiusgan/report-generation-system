@@ -29,8 +29,8 @@ def _field_prefix(repository: RuleAdminRepository, chapter_id: Any) -> str:
     with repository.database.connect() as connection:
         row = connection.execute(
             """WITH RECURSIVE lineage(id,parent_id,code) AS (
-               SELECT id,parent_id,code FROM admin_template_chapters WHERE id=%s
-               UNION ALL SELECT c.id,c.parent_id,c.code FROM admin_template_chapters c
+               SELECT id,parent_id,code FROM system_field_catalog_chapters WHERE id=%s
+               UNION ALL SELECT c.id,c.parent_id,c.code FROM system_field_catalog_chapters c
                JOIN lineage l ON l.parent_id=c.id)
                SELECT code FROM lineage WHERE parent_id IS NULL LIMIT 1""", (chapter_id,),
         ).fetchone() if chapter_id else None
@@ -77,10 +77,13 @@ def _template_references(repository: RuleAdminRepository, field_code: str) -> li
         for item in snapshot.get("mappings", []):
             if item.get("standardFieldCode") != field_code or not _is_real_template_reference(item):
                 continue
+            binding = describe_binding(locations, str(item.get("controlTag") or ""))
+            if not binding["bound"]:
+                continue
             references.append({
                 **item, "templateName": display_name,
                 "templateCode": template_code, "versionNo": version["version_no"],
-                **describe_binding(locations, str(item.get("controlTag") or "")),
+                **binding,
             })
     return references
 
@@ -139,6 +142,25 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
         field = repository.database.get_lims_field(field_code)
         if field:
             config = {**config, "sourcePath": excel_target_path(field, config.get("sourcePath"))}
+        if config.get("mode") in {"CHART_IMAGE", "LINEAR_REGRESSION_CHART"}:
+            try:
+                chart_start_index = int(config.get("chartStartIndex", 0))
+                chart_step = int(config.get("chartStep", 2))
+                points_per_test = int(config.get("pointsPerTest", 1))
+            except (TypeError, ValueError) as error:
+                raise HTTPException(422, "Excel 图表选择参数必须是整数") from error
+            if chart_start_index < 0:
+                raise HTTPException(422, "Excel 图表起始序号不能小于 0")
+            if chart_step < 1:
+                raise HTTPException(422, "Excel 图表选择步长必须是正整数")
+            if points_per_test < 1:
+                raise HTTPException(422, "Excel 图表使用次数必须是正整数")
+            config = {
+                **config,
+                "chartStartIndex": chart_start_index,
+                "chartStep": chart_step,
+                "pointsPerTest": points_per_test,
+            }
     for key in ("sectionPattern", "headerPattern", "valuePattern", "rowPattern", "excludeRowPattern", "columnPattern", "replacePattern"):
         pattern = config.get(key)
         if pattern:
@@ -387,7 +409,7 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
         if item.get("chapterId"):
             with repository.database.connect() as connection:
                 connection.execute(
-                    """INSERT IGNORE INTO system_field_chapters(field_code,chapter_id,order_no)
+                    """INSERT IGNORE INTO system_field_catalog_fields(field_code,chapter_id,order_no)
                        VALUES(%s,%s,%s)""", (saved["fieldCode"], item["chapterId"], saved.get("orderNo", 0)),
                 )
         if item.get("groupCode"):
@@ -459,9 +481,14 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
 
     @router.post("/system-fields/{field_code:path}/rules")
     def create_system_field_rule(field_code: str, item: dict[str, Any]) -> dict[str, Any]:
-        return repository.database.save_system_field_rule(
-            _validate_system_rule(repository, {**item, "fieldCode": field_code, "id": None}),
-        )
+        if repository.database.list_system_field_rules(field_code):
+            raise HTTPException(409, "该系统字段已有提取规则，请编辑现有规则")
+        try:
+            return repository.database.save_system_field_rule(
+                _validate_system_rule(repository, {**item, "fieldCode": field_code, "id": None}),
+            )
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
 
     @router.put("/system-field-rules/{rule_id}")
     def update_system_field_rule(rule_id: int, item: dict[str, Any]) -> dict[str, Any]:
@@ -482,6 +509,8 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
             return repository.database.save_system_field_rule(validated, rule_id)
         except KeyError as error:
             raise HTTPException(404, f"系统字段规则不存在: {error}") from error
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
 
     @router.delete("/system-field-rules/{rule_id}")
     def delete_system_field_rule(rule_id: int) -> dict[str, bool]:

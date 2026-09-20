@@ -6,6 +6,7 @@ from typing import Any
 from ..database import Database, now_iso
 from .excel_standard_path import excel_target_path
 from .group_namespace_migration import migrate_persisted_group_namespace
+from .system_field_catalog_chapters import ensure_system_field_catalog_chapters
 from .system_field_group_levels import (
     ensure_group_levels, field_path_for, json_path_for, list_group_levels,
 )
@@ -175,16 +176,6 @@ def ensure_system_field_groups(database: Database) -> None:
           FOREIGN KEY(group_code) REFERENCES system_field_groups(group_code) ON DELETE CASCADE,
           FOREIGN KEY(field_code) REFERENCES lims_field_catalog(field_code) ON UPDATE CASCADE ON DELETE CASCADE
         ) ENGINE=InnoDB""")
-        connection.execute("""CREATE TABLE IF NOT EXISTS system_field_group_chapters (
-          group_code VARCHAR(255) NOT NULL, chapter_id INTEGER NOT NULL, order_no INTEGER NOT NULL DEFAULT 0,
-          PRIMARY KEY(group_code,chapter_id),
-          FOREIGN KEY(group_code) REFERENCES system_field_groups(group_code) ON DELETE CASCADE,
-          FOREIGN KEY(chapter_id) REFERENCES admin_template_chapters(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB""")
-        connection.execute("""CREATE TABLE IF NOT EXISTS system_field_chapters (
-          field_code VARCHAR(255) NOT NULL, chapter_id INTEGER NOT NULL, order_no INTEGER NOT NULL DEFAULT 0,
-          PRIMARY KEY(field_code,chapter_id)
-        ) ENGINE=InnoDB""")
         # 历史数据曾把同一编组写成 Approval/approval，统一到小写编码。
         if connection.execute("SELECT 1 FROM system_field_groups WHERE group_code='Approval'").fetchone():
             connection.execute(
@@ -195,6 +186,7 @@ def ensure_system_field_groups(database: Database) -> None:
             connection.execute("DELETE FROM system_field_groups WHERE group_code='Approval'")
         _migrate_legacy_group_names(connection)
         migrate_persisted_group_namespace(connection)
+    ensure_system_field_catalog_chapters(database)
 
 
 def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
@@ -207,7 +199,11 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
                FROM system_field_group_fields gf JOIN lims_field_catalog f ON f.field_code=gf.field_code
                ORDER BY gf.group_code,gf.order_no,gf.field_code"""
         )]
-        links = connection.execute("SELECT group_code,chapter_id FROM system_field_group_chapters").fetchall()
+        links = connection.execute(
+            """SELECT membership.group_code,membership.chapter_id,chapter.code
+               FROM system_field_catalog_groups membership
+               JOIN system_field_catalog_chapters chapter ON chapter.id=membership.chapter_id"""
+        ).fetchall()
     levels = list_group_levels(database)
     # 字段路径由层级配置推导，不读库里那份旧的 field_path，避免两处打架
     kinds = {(code, level["levelKey"]): level["kind"]
@@ -224,8 +220,10 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
             "fieldPath": field_path_for(level_key, kinds.get((code, level_key), ""), json_key),
         })
     chapters: dict[str, list[int]] = {}
+    chapter_codes: dict[str, list[str]] = {}
     for link in links:
         chapters.setdefault(link["group_code"], []).append(link["chapter_id"])
+        chapter_codes.setdefault(link["group_code"], []).append(str(link["code"]))
     return [{
         "groupCode": row["group_code"], "label": row["label"], "description": row["description"],
         "cardinality": row["cardinality"],
@@ -234,6 +232,7 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
         "sourceMappings": _decode_source_mappings(row.get("source_mappings")),
         "orderNo": row["order_no"], "enabled": bool(row["enabled"]), "fieldCount": len(by_group.get(row["group_code"], [])),
         "fields": by_group.get(row["group_code"], []), "chapterIds": chapters.get(row["group_code"], []),
+        "chapterCodes": chapter_codes.get(row["group_code"], []),
         "levels": levels.get(row["group_code"], []),
     } for row in groups]
 
@@ -319,9 +318,15 @@ def delete_system_field_group(database: Database, group_code: str) -> bool:
         ).fetchone()
         if not exists:
             return False
+        fields = [str(row["field_code"]) for row in connection.execute(
+            "SELECT field_code FROM system_field_group_fields WHERE group_code=%s", (group_code,),
+        ).fetchall()]
+        if fields:
+            raise ValueError(
+                f"编组 {group_code} 仍包含 {len(fields)} 个字段，请先移动字段后再删除"
+            )
         connection.execute("DELETE FROM system_field_group_levels WHERE group_code=%s", (group_code,))
-        connection.execute("DELETE FROM system_field_group_fields WHERE group_code=%s", (group_code,))
-        connection.execute("DELETE FROM system_field_group_chapters WHERE group_code=%s", (group_code,))
+        connection.execute("DELETE FROM system_field_catalog_groups WHERE group_code=%s", (group_code,))
         connection.execute("DELETE FROM system_field_groups WHERE group_code=%s", (group_code,))
     return True
 
@@ -331,7 +336,7 @@ def assign_field_to_group(database: Database, group_code: str, field_code: str, 
     if not database.get_lims_field(field_code):
         raise ValueError("系统字段不存在")
     with database.connect() as connection:
-        connection.execute("DELETE FROM system_field_chapters WHERE field_code=%s", (field_code,))
+        connection.execute("DELETE FROM system_field_catalog_fields WHERE field_code=%s", (field_code,))
         connection.execute(
             "INSERT INTO system_field_group_fields(group_code,field_code,field_path,order_no) VALUES(%s,%s,%s,%s) ON DUPLICATE KEY UPDATE field_path=VALUES(field_path),order_no=VALUES(order_no)",
             (group_code, field_code, field_path, 0),
@@ -357,13 +362,13 @@ def move_field_ownership(
             ).fetchone():
                 raise ValueError("目标编组不存在")
         elif not connection.execute(
-            "SELECT 1 FROM admin_template_chapters WHERE id=%s", (chapter_id,),
+            "SELECT 1 FROM system_field_catalog_chapters WHERE id=%s", (chapter_id,),
         ).fetchone():
             raise ValueError("目标章节不存在")
 
         # 目录归属是单值关系：迁移时必须先清除所有旧位置，不能让同一字段出现在多处。
         connection.execute("DELETE FROM system_field_group_fields WHERE field_code=%s", (field_code,))
-        connection.execute("DELETE FROM system_field_chapters WHERE field_code=%s", (field_code,))
+        connection.execute("DELETE FROM system_field_catalog_fields WHERE field_code=%s", (field_code,))
         if target_group:
             next_order = connection.execute(
                 "SELECT COALESCE(MAX(order_no), -1) + 1 AS next_order FROM system_field_group_fields WHERE group_code=%s",
@@ -378,7 +383,7 @@ def move_field_ownership(
                 "SELECT order_no FROM lims_field_catalog WHERE field_code=%s", (field_code,),
             ).fetchone()["order_no"]
             connection.execute(
-                "INSERT INTO system_field_chapters(field_code,chapter_id,order_no) VALUES(%s,%s,%s)",
+                "INSERT INTO system_field_catalog_fields(field_code,chapter_id,order_no) VALUES(%s,%s,%s)",
                 (field_code, chapter_id, order_no),
             )
     if target_group:
@@ -412,9 +417,14 @@ def assign_group_to_chapter(database: Database, group_code: str, chapter_id: int
     with database.connect() as connection:
         if not connection.execute("SELECT 1 FROM system_field_groups WHERE group_code=%s", (group_code,)).fetchone():
             raise ValueError("编组不存在")
-        if not connection.execute("SELECT 1 FROM admin_template_chapters WHERE id=%s", (chapter_id,)).fetchone():
+        if not connection.execute(
+            "SELECT 1 FROM system_field_catalog_chapters WHERE id=%s", (chapter_id,),
+        ).fetchone():
             raise ValueError("章节不存在")
         # 一个编组在目录中只归属一个章节；重新选择时执行移动，而不是追加。
-        connection.execute("DELETE FROM system_field_group_chapters WHERE group_code=%s", (group_code,))
-        connection.execute("INSERT INTO system_field_group_chapters(group_code,chapter_id) VALUES(%s,%s)", (group_code, chapter_id))
+        connection.execute("DELETE FROM system_field_catalog_groups WHERE group_code=%s", (group_code,))
+        connection.execute(
+            "INSERT INTO system_field_catalog_groups(group_code,chapter_id) VALUES(%s,%s)",
+            (group_code, chapter_id),
+        )
     return next(group for group in list_system_field_groups(database) if group["groupCode"] == group_code)

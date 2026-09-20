@@ -64,22 +64,8 @@ class WorkspaceRepositoryMixin:
     def _restore_snapshot(self, snapshot: dict[str, Any]) -> None:
         chapters = snapshot.get("chapters") or self.list_template_chapters()
         with self.database.connect() as connection:
-            group_links = [dict(row) for row in connection.execute(
-                """SELECT gc.group_code,c.code, gc.order_no
-                   FROM system_field_group_chapters gc
-                   JOIN admin_template_chapters c ON c.id=gc.chapter_id"""
-            ).fetchall()]
             self._clear_workspace(connection)
             self._restore_chapters(connection, chapters)
-            for link in group_links:
-                chapter = connection.execute(
-                    "SELECT id FROM admin_template_chapters WHERE code=%s", (link["code"],)
-                ).fetchone()
-                if chapter:
-                    connection.execute(
-                        "INSERT IGNORE INTO system_field_group_chapters(group_code,chapter_id,order_no) VALUES(%s,%s,%s)",
-                        (link["group_code"], chapter["id"], link.get("order_no", 0)),
-                    )
             self._restore_mappings(connection, snapshot.get("mappings", []))
             self._restore_table_rules(connection, snapshot.get("tableRules", []))
             self._restore_ai_rules(connection, snapshot.get("aiRules", []))

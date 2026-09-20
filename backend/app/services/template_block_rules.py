@@ -11,6 +11,8 @@
 
 from typing import Any
 
+from .system_field_group_levels import json_path_for
+
 
 REPEATING_KINDS = {"REPEATING_TABLE", "MATRIX", "TABLE_REPEAT"}
 
@@ -23,13 +25,51 @@ def collection_source_path(path: str) -> str:
     return f"{text}[*]"
 
 
-def _group_of_field(field_groups: list[dict[str, Any]]) -> dict[str, str]:
-    return {
-        str(field.get("fieldCode") or ""): str(group.get("groupCode") or "")
-        for group in field_groups
-        for field in group.get("fields", [])
-        if field.get("fieldCode")
-    }
+def _field_memberships(field_groups: list[dict[str, Any]]) -> dict[str, list[tuple[dict, dict]]]:
+    memberships: dict[str, list[tuple[dict, dict]]] = {}
+    for group in field_groups:
+        for field in group.get("fields", []):
+            code = str(field.get("fieldCode") or "")
+            if code:
+                memberships.setdefault(code, []).append((group, field))
+    return memberships
+
+
+def _mapping_group(mapping: dict[str, Any], field: dict[str, Any] | None,
+                   memberships: list[tuple[dict, dict]],
+                   chapter_codes: dict[int, str]) -> tuple[dict, dict] | None:
+    if not memberships:
+        return None
+    chapter_id = mapping.get("chapterId") or mapping.get("assigned_chapter_id")
+    chapter_code = chapter_codes.get(int(chapter_id)) if chapter_id else None
+    if chapter_id and chapter_code is None:
+        raise ValueError(f"模板章节 {chapter_id} 缺少稳定章节编码")
+    chapter_matches = [
+        item for item in memberships
+        if chapter_code and chapter_code in item[0].get("chapterCodes", [])
+    ]
+    if len(chapter_matches) == 1:
+        return chapter_matches[0]
+    if len(chapter_matches) > 1:
+        raise ValueError(
+            f"字段 {mapping.get('standardFieldCode')} 在章节 {chapter_id} 关联了多个标准编组"
+        )
+    if len(memberships) == 1:
+        return memberships[0]
+    collection_code = str((field or {}).get("collectionCode") or "")
+    collection_matches = [item for item in memberships
+                          if str(item[0].get("groupCode") or "") == collection_code]
+    if len(collection_matches) == 1:
+        return collection_matches[0]
+    raise ValueError(
+        f"字段 {mapping.get('standardFieldCode')} 属于多个标准编组，当前模板位置无法确定取值编组"
+    )
+
+
+def _group_field_path(group: dict[str, Any], field: dict[str, Any]) -> str:
+    item_path = str(group.get("itemPath") or f"$.{group.get('groupCode') or ''}")
+    return json_path_for(item_path, str(group.get("cardinality") or "ONE"),
+                         str(field.get("fieldPath") or ""))
 
 
 def _apply_block(mapping: dict[str, Any], block: dict[str, Any]) -> None:
@@ -55,24 +95,33 @@ def apply_template_block_rules(snapshot: dict[str, Any], field_groups: list[dict
         for item in snapshot.get("templateBlocks", [])
         if item.get("enabled", True)
     }
-    group_of_field = _group_of_field(field_groups)
+    memberships = _field_memberships(field_groups)
+    chapter_codes = {
+        int(item["id"]): str(item["code"])
+        for item in snapshot.get("chapters", [])
+    }
     catalog = {str(item.get("fieldCode") or ""): item for item in lims_fields}
     result: list[dict[str, Any]] = []
     for source in snapshot.get("mappings", []):
         mapping = dict(source)
         standard_code = str(mapping.get("standardFieldCode") or "")
         field = catalog.get(standard_code)
-        # 取值路径只有标准字段目录一个权威来源：快照里可能带着绑定当时抄下的旧路径，一律覆盖。
-        mapping["sourcePath"] = str(field.get("legacyJsonPath") or "") if field else ""
+        group_entry = _mapping_group(
+            mapping, field, memberships.get(standard_code, []), chapter_codes,
+        )
+        # 同一字段可以出现在多个编组中，路径必须来自当前章节选中的编组成员关系。
+        # 字段目录路径只用于没有编组归属的普通字段。
+        mapping["sourcePath"] = (_group_field_path(*group_entry) if group_entry
+                                 else str(field.get("legacyJsonPath") or "") if field else "")
         if field:
             mapping["standardFieldDataType"] = field.get("dataType", "string")
             mapping["standardFieldOutputFormat"] = field.get("outputFormat", "")
             mapping["standardFieldFillRule"] = field.get("fillRule", "")
-        block = blocks.get(group_of_field.get(standard_code, ""))
-        group_code = group_of_field.get(standard_code, "")
-        group_config = next((item for item in field_groups if str(item.get("groupCode") or "") == group_code), None)
+        group_config = group_entry[0] if group_entry else None
+        group_code = str(group_config.get("groupCode") or "") if group_config else ""
+        block = blocks.get(group_code)
         if group_config and group_code:
-            mapping["groupItemPath"] = collection_source_path(f"$.{group_code}")
+            mapping["groupItemPath"] = collection_source_path(group_config.get("itemPath", ""))
         if block:
             mapping["standardGroupCode"] = block.get("standardGroupCode", "")
             _apply_block(mapping, block)

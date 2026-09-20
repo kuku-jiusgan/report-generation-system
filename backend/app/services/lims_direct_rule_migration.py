@@ -8,7 +8,7 @@ from .lims_rule_schema import DIRECT_TYPES
 
 
 logger = logging.getLogger(__name__)
-MIGRATION_KEY = "20260919_lims_direct_field_rules_v1"
+MIGRATION_KEY = "20260920_lims_direct_field_rules_v2"
 DEPRECATED_KEYS = {
     "parser", "parserProfile", "inputField", "unitType", "tableSelector",
     "outputCollection", "outputField", "preserveEvidence",
@@ -35,7 +35,13 @@ def _converted_config(field: dict[str, Any], rule: dict[str, Any]) -> dict[str, 
     current = rule.get("config") if isinstance(rule.get("config"), dict) else {}
     extraction_type = str(current.get("extractionType") or "").upper()
     if extraction_type in DIRECT_TYPES:
-        return _clean_config(current)
+        converted = _clean_config(current)
+        # 系统适用性结果表的首列在实际 LIMS 模板中既有“No.”也有“名称”。
+        # 历史规则只匹配 No.，导致整张表落入 unmatched。
+        if (str(field.get("collectionCode") or "") == "systemSuitability"
+                and str(converted.get("headerPattern") or "") == "No\\.?.*保留时间.*峰面积"):
+            converted["headerPattern"] = "(?:No\\.?|名称).*保留时间.*峰面积"
+        return converted
     profile = str(current.get("parserProfile") or "")
     collection = PROFILE_COLLECTIONS.get(profile, str(field.get("collectionCode") or ""))
     converted = direct_rule_config(collection, _field_key(field))
@@ -70,14 +76,15 @@ def _migrate_group_rules(database: Any, fields: dict[str, dict[str, Any]]) -> in
                     "sourcePath": column_pattern, "sectionPattern": mapping.get("sectionPattern", ""),
                     "headerPattern": mapping.get("headerPattern", ""), "rowPattern": mapping.get("rowPattern", ""),
                 }
-                existing = [item for item in database.list_system_field_rules(field_code)
-                            if item.get("sourceType") == "LIMS"]
+                existing = database.list_system_field_rules(field_code)
+                if len(existing) > 1:
+                    raise ValueError(f"字段 {field_code} 存在多条提取规则，不能迁移 LIMS 编组规则")
                 replaceable = next((item for item in existing if str(item.get("config", {}).get("extractionType") or "").upper()
                                     not in DIRECT_TYPES), None)
-                item = replaceable or {
+                item = replaceable or (existing[0] if existing else {
                     "fieldCode": field_code, "name": "LIMS HTML 表格列 → 标准字段", "priority": 100,
                     "transform": "TRIM", "enabled": True,
-                }
+                })
                 database.save_system_field_rule(_rule_item(item, config, "LIMS HTML 表格列 → 标准字段"),
                                                 item.get("id"))
                 migrated += 1
@@ -117,10 +124,15 @@ def migrate_lims_direct_rules(database: Any) -> dict[str, int]:
                      if rule.get("sourceType") == "LIMS"]
         default = direct_rule_config(str(field.get("collectionCode") or ""), _field_key(field))
         if not remaining and default:
+            all_rules = database.list_system_field_rules(field_code)
+            if len(all_rules) > 1:
+                raise ValueError(f"字段 {field_code} 存在多条提取规则，不能迁移 LIMS 规则")
+            item = all_rules[0] if all_rules else {}
             database.save_system_field_rule({
+                **item,
                 "fieldCode": field_code, "name": "LIMS 原始数据 → 标准字段", "sourceType": "LIMS",
                 "priority": 100, "config": default, "transform": "TRIM", "enabled": True,
-            })
+            }, item.get("id"))
             created += 1
     if migrated or removed or created or group_count:
         logger.info(

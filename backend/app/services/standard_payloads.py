@@ -2,12 +2,23 @@ from typing import Any
 
 
 def active_standard_payload(report_data: dict[str, Any]) -> dict[str, Any]:
-    """报告生成和快照测试共用同一份标准载荷取值顺序。"""
+    """Return the explicitly selected standard payload."""
     payloads = report_data.get("source_payloads", {})
     if not isinstance(payloads, dict):
         raise ValueError("报告数据源载荷格式无效")
-    return next((payloads[name] for name in ("EXCEL", "LIMS", "PDF")
-                 if isinstance(payloads.get(name), dict)), {})
+    active_source = str(report_data.get("active_source_type") or "").upper()
+    if active_source:
+        if active_source not in {"EXCEL", "LIMS", "PDF"}:
+            raise ValueError(f"报告当前数据源类型无效：{active_source}")
+        active = payloads.get(active_source)
+        if not isinstance(active, dict):
+            raise ValueError(f"报告缺少当前数据源载荷：{active_source}")
+        return active
+    candidates = [payloads[name] for name in ("EXCEL", "LIMS", "PDF")
+                  if isinstance(payloads.get(name), dict)]
+    if len(candidates) > 1:
+        raise ValueError("报告存在多个数据源但未记录当前来源，请重新选择报告数据源")
+    return candidates[0] if candidates else {}
 
 
 def standard_group_values(report_data: dict[str, Any], active: dict[str, Any], codes: set[str]) -> dict[str, Any]:

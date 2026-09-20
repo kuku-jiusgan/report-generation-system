@@ -39,6 +39,7 @@ const actionId = ref('')
 const auditVisible = ref(false)
 const auditReport = ref<ReportTask>()
 const auditEvents = ref<ChangeEvent[]>([])
+const createTitle = ref('')
 const createTemplateId = ref('')
 const createVisible = ref(false)
 const createBusy = ref(false)
@@ -71,7 +72,7 @@ let generationTimer: ReturnType<typeof setInterval> | undefined
 function startGenerationProgress() {
   generationProgress.visible = true; generationProgress.stage = 0; generationProgress.percentage = 4
   generationProgress.status = 'running'; generationProgress.message = '正在整理所选实验记录'
-  generationProgress.title = createInstances.value.map((item) => item.title).join('、') || createPdf.value?.name || '新报告'
+  generationProgress.title = createTitle.value.trim()
   generationTimer = setInterval(() => {
     if (generationProgress.percentage < 88) generationProgress.percentage += generationProgress.percentage < 55 ? 2 : 1
     if (generationProgress.percentage >= 18 && generationProgress.stage < 1) generationProgress.stage = 1
@@ -168,6 +169,7 @@ function errorText(error: unknown) {
 }
 
 function createNew() {
+  createTitle.value = ''
   createTemplateId.value = ''
   createProtocol.value = undefined
   if (createRecognitionTimer) clearTimeout(createRecognitionTimer)
@@ -293,6 +295,8 @@ async function submitReplaceSource() {
 }
 
 async function submitCreateReport() {
+  const title = createTitle.value.trim()
+  if (!title) return ElMessage.warning('请输入报告名称')
   if (!createTemplateId.value) return ElMessage.warning('请选择报告模板')
   const hasLims = Boolean(createImport.value && createInstances.value.length && createRecognition.value)
   const hasPdf = Boolean(createPdf.value)
@@ -320,10 +324,14 @@ async function submitCreateReport() {
       excelSourceId = source.id
     }
     const protocolSource = createProtocol.value ? await uploadProtocol(createProtocol.value) : undefined
-    created = await createReport(sourceId, excelSourceId, createTemplateId.value, protocolSource?.id)
+    created = await createReport({
+      title, sourceDocumentId: sourceId, excelDocumentId: excelSourceId,
+      templateId: createTemplateId.value, protocolDocumentId: protocolSource?.id,
+      deferWordGeneration: hasLims,
+    })
     if (hasLims && createImport.value) {
       created = await applyLimsToReport(
-        created.id, createImport.value.id, createInstances.value.map((item) => item.instanceId),
+        created.id, createProjectId.value.trim(), createInstances.value.map((item) => item.instanceId),
         { ...createConflictResolutions },
       )
     }
@@ -482,6 +490,10 @@ onMounted(load)
         </div>
       </template>
       <div class="create-template-area">
+        <div class="create-report-name">
+          <label for="create-report-title">报告名称（必填）</label>
+          <el-input id="create-report-title" v-model="createTitle" maxlength="200" show-word-limit clearable placeholder="请输入最终显示和导出的报告名称" />
+        </div>
         <ReportTemplatePicker v-if="createVisible" v-model="createTemplateId" />
       </div>
       <section class="create-report-section">
@@ -541,7 +553,7 @@ onMounted(load)
         <div class="create-dialog-footer">
           <div class="create-footer-actions">
             <el-button @click="createVisible = false">取消</el-button>
-            <el-button class="hub-create-confirm" type="primary" :loading="createBusy" :disabled="!createTemplateId || createRecognizing || (!createRecognition && !createPdf && !createExcel)" @click="submitCreateReport">创建并进入工作台</el-button>
+            <el-button class="hub-create-confirm" type="primary" :loading="createBusy" :disabled="!createTitle.trim() || !createTemplateId || createRecognizing || (!createRecognition && !createPdf && !createExcel)" @click="submitCreateReport">创建并进入工作台</el-button>
           </div>
         </div>
       </template>

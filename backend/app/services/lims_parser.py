@@ -39,14 +39,18 @@ def _parse_body(value: Any) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _body_items(value: Any) -> list[dict[str, Any]]:
+def _body_items(value: Any, unit_type: str) -> list[dict[str, Any]]:
     parsed = _parse_body(value)
     if not parsed:
-        return []
-    data = parsed.get("data")
+        raise ValueError(f"LIMS {unit_type} 结构化单元的 UNITBODY 不是有效 JSON 对象")
+    data = parsed.get("data", parsed)
     if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
-    return [data] if isinstance(data, dict) else []
+        if not all(isinstance(item, dict) for item in data):
+            raise ValueError(f"LIMS {unit_type} 结构化单元的 data 必须是对象数组")
+        return data
+    if isinstance(data, dict):
+        return [data]
+    raise ValueError(f"LIMS {unit_type} 结构化单元的 data 必须是对象或对象数组")
 
 
 def _plain_text(value: Any) -> str:
@@ -138,7 +142,7 @@ def _instance_payload(instance_id: str, rows: list[dict[str, Any]], include_deta
             sections.append({"id": row["id"], "parentId": row["parent_id"], "title": row["title"],
                              "orderNo": row["order_no"], "evidence": _evidence(row, section_path)})
         elif row["type"] in STRUCTURED_TYPES:
-            for item in _body_items(row["body"]):
+            for item in _body_items(row["body"], row["type"]):
                 evidence = _evidence(row, section_path)
                 raw_structured.append({"unitType": row["type"], "data": item, "evidence": evidence})
                 structured_counts[row["type"]] += 1

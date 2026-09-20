@@ -29,7 +29,6 @@ EXCEL_FIELD_PATHS = {
     "robustnessSpecificity.solutionName": "$.robustnessSpecificity[*].solutionName",
     "robustnessSpecificity.field2": "$.robustnessSpecificity[*].field2",
     "robustnessSpecificity.field3": "$.robustnessSpecificity[*].field3",
-    "uncategorized.field_002": "$.conclusions[*].text",
     "uncategorized.field_005": "$.custom.field_005",
     "uncategorized.field_006": "$.custom.field_006",
     "uncategorized.field_007": "$.jiancexian[*].name",
@@ -113,7 +112,7 @@ EXCEL_WORKBOOK_LOCATIONS = {
     "uncategorized.field_018": {"sheet": "检测限与定量限", "cells": "H8:H13、H16:H21……", "matchBy": "每个杂质 6 行数据", "valueColumn": "H（定量限浓度）"},
     "uncategorized.field_019": {"sheet": "检测限与定量限", "cells": "I8:I13、I16:I21……", "matchBy": "每个杂质 6 行数据", "valueColumn": "I（相当于供试品含量）"},
     "uncategorized.field_020": {"sheet": "检测限与定量限", "cells": "J8:J13、J16:J21……", "matchBy": "每个杂质 6 行数据", "valueColumn": "J（占限度百分比）"},
-    "uncategorized.field_046": {"sheet": "检测限与定量限", "cells": "C8、C16、C24……", "matchBy": "每个杂质 6 行分块的首行", "valueColumn": "C（杂质名称）"},
+    "uncategorized.field_046": {"sheet": "检测限与定量限", "cells": "C(首页!B8+5)、之后每隔 8 行", "matchBy": "杂质数量决定定量限首个表头行", "valueColumn": "C（杂质名称）"},
     "uncategorized.field_021": {"sheet": "线性", "cells": "C2:G2、C26:G26……", "matchBy": "每个杂质 5 个水平", "valueColumn": "溶液名称"},
     "uncategorized.field_022": {"sheet": "线性", "cells": "C3:G3、C27:G27……", "matchBy": "每个杂质 5 个水平", "valueColumn": "实际浓度"},
     "uncategorized.field_023": {"sheet": "线性", "cells": "C4:G4、C28:G28……", "matchBy": "每个杂质 5 个水平", "valueColumn": "峰面积"},
@@ -270,7 +269,7 @@ def _sync_repeated_field_catalog(database: Any, repeated_fields: tuple[str, ...]
             repeated_fields,
         )
         connection.execute(
-            f"DELETE FROM system_field_chapters WHERE field_code IN ({placeholders})",
+            f"DELETE FROM system_field_catalog_fields WHERE field_code IN ({placeholders})",
             repeated_fields,
         )
 
@@ -284,12 +283,12 @@ def _sync_repeatability_group_chapter(database: Any) -> None:
             ), tuple(REPEATABILITY_DETAIL_COLUMNS),
         ).fetchone()
         chapter = connection.execute(
-            "SELECT id FROM admin_template_chapters WHERE code='7.5' LIMIT 1"
+            "SELECT id FROM system_field_catalog_chapters WHERE code='7.5' LIMIT 1"
         ).fetchone()
         if not group or not chapter:
             return
         connection.execute(
-            "INSERT IGNORE INTO system_field_group_chapters(group_code,chapter_id) VALUES(%s,%s)",
+            "INSERT IGNORE INTO system_field_catalog_groups(group_code,chapter_id) VALUES(%s,%s)",
             (group["group_code"], chapter["id"]),
         )
 
@@ -331,7 +330,7 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
     elif field_code.startswith("systemSuitability."):
         field = field_code.rsplit(".", 1)[-1]
         if field == "impurityName":
-            config.update({"mode": "REPEAT_BLOCK", "sheet": "系统适用性", "rowStart": 3, "rowEnd": 8,
+            config.update({"mode": "REPEAT_BLOCK", "sheet": "系统适用性", "rowStart": 3, "rowEnd": 3,
                            "repeatValueSource": {"sheet": "首页", "row": 9, "column": 2, "rowStep": 1},
                            "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                            "maxRepeat": 15, "valueMode": "REPEAT_VALUE"})
@@ -340,7 +339,7 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
             config.update({"mode": "REPEAT_BLOCK", "sheet": "系统适用性", "rowStart": 9, "rowEnd": 9,
                            "startColumn": 2 if field == "retentionTimeRsd" else 3, "columnStep": 3,
                            "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
-                           "maxRepeat": 15, "valueMode": "CELL", "broadcastRepeat": 6})
+                           "maxRepeat": 15, "valueMode": "CELL"})
             return config
         config.update({"mode": "REPEAT_BLOCK", "sheet": "系统适用性", "rowStart": 3, "rowEnd": 8,
                        "startColumn": 2 if field == "retentionTime" else 3 if field == "peakArea" else 1,
@@ -367,6 +366,7 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
     elif field_code == "uncategorized.field_046":
         config.update({"mode": "REPEAT_BLOCK", "sheet": "检测限与定量限", "rowStart": 8, "rowEnd": 8,
                        "startColumn": 3, "columnStep": 0, "rowStep": 8,
+                       "rowStartOffsetFromRepeatCount": 5, "rowCount": 1,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code in DETECTION_LIMIT_COLUMNS:
@@ -486,6 +486,8 @@ def ensure_excel_field_rules(database: Any) -> None:
             continue
         source_path = excel_target_path(field, str(field.get("legacyJsonPath") or "") or default_path)
         field_rules = database.list_system_field_rules(field_code)
+        if len(field_rules) > 1:
+            raise ValueError(f"字段 {field_code} 存在多条提取规则，请先解决规则冲突")
         existing = [rule for rule in field_rules if rule.get("sourceType") == "EXCEL"]
         if existing:
             if field_code in EXCLUSIVE_EXCEL_FIELDS and any(
@@ -504,7 +506,8 @@ def ensure_excel_field_rules(database: Any) -> None:
                     "uncategorized.field_046", "uncategorized.field_047",
                     "uncategorized.field_048", "uncategorized.field_029",
                     "uncategorized.field_084",
-                } or field_code in LINEARITY_DIRECT_CELLS or field_code in EXCEL_ONLY_FIELDS
+                } or field_code.startswith("systemSuitability.") \
+                    or field_code in LINEARITY_DIRECT_CELLS or field_code in EXCEL_ONLY_FIELDS
                 if config.get("sourcePath") == source_path and not needs_row_count and not needs_field_config:
                     continue
                 updated_config = _rule_config(field_code, source_path) if needs_field_config else {**config, "sourcePath": source_path}
@@ -513,6 +516,8 @@ def ensure_excel_field_rules(database: Any) -> None:
                 database.save_system_field_rule(
                     {**rule, "config": updated_config}, rule.get("id")
                 )
+            continue
+        if field_rules and field_code not in EXCEL_ONLY_FIELDS:
             continue
         replaceable = ([rule for rule in field_rules if rule.get("sourceType") in ({"LIMS", "AI"} if field_code in EXCLUSIVE_EXCEL_FIELDS else {"LIMS"})]
                        if field_code in EXCEL_ONLY_FIELDS else [])

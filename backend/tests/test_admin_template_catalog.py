@@ -4,12 +4,14 @@ from pathlib import Path
 
 import jwt
 import pytest
+from fastapi import HTTPException
 
 from backend.app.admin_api import create_admin_router
 from backend.app.auth import AuthManager
 from backend.app.config import Settings
 from backend.app.database import Database
 from backend.app.services.rule_admin import RuleAdminRepository
+from backend.app.services.system_field_groups import save_system_field_group
 from backend.app.services.template_file_store import TemplateFileStore
 from backend.tests.database_helpers import make_test_database
 
@@ -24,6 +26,52 @@ class FakeCallbackRequest:
 
     async def json(self) -> dict:
         return self._body
+
+
+def _field_catalog_state(database: Database) -> dict[str, list[dict]]:
+    with database.connect() as connection:
+        return {
+            "chapters": [dict(row) for row in connection.execute(
+                "SELECT * FROM system_field_catalog_chapters ORDER BY id"
+            ).fetchall()],
+            "fields": [dict(row) for row in connection.execute(
+                "SELECT * FROM system_field_catalog_fields ORDER BY field_code,chapter_id"
+            ).fetchall()],
+            "groups": [dict(row) for row in connection.execute(
+                "SELECT * FROM system_field_catalog_groups ORDER BY group_code,chapter_id"
+            ).fetchall()],
+        }
+
+
+def test_activating_template_version_does_not_modify_field_catalog(tmp_path: Path) -> None:
+    database = make_test_database(tmp_path)
+    repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
+    repository.seed()
+
+    with database.connect() as connection:
+        chapter_ids = [int(row["id"]) for row in connection.execute(
+            "SELECT id FROM system_field_catalog_chapters ORDER BY order_no,id LIMIT 2"
+        ).fetchall()]
+        connection.execute(
+            """INSERT INTO system_field_catalog_fields(field_code,chapter_id,order_no)
+               VALUES(%s,%s,%s) ON DUPLICATE KEY UPDATE order_no=VALUES(order_no)""",
+            ("narrative.chapter", chapter_ids[0], 17),
+        )
+    save_system_field_group(database, {
+        "groupCode": "catalogRegression", "label": "字段目录回归编组", "cardinality": "ONE",
+    })
+    with database.connect() as connection:
+        connection.execute(
+            "INSERT INTO system_field_catalog_groups(group_code,chapter_id,order_no) VALUES(%s,%s,%s)",
+            ("catalogRegression", chapter_ids[-1], 9),
+        )
+
+    before = _field_catalog_state(database)
+    second_template = repository.create_template({"code": "CATALOG-SAFE", "name": "目录隔离模板"})
+    second_version = repository.list_template_versions(second_template["id"])[0]
+    repository.activate_template_version(second_template["id"], second_version["id"])
+
+    assert _field_catalog_state(database) == before
 
 
 def test_template_versions_keep_independent_rule_snapshots(tmp_path: Path) -> None:
@@ -134,7 +182,7 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
     assert all(item["id"] != second["id"] for item in repository.list_templates())
 
 
-def test_publish_freezes_artifact_and_opens_a_new_draft(tmp_path: Path, monkeypatch) -> None:
+def test_publish_freezes_artifact_without_creating_a_draft(tmp_path: Path, monkeypatch) -> None:
     initial_template = tmp_path / "templates" / "report-template.docx"
     initial_template.parent.mkdir(parents=True)
     initial_template.write_bytes((PROJECT_ROOT / "templates" / "report-template.docx").read_bytes())
@@ -160,6 +208,14 @@ def test_publish_freezes_artifact_and_opens_a_new_draft(tmp_path: Path, monkeypa
         route.endpoint for route in router.routes
         if route.path == "/api/v1/admin/onlyoffice/callback/{version_id}"
     )
+    activate = next(
+        route.endpoint for route in router.routes
+        if route.path == "/api/v1/admin/templates/{template_id}/versions/{version_id}/activate"
+    )
+    designer = next(
+        route.endpoint for route in router.routes
+        if route.path == "/api/v1/admin/designer"
+    )
 
     published = publish({"note": "发布测试"})
     artifact = Path(published["templateFile"])
@@ -167,12 +223,18 @@ def test_publish_freezes_artifact_and_opens_a_new_draft(tmp_path: Path, monkeypa
     workspace = repository.active_workspace()
     assert published["status"] == "PUBLISHED"
     assert artifact.parent.parent.name == "published"
-    assert workspace["versionStatus"] == "DRAFT"
-    assert workspace["versionId"] != published["id"]
-    assert Path(workspace["templateFile"]) != artifact
+    assert workspace["versionStatus"] == "PUBLISHED"
+    assert workspace["versionId"] == published["id"]
+    assert Path(workspace["templateFile"]) == artifact
+    assert len(repository.list_template_versions(published["templateId"])) == 1
 
-    Path(workspace["templateFile"]).write_bytes(b"changed draft")
-    assert artifact.read_bytes() == frozen_bytes
+    with pytest.raises(HTTPException, match="已发布或历史模板版本不可进入设计器") as activate_error:
+        activate(published["templateId"], published["id"])
+    assert activate_error.value.status_code == 409
+    with pytest.raises(HTTPException, match="已发布或历史模板版本不可进入设计器") as designer_error:
+        designer()
+    assert designer_error.value.status_code == 409
+    assert len(repository.list_template_versions(published["templateId"])) == 1
 
     file_store = TemplateFileStore(repository, settings.template_path)
     with pytest.raises(ValueError, match="已发布模板不可进入编辑器"):

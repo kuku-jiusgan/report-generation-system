@@ -6,8 +6,9 @@ from .config import Settings
 from .auth import AuthManager
 from .database import Database, now_iso
 from .schemas import QueryLimsRequest, RecognizeLimsRequest
-from .services.lims_normalizer import merge_instances, normalize_instance, record_collection_codes
+from .services.lims_normalizer import normalize_instance, record_collection_codes
 from .services.lims_oracle import query_lims_project
+from .services.report_lims_refresh import LimsSourceError, recognize_imported_lims
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
 
@@ -30,12 +31,6 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
 
     def stored_instance(item: dict, instance_id: str) -> dict:
         payload = database.get_lims_instance_payload(item["id"], instance_id)
-        if not payload:
-            raise KeyError(instance_id)
-        return payload
-
-    def normalized_instance(item: dict, instance_id: str) -> dict:
-        payload = database.get_lims_normalized_payload(item["id"], instance_id)
         if not payload:
             raise KeyError(instance_id)
         return payload
@@ -99,16 +94,11 @@ def create_lims_router(database: Database, settings: Settings, auth: AuthManager
 
     @router.post("/imports/{import_id}/recognize")
     def recognize_instances(import_id: str, request: RecognizeLimsRequest) -> dict:
-        item = required_import(import_id)
+        required_import(import_id)
         try:
-            instances = [normalized_instance(item, instance_id) for instance_id in request.instance_ids]
-            groups = list_system_field_groups(database)
-            return merge_instances(
-                instances, fields=database.list_lims_fields(True),
-                extraction_rules=database.list_lims_extraction_rules(), groups=groups, normalized=True,
-            )
-        except KeyError as error:
-            raise HTTPException(404, f"LIMS 实验记录不存在：{error.args[0]}") from error
+            return recognize_imported_lims(database, import_id, request.instance_ids)
+        except LimsSourceError as error:
+            raise HTTPException(404, str(error)) from error
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         except Exception as error:

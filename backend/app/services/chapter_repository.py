@@ -2,6 +2,10 @@ from collections import defaultdict
 from typing import Any
 
 from ..database import now_iso
+from .system_field_catalog_chapters import (
+    ensure_system_field_catalog_chapters,
+    list_system_field_catalog_chapters,
+)
 from .system_field_groups import ensure_system_field_groups, list_system_field_groups
 
 
@@ -41,6 +45,10 @@ class ChapterRepositoryMixin:
             ).fetchall()]
         return [self._chapter_to_api(row) for row in rows]
 
+    def list_system_field_catalog_chapters(self) -> list[dict[str, Any]]:
+        rows = list_system_field_catalog_chapters(self.database)
+        return [self._chapter_to_api(row) for row in rows]
+
     def report_source_catalog(self) -> dict[str, Any]:
         fields: dict[int, list[dict[str, Any]]] = defaultdict(list)
         for mapping in self.list_mappings():
@@ -66,11 +74,11 @@ class ChapterRepositoryMixin:
         with self.database.connect() as connection:
             grouped_codes = connection.execute(
                 """SELECT DISTINCT gf.field_code FROM system_field_group_fields gf
-                   JOIN system_field_group_chapters gc ON gc.group_code=gf.group_code"""
+                   JOIN system_field_catalog_groups gc ON gc.group_code=gf.group_code"""
             ).fetchall()
         mapped_codes.update(str(row["field_code"]) for row in grouped_codes)
         return {
-            "chapters": _chapter_tree(self.list_template_chapters(), chapter_fields),
+            "chapters": _chapter_tree(self.list_system_field_catalog_chapters(), chapter_fields),
             "groups": list_system_field_groups(self.database),
             "fields": fields,
             "unmappedFields": [item for item in fields if item["fieldCode"] not in mapped_codes],
@@ -80,18 +88,11 @@ class ChapterRepositoryMixin:
     def _standard_fields_by_chapter(
         self, fields_by_code: dict[str, dict[str, Any]],
     ) -> tuple[dict[int, list[dict[str, Any]]], set[str]]:
+        ensure_system_field_catalog_chapters(self.database)
         with self.database.connect() as connection:
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS system_field_chapters (
-                   field_code TEXT NOT NULL,chapter_id INTEGER NOT NULL,order_no INTEGER NOT NULL DEFAULT 0,
-                   PRIMARY KEY(field_code,chapter_id),
-                   FOREIGN KEY(field_code) REFERENCES lims_field_catalog(field_code)
-                       ON UPDATE CASCADE ON DELETE CASCADE,
-                   FOREIGN KEY(chapter_id) REFERENCES admin_template_chapters(id) ON DELETE CASCADE)"""
-            )
             links = connection.execute(
                 """SELECT DISTINCT chapter_id,field_code AS standard_field_code
-                   FROM system_field_chapters
+                   FROM system_field_catalog_fields
                    ORDER BY chapter_id"""
             ).fetchall()
         codes: dict[int, set[str]] = defaultdict(set)

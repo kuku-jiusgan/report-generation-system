@@ -7,9 +7,16 @@ from fastapi import HTTPException
 
 from backend.app.admin_routes.rule_catalog import _validate_system_rule
 from backend.app.services.lims_configured_extractor import apply_configured_extraction
+from backend.app.services.lims_direct_rule_defaults import direct_rule_config
 from backend.app.services.lims_direct_rule_migration import migrate_lims_direct_rules
 from backend.app.services.lims_normalizer import normalize_instance
+from backend.app.services.lims_parser import _body_items
 from backend.app.services.lims_rule_schema import lims_rule_metadata, validate_lims_rule_config
+from backend.app.services.system_field_rule_invariant import (
+    MIGRATION_KEY,
+    UNIQUE_INDEX,
+    ensure_single_system_field_rule_schema,
+)
 from backend.tests.database_helpers import make_test_database
 
 
@@ -107,6 +114,74 @@ def test_lims_rule_api_returns_the_persisted_config_without_expanding_it() -> No
         assert "sourcePath" not in rules[0]
 
 
+def test_structured_unit_body_accepts_a_top_level_standard_object() -> None:
+    assert _body_items('{"ext$":{"mtlname":"对照品甲"},"batchNo":"B-001"}', "Standard") == [{
+        "ext$": {"mtlname": "对照品甲"}, "batchNo": "B-001",
+    }]
+
+
+def test_structured_unit_body_rejects_unparseable_content() -> None:
+    with pytest.raises(ValueError, match="UNITBODY 不是有效 JSON 对象"):
+        _body_items("not-json", "Standard")
+
+
+def test_repository_rejects_a_second_rule_for_the_same_field() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = make_test_database(Path(directory))
+        database.upsert_lims_field(catalog_field("custom.single", "custom", "single"))
+        saved = database.save_system_field_rule(rule(
+            "custom.single", "INSTANCE_PATH", sourcePath="project.name",
+        ))
+
+        with pytest.raises(ValueError, match="已有提取规则"):
+            database.save_system_field_rule(rule(
+                "custom.single", "INSTANCE_PATH", sourcePath="document.code",
+            ))
+
+        updated = database.save_system_field_rule({
+            **saved, "config": {"extractionType": "INSTANCE_PATH", "sourcePath": "document.code"},
+        }, saved["id"])
+        assert updated["id"] == saved["id"]
+        assert database.list_system_field_rules("custom.single") == [updated]
+
+
+def test_single_rule_migration_keeps_latest_rule_and_creates_unique_index() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = make_test_database(Path(directory))
+        database.upsert_lims_field(catalog_field("custom.migrated", "custom", "migrated"))
+        with database.connect() as connection:
+            connection.execute(f"ALTER TABLE system_field_rules DROP INDEX {UNIQUE_INDEX}")
+            connection.execute("DELETE FROM app_migrations WHERE `key`=%s", (MIGRATION_KEY,))
+            values = (
+                "custom.migrated", "旧规则", "EXCEL", 100, "{}", "TRIM", 1,
+                "2026-09-18T00:00:00+00:00",
+            )
+            connection.execute(
+                """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
+                   transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", values,
+            )
+            latest = connection.execute(
+                """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
+                   transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (*values[:1], "新规则", "LIMS", *values[3:-1], "2026-09-19T00:00:00+00:00"),
+            ).lastrowid
+
+        result = ensure_single_system_field_rule_schema(database)
+
+        rules = database.list_system_field_rules("custom.migrated")
+        with database.connect() as connection:
+            index = connection.execute(
+                """SELECT non_unique AS is_non_unique FROM information_schema.statistics
+                   WHERE table_schema=DATABASE() AND table_name='system_field_rules'
+                     AND index_name=%s""", (UNIQUE_INDEX,),
+            ).fetchone()
+        assert result == {"removed": 1}
+        assert len(rules) == 1
+        assert rules[0]["id"] == latest
+        assert rules[0]["sourceType"] == "LIMS"
+        assert int(index["is_non_unique"]) == 0
+
+
 def test_instance_path_reads_only_configuration_inside_config() -> None:
     fields = [field("project.name", "$.project.name", "ONE")]
     configured = rule("project.name", "INSTANCE_PATH", sourcePath="project.name")
@@ -164,6 +239,32 @@ def test_rows_mode_can_read_the_last_column_and_filter_rows() -> None:
     assert payload["solutions"][0]["evidence"]["tableIndex"] == 1
 
 
+@pytest.mark.parametrize("headers", [("项目", "参数"), ("分析方法", "HPLC")])
+def test_method_parameter_field3_ignores_two_column_tables(headers: tuple[str, str]) -> None:
+    instance = {
+        "instanceId": "EXP-1",
+        "richTexts": [{
+            "id": "RICH-1", "sectionPath": ["仪器方法"],
+            "html": f"<table><tr><th>{headers[0]}</th><th>{headers[1]}</th></tr>"
+                    "<tr><td>色谱柱</td><td>ACE C18</td></tr></table>",
+        }],
+    }
+    fields = [
+        catalog_field(f"methodParameters.{key}", "methodParameters", key)
+        for key in ("field1", "field2", "field3")
+    ]
+    rules = [
+        rule(f"methodParameters.{key}", "HTML_TABLE_COLUMN", **direct_rule_config("methodParameters", key))
+        for key in ("field1", "field2", "field3")
+    ]
+
+    payload = normalize_instance(instance, fields, rules)
+
+    assert payload["methodParameters"][0]["field1"] == "色谱柱"
+    assert payload["methodParameters"][0]["field2"] == "ACE C18"
+    assert "field3" not in payload["methodParameters"][0]
+
+
 def test_columns_mode_reads_a_configured_row_across_columns() -> None:
     html = """<table><tr><th>项目</th><th>样品1</th><th>样品2</th></tr>
     <tr><td>保留时间</td><td>5.1</td><td>5.2</td></tr></table>"""
@@ -195,6 +296,31 @@ def test_matrix_mode_can_build_a_value_from_header_and_cell() -> None:
     payload = normalize_instance(rich_instance(html), fields, rules)
 
     assert payload["systemSuitability"][0]["sequence"] == "NDMA-1"
+
+
+def test_matrix_mode_fixed_value_row_emits_one_header_value_per_column() -> None:
+    html = """<table><tr><th>No.</th><th colspan="2">测试1</th><th colspan="2">测试2</th>
+    <th colspan="2">测试3</th></tr>
+    <tr><th></th><th>保留时间</th><th>峰面积</th><th>保留时间</th><th>峰面积</th>
+    <th>保留时间</th><th>峰面积</th></tr>
+    <tr><td>1</td><td>5.9</td><td>100</td><td>6.1</td><td>110</td><td>6.3</td><td>120</td></tr>
+    <tr><td>2</td><td>5.8</td><td>101</td><td>6.0</td><td>111</td><td>6.2</td><td>121</td></tr>
+    <tr><td>3</td><td>5.7</td><td>102</td><td>5.9</td><td>112</td><td>6.1</td><td>122</td></tr>
+    <tr><td>4</td><td>5.6</td><td>103</td><td>5.8</td><td>113</td><td>6.0</td><td>123</td></tr>
+    <tr><td>5</td><td>5.5</td><td>104</td><td>5.7</td><td>114</td><td>5.9</td><td>124</td></tr></table>"""
+    fields = [field("systemSuitability.impurityName", "$.systemSuitability[*].impurityName")]
+    rules = [rule(
+        "systemSuitability.impurityName", "HTML_TABLE_COLUMN", recordMode="MATRIX",
+        headerRows=2, dataStartRow=2, dataStartColumn=1, columnStride=2,
+        valueRowIndex=0, sectionPattern="溶液配制",
+        headerPattern=r"No\..*保留时间.*峰面积",
+    )]
+
+    payload = normalize_instance(rich_instance(html), fields, rules)
+
+    assert [item["impurityName"] for item in payload["systemSuitability"]] == [
+        "测试1", "测试2", "测试3",
+    ]
 
 
 def test_disabled_or_section_mismatched_rules_do_not_write_values() -> None:

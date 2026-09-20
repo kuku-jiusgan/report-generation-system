@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { adminApi, type GenerationHistoryItem, type ReportAiContext, type StandardField } from './admin-api'
+import { AI_MAX_OUTPUT_TOKENS, adminApi, type GenerationHistoryItem, type ReportAiContext, type StandardField } from './admin-api'
 import SystemContextVariables, { type ContextVariable } from './SystemContextVariables.vue'
 
 type Variable = ContextVariable
@@ -15,7 +15,7 @@ const recordOptions = ref<GenerationHistoryItem[]>([])
 const selectedGenerationId = ref('')
 const contextLoading = ref(false)
 const importError = ref('')
-const missingVariables = ref<string[]>([])
+const importedMissingVariables = ref<string[]>([])
 const importedContext = ref<ReportAiContext>()
 const selectedRecordIndex = ref<number>()
 const currentRecordOptions = ref<Record<string, unknown>[]>([])
@@ -25,6 +25,10 @@ const variables = computed<Variable[]>({
   get: () => Array.isArray(config.value.contextVariables) ? config.value.contextVariables : [],
   set: (value) => { config.value.contextVariables = value },
 })
+const missingVariables = computed(() => importedMissingVariables.value.filter((code) => {
+  const variable = variables.value.find((item) => contextCode(item) === code)
+  return !variable?.previewValue?.trim()
+}))
 const referenced = computed(() => Array.from(
   String(config.value.promptTemplate || '').matchAll(/\{\{([^{}]+)\}\}/g), (match) => match[1].trim(),
 ))
@@ -78,7 +82,7 @@ async function loadRecentRecords() {
 async function importSelectedRecords() {
   const requestId = ++contextRequest
   importedContext.value = undefined
-  missingVariables.value = []
+  importedMissingVariables.value = []
   importError.value = ''
   testOutput.value = ''
   variables.value.forEach((variable) => { variable.previewValue = '' })
@@ -92,7 +96,7 @@ async function importSelectedRecords() {
     if (requestId !== contextRequest) return
     importedContext.value = result
     currentRecordOptions.value = result.records
-    missingVariables.value = result.missing
+    importedMissingVariables.value = result.missing
     variables.value.forEach((variable) => { variable.previewValue = result.context[contextCode(variable)] || '' })
   } catch (error: any) {
     if (requestId === contextRequest) importError.value = error?.response?.data?.detail || '报告变量加载失败，请重试'
@@ -156,7 +160,7 @@ watch(() => JSON.stringify(variables.value.map(({ previewValue, ...variable }) =
       <div class="preview-values"><el-input v-for="item in variables" :key="contextCode(item)" v-model="item.previewValue" :readonly="item.mode === 'CURRENT_RECORD'" :placeholder="item.mode === 'CURRENT_RECORD' ? '请先选择测试用编组记录' : contextCode(item) || '请先选择字段'" /></div>
     </el-form-item>
     <div class="prompt-preview"><b>发送内容预览</b><pre>{{ preview }}</pre></div>
-    <div class="ai-options"><el-input v-model="config.model" placeholder="模型；留空使用系统配置" /><el-input-number v-model="config.maxLength" :min="100" :max="8000" /><el-input-number v-model="config.temperature" :min="0" :max="2" :step="0.1" /></div>
+    <div class="ai-options"><el-input v-model="config.model" placeholder="模型；留空使用系统配置" /><el-input-number v-model="config.maxLength" :min="100" :max="AI_MAX_OUTPUT_TOKENS" /><el-input-number v-model="config.temperature" :min="0" :max="2" :step="0.1" /></div>
     <div><el-button type="primary" :loading="testing" :disabled="contextLoading || (!!selectedGenerationId && !importedContext) || (requiresCurrentRecord && !importedContext?.currentRecord)" @click="testGeneration">测试生成</el-button></div>
     <div v-if="testOutput" class="prompt-preview"><b>测试结果</b><pre>{{ testOutput }}</pre></div>
   </section>

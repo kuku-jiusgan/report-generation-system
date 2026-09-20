@@ -167,7 +167,17 @@ export interface OnlyOfficeBootstrap {
   config: Record<string, unknown>
 }
 
+export interface CreateReportInput {
+  title: string
+  sourceDocumentId?: string
+  excelDocumentId?: string
+  templateId?: string
+  protocolDocumentId?: string
+  deferWordGeneration?: boolean
+}
+
 const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
+const REPORT_GENERATION_TIMEOUT = 600000
 http.interceptors.response.use(undefined, (error) => {
   if (error.response?.status === 401) window.dispatchEvent(new Event('auth-expired'))
   return Promise.reject(error)
@@ -217,10 +227,15 @@ export async function listReportTemplates() {
   return (await http.get<AdminTemplate[]>('/report-templates')).data
 }
 
-export async function createReport(sourceDocumentId?: string, excelDocumentId?: string, templateId?: string, protocolDocumentId?: string) {
+export async function createReport(input: CreateReportInput) {
   return (await http.post<ReportTask>('/reports', {
-    source_document_id: sourceDocumentId, excel_document_id: excelDocumentId, template_id: templateId, protocol_document_id: protocolDocumentId,
-  })).data
+    title: input.title,
+    source_document_id: input.sourceDocumentId,
+    excel_document_id: input.excelDocumentId,
+    template_id: input.templateId,
+    protocol_document_id: input.protocolDocumentId,
+    defer_word_generation: input.deferWordGeneration,
+  }, { timeout: REPORT_GENERATION_TIMEOUT })).data
 }
 
 export async function updateReport(report: ReportTask) {
@@ -234,7 +249,9 @@ export async function updateReport(report: ReportTask) {
 
 export async function generateReport(id: string) {
   try {
-    return (await http.post<ReportTask>(`/reports/${id}/generate`)).data
+    return (await http.post<ReportTask>(`/reports/${id}/generate`, undefined, {
+      timeout: REPORT_GENERATION_TIMEOUT,
+    })).data
   } catch (error) {
     const response = error as { response?: { data?: { detail?: string } } }
     const detail = response.response?.data?.detail
@@ -244,28 +261,30 @@ export async function generateReport(id: string) {
 }
 
 export async function rebuildReport(id: string) {
-  return (await http.post<ReportTask>(`/reports/${id}/rebuild-word`)).data
+  return (await http.post<ReportTask>(`/reports/${id}/rebuild-word`, undefined, {
+    timeout: REPORT_GENERATION_TIMEOUT,
+  })).data
 }
 
 export async function replaceReportSource(id: string, sourceDocumentId: string, sourceType: 'PDF' | 'EXCEL', force = false) {
   return (await http.post<ReportTask>(`/reports/${id}/replace-source`, {
     source_document_id: sourceDocumentId, source_type: sourceType, force,
-  }, { timeout: 300000 })).data
+  }, { timeout: REPORT_GENERATION_TIMEOUT })).data
 }
 
 export async function applyLimsToReport(
   id: string,
-  importId: string,
+  projectId: string,
   instanceIds: string[],
   conflictResolutions: Record<string, string>,
   force = false,
 ) {
   return (await http.post<ReportTask>(`/reports/${id}/apply-lims`, {
-    import_id: importId,
+    project_id: projectId,
     instance_ids: instanceIds,
     conflict_resolutions: conflictResolutions,
     force,
-  }, { timeout: 300000 })).data
+  }, { timeout: REPORT_GENERATION_TIMEOUT })).data
 }
 
 export async function listReports(scope: 'mine' | 'all' = 'mine') {

@@ -19,6 +19,10 @@ CONFIG = {
     "promptTemplate": "{{results}}；RSD：{{results.rsd}}；数量：{{results.name}}",
 }
 RECORDS = [{"name": "测试甲", "rsd": 1.4}, {"name": "测试乙", "rsd": 0.3}]
+FIELDS = [
+    {"fieldCode": "results.rsd", "legacyJsonPath": "$.results[*].rsd", "label": "RSD"},
+    {"fieldCode": "results.name", "legacyJsonPath": "$.results[*].name", "label": "名称"},
+]
 
 
 def generation(source="EXCEL"):
@@ -45,6 +49,47 @@ def test_report_snapshot_supplies_raw_values_and_ai_formatted_context(source):
     assert "数量：2" in prompt
 
 
+def test_field_code_does_not_fallback_to_group_payload():
+    config = {
+        "contextVariables": [{"fieldCode": "results", "mode": "ALL", "required": True}],
+        "promptTemplate": "试验数据：{{results}}",
+    }
+
+    imported = report_ai_context(generation("LIMS"), config)
+
+    assert imported["missing"] == ["results"]
+    assert imported["values"]["results"] is None
+
+
+@pytest.mark.parametrize("source", ["EXCEL", "LIMS"])
+def test_extracted_fields_missing_from_original_values_use_catalog_paths(source):
+    item = generation(source)
+    item["generation_snapshot"]["original_values"] = {}
+
+    imported = report_ai_context(item, CONFIG, context_fields=FIELDS)
+
+    assert imported["missing"] == []
+    assert imported["values"]["results.rsd"] == [1.4, 0.3]
+    assert imported["context"]["results.rsd"] == "1.4%、0.3%"
+    assert imported["context"]["results.name"] == "2"
+
+
+def test_nested_extracted_field_uses_its_standard_path():
+    item = generation()
+    item["generation_snapshot"]["original_values"] = {}
+    item["generation_snapshot"]["resolved_data"]["source_payloads"]["EXCEL"]["results"] = [
+        {"summary": {"rsd": 1.4}}, {"summary": {"rsd": 0.3}},
+    ]
+    config = {"contextVariables": [{"fieldCode": "results.rsd", "required": True}],
+              "promptTemplate": "{{results.rsd}}"}
+    fields = [{"fieldCode": "results.rsd", "legacyJsonPath": "$.results[*].summary.rsd"}]
+
+    imported = report_ai_context(item, config, context_fields=fields)
+
+    assert imported["values"]["results.rsd"] == [1.4, 0.3]
+    assert imported["missing"] == []
+
+
 def test_each_generation_uses_its_own_snapshot():
     first, second = generation(), generation()
     second["generation_snapshot"]["original_values"]["results.rsd"] = [2.0]
@@ -60,11 +105,23 @@ def test_missing_values_are_reported_without_reading_current_report():
     assert set(imported["missing"]) == {"results.rsd", "results.name"}
 
 
+def test_missing_catalog_path_still_reports_required_field():
+    item = generation()
+    item["generation_snapshot"]["original_values"] = {}
+    item["generation_snapshot"]["resolved_data"]["source_payloads"]["EXCEL"] = {}
+
+    imported = report_ai_context(item, CONFIG, context_fields=FIELDS)
+
+    assert set(imported["missing"]) == {"results", "results.rsd", "results.name"}
+
+
 def test_does_not_merge_different_source_namespaces():
     item = generation()
-    item["generation_snapshot"]["resolved_data"]["source_payloads"] = {
+    resolved_data = item["generation_snapshot"]["resolved_data"]
+    resolved_data["source_payloads"] = {
         "EXCEL": {}, "LIMS": {"results": RECORDS},
     }
+    resolved_data["active_source_type"] = "EXCEL"
     assert "results" in report_ai_context(item, CONFIG)["missing"]
 
 

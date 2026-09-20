@@ -3,10 +3,13 @@
 import tempfile
 import zipfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from lxml import etree
 
+from backend.app.admin_routes.rule_catalog import _template_references
 from backend.app.services.docx_control_index import control_locations, describe_binding
+from backend.app.services.template_mapping_reconciliation import mappings_for_removed_controls
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -90,3 +93,46 @@ def test_rescan_after_the_template_changes() -> None:
         os.utime(template, (0, 0))
 
         assert control_locations(template) == {}
+
+
+def test_only_mappings_for_controls_removed_by_current_save_are_reconciled() -> None:
+    mappings = [
+        {"id": 1, "controlTag": "project.name"},
+        {"id": 2, "controlTag": "legacy.pending"},
+        {"id": 3, "controlTag": "still.present"},
+        {"id": 4, "controlTag": ""},
+    ]
+
+    removed = mappings_for_removed_controls(
+        mappings,
+        previous_tags={"project.name", "still.present"},
+        current_tags={"still.present", "new.control"},
+    )
+
+    assert [mapping["id"] for mapping in removed] == [1]
+
+
+def test_template_references_only_include_controls_present_in_document(monkeypatch) -> None:
+    connection = MagicMock()
+    connection.execute.return_value.fetchall.return_value = [{
+        "template_name": "测试模板",
+        "template_code": "TEST",
+        "version_no": 1,
+        "status": "DRAFT",
+        "template_file": "/tmp/template.docx",
+        "snapshot": """{"mappings": [
+            {"fieldCode": "project.name", "standardFieldCode": "project.name", "controlTag": "present"},
+            {"fieldCode": "project.name", "standardFieldCode": "project.name", "controlTag": "removed"}
+        ]}""",
+    }]
+    repository = MagicMock()
+    repository.database.connect.return_value.__enter__.return_value = connection
+    monkeypatch.setattr(
+        "backend.app.admin_routes.rule_catalog.control_locations",
+        lambda _path: {"present": "正文第 1 段"},
+    )
+
+    references = _template_references(repository, "project.name")
+
+    assert [reference["controlTag"] for reference in references] == ["present"]
+    assert references[0]["bound"] is True

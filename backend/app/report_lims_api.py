@@ -7,9 +7,14 @@ from .config import Settings
 from .database import Database
 from .report_utils import manual_edit_locked, resolved_report_title
 from .schemas import ApplyLimsRequest, ReportTask
-from .services.lims_normalizer import merge_instances
-from .services.system_field_group_assembler import apply_group_contracts
-from .services.system_field_groups import list_system_field_groups
+from .services.report_lims_refresh import (
+    LIMS_SOURCE_KEY,
+    LimsConflictError,
+    LimsSourceError,
+    lims_source_metadata,
+    recognition_metadata,
+    require_latest_lims,
+)
 
 
 def create_report_lims_router(
@@ -33,31 +38,18 @@ def create_report_lims_router(
         item = required_owned_report(report_id, user)
         if item.get("word_edit_locked") and not request.force:
             raise manual_edit_locked()
-        imported = database.get_lims_import(request.import_id)
-        if not imported:
-            raise HTTPException(404, "LIMS 导入记录不存在")
         try:
-            groups = list_system_field_groups(database)
-            instances = []
-            for instance_id in request.instance_ids:
-                payload = database.get_lims_normalized_payload(request.import_id, instance_id)
-                if payload is None:
-                    raise KeyError(instance_id)
-                instances.append(payload)
-            recognition = merge_instances(
-                instances, request.conflict_resolutions,
-                fields=database.list_lims_fields(True),
-                extraction_rules=database.list_lims_extraction_rules(), groups=groups, normalized=True,
+            recognition = require_latest_lims(
+                database, settings, request.project_id, request.instance_ids, request.conflict_resolutions,
             )
-            if recognition["unresolvedConflictCount"]:
-                raise HTTPException(409, {
-                    "message": "存在未处理的 LIMS 数据冲突",
-                    "conflicts": recognition["conflicts"],
-                })
             payload = recognition["payload"]
-            apply_group_contracts(payload, groups)
-        except KeyError as error:
-            raise HTTPException(404, f"LIMS 实验记录不存在：{error.args[0]}") from error
+        except LimsConflictError as error:
+            raise HTTPException(409, {
+                "message": str(error), "conflicts": error.conflicts,
+            }) from error
+        except LimsSourceError as error:
+            status_code = 404 if "不存在" in str(error) else 422
+            raise HTTPException(status_code, str(error)) from error
         except HTTPException:
             raise
         except ValueError as error:
@@ -67,7 +59,7 @@ def create_report_lims_router(
 
         data = dict(item["resolved_data"])
         sample = payload.get("samples", [{}])[0] if payload.get("samples") else {}
-        first_instance = instances[0]
+        first_instance = payload["instances"][0]
         values = {
             "report_no": payload.get("document", {}).get("code") or "+".join(request.instance_ids),
             "project_name": payload.get("project", {}).get("name") or first_instance.get("title", ""),
@@ -92,13 +84,12 @@ def create_report_lims_router(
         data["original_values"] = originals
         source_payloads = dict(data.get("source_payloads", {}))
         source_payloads["LIMS"] = payload
-        source_payloads["LIMS_RECOGNITION"] = {
-            "recognizedCounts": recognition["recognizedCounts"],
-            "duplicateCount": recognition["duplicateCount"],
-            "unmatched": recognition["unmatched"],
-            "instances": payload["instances"],
-        }
+        source_payloads["LIMS_RECOGNITION"] = recognition_metadata(recognition)
+        source_payloads[LIMS_SOURCE_KEY] = lims_source_metadata(
+            request.project_id, request.instance_ids, request.conflict_resolutions,
+        )
         data["source_payloads"] = source_payloads
+        data["active_source_type"] = "LIMS"
         try:
             output_name = render_report_word(item, data, payload,
                                              phase="载入 LIMS 实验记录", actor=user["id"])

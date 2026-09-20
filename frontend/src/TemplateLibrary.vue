@@ -166,6 +166,7 @@ const {
               <template #default="scope">
                 <div class="version-row-actions">
                   <el-button
+                    v-if="scope.row.status === 'DRAFT'"
                     type="primary"
                     plain
                     :loading="activatingVersionId === scope.row.id"
@@ -175,7 +176,7 @@ const {
                   <el-button
                     :icon="CopyDocument"
                     @click="openCreateVersion(scope.row)"
-                    >基于此版本新建</el-button
+                    >基于此版本新建草稿</el-button
                   >
                   <el-button
                     type="danger"

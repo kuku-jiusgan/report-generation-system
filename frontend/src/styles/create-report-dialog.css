@@ -4,6 +4,8 @@
 .create-dialog-heading h2 { margin: 0; color: #263548; font-size: 22px; font-weight: 650; line-height: 1.4; }
 .create-report-dialog .el-dialog__body { min-height: 0; padding: 24px 28px; overflow: auto; scrollbar-width: thin; scrollbar-color: #c3cfdf transparent; }
 .create-template-area { margin-bottom: 24px; }
+.create-report-name { margin-bottom: 20px; display: grid; gap: 8px; }
+.create-report-name label { color: #263548; font-size: 14px; font-weight: 600; }
 .create-template-area .report-template-picker { margin: 0; }
 .create-template-area .report-template-picker label { color: #263548; font-size: 14px; }
 .create-template-area .report-template-picker p { color: var(--create-muted); line-height: 1.6; overflow-wrap: anywhere; }

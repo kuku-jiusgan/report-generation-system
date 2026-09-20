@@ -25,6 +25,7 @@ from .services.onlyoffice_force_save import (
     OnlyOfficeForceSaveError, request_onlyoffice_force_save, wait_for_file_update,
 )
 from .services.template_file_store import TemplateFileStore
+from .services.template_mapping_reconciliation import mappings_for_removed_controls
 from .admin_routes.protocol_rules import register_protocol_rule_routes
 from .admin_routes.lims_rules import register_lims_rule_routes
 from .admin_routes.rule_catalog import register_rule_catalog_routes
@@ -49,19 +50,13 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         logger.info("已迁移历史发布模板到独立存储 migrated_versions=%s", migrated_versions)
     chapter_titles, section_titles = CHAPTER_TITLES, SECTION_TITLES
 
-    def ensure_editable_workspace() -> dict[str, Any]:
+    def require_editable_workspace() -> dict[str, Any]:
         workspace = repository.active_workspace()
         if not workspace:
             raise ValueError("没有活动模板版本")
-        if workspace["versionStatus"] == "DRAFT":
-            return workspace
-        draft = repository.create_template_version(
-            workspace["templateId"], workspace["versionId"],
-            f"基于 V{workspace['versionNo']} 创建的草稿",
-        )
-        source = Path(draft["templateFile"]) if draft.get("templateFile") else settings.template_path
-        file_store.initialize_version(str(draft["id"]), source)
-        return repository.activate_template_version(workspace["templateId"], str(draft["id"]))
+        if workspace["versionStatus"] != "DRAFT":
+            raise ValueError("已发布或历史模板版本不可进入设计器，请先基于该版本新建草稿")
+        return workspace
 
     def designer_payload() -> dict[str, Any]:
         mappings = repository.list_mappings()
@@ -82,7 +77,8 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         # 历史 admin_content_blocks 不属于当前设计器结构。系统字段目录中的直属字段与
         # 标准编组统一装配为虚拟块，字段归属只取后端目录元数据。
         blocks_by_chapter, groups_by_chapter = designer_blocks(
-            standard_catalog["chapters"], standard_groups, mappings, configured_blocks, table_rules,
+            standard_catalog["chapters"], chapter_rows, standard_groups,
+            mappings, configured_blocks, table_rules,
         )
         nodes = {row["id"]: {**row, "blocks": blocks_by_chapter.get(row["id"], []),
                               "standardGroups": groups_by_chapter.get(row["id"], []), "children": []} for row in chapter_rows}
@@ -213,12 +209,9 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
             if not version or version["templateId"] != template_id:
                 raise ValueError("模板版本不存在")
             if version["status"] != "DRAFT":
-                draft = repository.create_template_version(
-                    template_id, version_id, f"基于 V{version['versionNo']} 创建的草稿",
+                raise HTTPException(
+                    409, "已发布或历史模板版本不可进入设计器，请先基于该版本新建草稿",
                 )
-                source = Path(draft["templateFile"]) if draft.get("templateFile") else settings.template_path
-                file_store.initialize_version(str(draft["id"]), source)
-                version_id = str(draft["id"])
             workspace = repository.activate_template_version(template_id, version_id)
             file_store.ensure_active_draft()
             # 切换活动版本后，该版本此前签发的文档 key 不再代表当前草稿
@@ -229,7 +222,10 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
 
     @router.get("/designer")
     def template_designer() -> dict[str, Any]:
-        ensure_editable_workspace()
+        try:
+            require_editable_workspace()
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
         file_store.ensure_active_draft()
         return designer_payload()
 
@@ -430,7 +426,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         if not settings.onlyoffice_jwt_secret:
             raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请通过 start.ps1 启动服务")
         try:
-            workspace = ensure_editable_workspace()
+            workspace = require_editable_workspace()
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
         if not workspace:
@@ -534,9 +530,24 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         try:
             with urllib.request.urlopen(payload["url"], timeout=60) as response, temporary.open("wb") as target:
                 target.write(response.read())
+            previous_tags = set(control_locations(output))
+            current_tags = set(control_locations(temporary))
+            removed_mappings = mappings_for_removed_controls(
+                repository.list_mappings(), previous_tags, current_tags,
+            )
             temporary.replace(output)
             repository.set_version_document_key(version_id, callback_key)
             repository.set_template_version_file(version_id, str(output))
+            for mapping in removed_mappings:
+                repository.delete_mapping(int(mapping["id"]))
+            if removed_mappings:
+                repository.save_active_workspace()
+                logger.info(
+                    "ONLYOFFICE 草稿控件删除后已同步清理映射 version_id=%s mapping_ids=%s control_tags=%s",
+                    version_id,
+                    [mapping["id"] for mapping in removed_mappings],
+                    [mapping["controlTag"] for mapping in removed_mappings],
+                )
         except Exception as error:
             temporary.unlink(missing_ok=True)
             raise HTTPException(502, f"保存模板失败：{error}") from error
@@ -547,8 +558,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     register_protocol_rule_routes(router, repository, settings)
     register_data_source_routes(router, repository)
     register_publishing_routes(
-        router, repository, file_store.ensure_active_draft, file_store.initialize_version,
-        file_store.publish_version, compiled_dir,
+        router, repository, file_store.ensure_active_draft, file_store.publish_version, compiled_dir,
     )
 
     return router

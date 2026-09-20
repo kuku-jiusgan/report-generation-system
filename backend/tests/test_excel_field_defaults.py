@@ -20,6 +20,10 @@ LINEARITY_CODES = [f"uncategorized.field_{index:03d}" for index in range(21, 28)
 REPEATABILITY_CODES = [f"uncategorized.field_{index:03d}" for index in range(30, 43)]
 
 
+def test_validation_conclusion_has_no_legacy_conclusions_excel_rule() -> None:
+    assert "uncategorized.field_002" not in EXCEL_FIELD_PATHS
+
+
 def test_extracts_detection_limit_result_columns() -> None:
     fields = [
         {"fieldCode": code, "cardinality": "MANY", "legacyJsonPath": EXCEL_FIELD_PATHS[code]}
@@ -55,6 +59,59 @@ def test_excel_source_metadata_is_recorded_when_applied() -> None:
     assert data["field_sources"]["uncategorized.field_007"] == {
         "type": "EXCEL", "record_id": "abc123", "sourcePath": "uncategorized.field_007",
     }
+
+
+def test_system_suitability_keeps_one_outer_record_per_impurity() -> None:
+    workbook = Workbook()
+    cover = workbook.active
+    cover.title = "首页"
+    cover["B8"] = 5
+    for index, name in enumerate(("测试1", "测试2", "测试3", 22222, "liwei"), 9):
+        cover.cell(index, 2, name)
+    result = workbook.create_sheet("系统适用性")
+    for impurity_index in range(5):
+        start_column = 1 + impurity_index * 3
+        for injection_index in range(6):
+            row = 3 + injection_index
+            result.cell(row, start_column, f"系统适用性溶液{injection_index + 1}")
+            result.cell(row, start_column + 1, 4.2 + injection_index / 100)
+            result.cell(row, start_column + 2, 1000 + injection_index)
+        result.cell(9, start_column + 1, 0.1)
+        result.cell(9, start_column + 2, 1.4)
+    codes = (
+        "systemSuitability.impurityName", "systemSuitability.solutionName",
+        "systemSuitability.retentionTime", "systemSuitability.peakArea",
+        "systemSuitability.retentionTimeRsd", "systemSuitability.peakAreaRsd",
+    )
+    paths = {
+        "systemSuitability.impurityName": "$.systemSuitability[*].impurityName",
+        "systemSuitability.solutionName": "$.systemSuitability[*].injections[*].solutionName",
+        "systemSuitability.retentionTime": "$.systemSuitability[*].injections[*].retentionTime",
+        "systemSuitability.peakArea": "$.systemSuitability[*].injections[*].peakArea",
+        "systemSuitability.retentionTimeRsd": "$.systemSuitability[*].summary.retentionTimeRsd",
+        "systemSuitability.peakAreaRsd": "$.systemSuitability[*].summary.peakAreaRsd",
+    }
+    fields = [
+        {"fieldCode": code, "groupCode": "systemSuitability", "cardinality": "MANY",
+         "legacyJsonPath": paths[code]}
+        for code in codes
+    ]
+    rules = [
+        {"id": index, "fieldCode": code, "sourceType": "EXCEL", "priority": 50,
+         "enabled": True, "config": _rule_config(code, paths[code])}
+        for index, code in enumerate(codes, 1)
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "system-suitability.xlsx"
+        workbook.save(path)
+        payload = extract_excel_fields(path, fields, rules)
+
+    records = payload["systemSuitability"]
+    assert [record["impurityName"] for record in records] == ["测试1", "测试2", "测试3", 22222, "liwei"]
+    assert len(records) == 5
+    assert all(len(record["injections"]) == 6 for record in records)
+    assert all(record["summary"] == {"retentionTimeRsd": 0.1, "peakAreaRsd": 1.4}
+               for record in records)
 
 
 def test_detection_limit_rules_read_one_row_per_impurity() -> None:
@@ -195,6 +252,8 @@ def test_quantitation_impurity_name_reads_block_header_cells() -> None:
     config = _rule_config(code, EXCEL_FIELD_PATHS[code])
     assert config["sheet"] == "检测限与定量限"
     assert config["rowStart"] == config["rowEnd"] == 8
+    assert config["rowStartOffsetFromRepeatCount"] == 5
+    assert config["rowCount"] == 1
     assert config["startColumn"] == 3
     assert config["rowStep"] == 8
     assert config["repeatCountSource"] == {"sheet": "首页", "row": 8, "column": 2}
@@ -202,9 +261,11 @@ def test_quantitation_impurity_name_reads_block_header_cells() -> None:
     workbook = Workbook()
     cover = workbook.active
     cover.title = "首页"
-    cover["B8"] = 3
+    cover["B8"] = 5
     result = workbook.create_sheet("检测限与定量限")
-    result["C8"], result["C16"], result["C24"] = "测试1", "测试2", "测试3"
+    result["C8"] = "结论"
+    for row, name in zip((10, 18, 26, 34, 42), ("测试1", "测试2", "测试3", "测试4", "测试5"), strict=True):
+        result.cell(row, 3, name)
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "quantitation-names.xlsx"
         workbook.save(path)
@@ -214,7 +275,9 @@ def test_quantitation_impurity_name_reads_block_header_cells() -> None:
                   "enabled": True, "config": config}]
         payload = extract_excel_fields(path, fields, rules)
 
-    assert [row["field_046"] for row in payload["dingliangxianjieguo"]] == ["测试1", "测试2", "测试3"]
+    assert [row["field_046"] for row in payload["dingliangxianjieguo"]] == [
+        "测试1", "测试2", "测试3", "测试4", "测试5",
+    ]
 
 
 def test_extracts_horizontal_linearity_results_and_statistics() -> None:

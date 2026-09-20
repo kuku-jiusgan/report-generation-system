@@ -239,9 +239,19 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
                 break
             try:
                 if config.get("mode") == "CHART_IMAGE":
-                    value = extract_residual_chart_values(path, int(config.get("pointsPerTest", 5)))
+                    value = extract_residual_chart_values(
+                        path,
+                        int(config.get("pointsPerTest", 5)),
+                        int(config.get("chartStartIndex", 0)),
+                        int(config.get("chartStep", 2)),
+                    )
                 elif config.get("mode") == "LINEAR_REGRESSION_CHART":
-                    value = extract_regression_chart_values(path, int(config.get("pointsPerTest", 1)))
+                    value = extract_regression_chart_values(
+                        path,
+                        int(config.get("pointsPerTest", 1)),
+                        int(config.get("chartStartIndex", 0)),
+                        int(config.get("chartStep", 2)),
+                    )
                 else:
                     value = _cell(reader, config) if config.get("mode") == "FIXED_CELL" else _repeat_values(reader, config)
             except (ExcelRuleError, ExcelChartError, KeyError, TypeError, ValueError) as error:

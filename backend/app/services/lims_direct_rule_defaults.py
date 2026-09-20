@@ -143,6 +143,9 @@ PROFILE_COLLECTIONS = {
     "ROBUSTNESS_SEQUENCE_TABLE": "robustnessSequence", "SYSTEM_SUITABILITY_MATRIX": "systemSuitability",
 }
 
+# 方法参数的 field3 读取第 3 列，表头必须明确包含至少三列。
+METHOD_PARAMETERS_HEADER_PATTERN = r"^(?=(?:[^|]*\|){2})(?=.*(?:项目.*参数|分析方法))"
+
 
 def _system_suitability(json_key: str) -> dict[str, Any] | None:
     values = {
@@ -160,7 +163,8 @@ def _system_suitability(json_key: str) -> dict[str, Any] | None:
         "extractionType": "HTML_TABLE_COLUMN", "recordMode": "MATRIX", "headerRows": 2,
         "dataStartRow": 2, "dataStartColumn": 1, "columnStride": 2,
         "sectionPattern": r"(?:实|试)验结果.*系统适用性(?:结果)?",
-        "headerPattern": r"No\.?.*保留时间.*峰面积", "excludeRowPattern": r"结论|RSD|平均|标准差|置信区间",
+        # 首列在不同 LIMS 模板中可能叫“名称”或“No.”。
+        "headerPattern": r"(?:No\.?|名称).*保留时间.*峰面积", "excludeRowPattern": r"结论|RSD|平均|标准差|置信区间",
         **values[json_key],
     }
 
@@ -189,6 +193,8 @@ def direct_rule_config(collection: str, json_key: str) -> dict[str, Any] | None:
             "extractionType": "HTML_TABLE_COLUMN", "recordMode": "ROWS", "headerRows": 1,
             "sectionPattern": table["sectionPattern"], "headerPattern": table["headerPattern"],
         }
+        if collection == "methodParameters" and json_key == "field3":
+            config["headerPattern"] = METHOD_PARAMETERS_HEADER_PATTERN
         if json_key in table.get("columns", {}):
             config["sourcePath"] = table["columns"][json_key]
         elif json_key in table.get("columnIndexes", {}):
