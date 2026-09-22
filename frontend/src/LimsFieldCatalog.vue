@@ -20,6 +20,7 @@ import FieldOwnershipMover from "./FieldOwnershipMover.vue";
 import FieldOutputFormatSelect from "./FieldOutputFormatSelect.vue";
 import FieldExtractionRuleForm from "./FieldExtractionRuleForm.vue";
 import { sourceTypeLabel, transforms } from "./fieldRuleOptions";
+import { loadProtocolMetadata, type ProtocolMetadata } from "./protocol-api";
 type CatalogRule = SystemFieldRule;
 const loading = ref(false);
 const saving = ref(false);
@@ -43,6 +44,7 @@ const draft = ref<Partial<StandardField>>();
 const rules = ref<CatalogRule[]>([]);
 const references = ref<TemplateReference[]>([]);
 const limsMetadata = ref<LimsRuleMetadata>();
+const protocolMetadata = ref<ProtocolMetadata>();
 const search = ref("");
 const ruleDialog = ref(false);
 const ruleSaving = ref(false);
@@ -78,6 +80,14 @@ function transformLabel(value: string, sourceType: string) {
   return options.find((item) => item.value === value)?.label || value || "不转换";
 }
 function ruleMethodNote(rule: CatalogRule) {
+  if (rule.sourceType === "PROTOCOL") {
+    const config = rule.config || {};
+    const mode = protocolMetadata.value?.modes.find((item) => item.value === config.mode)?.label;
+    if (!mode) return "方案提取方式详情未加载，请重新选择字段";
+    const start = String(config.sectionPattern || "");
+    const end = String(config.endPattern || "");
+    return [mode, start ? `起始：${start}` : "", end ? `结束：${end}` : ""].filter(Boolean).join(" · ");
+  }
   if (rule.sourceType !== "LIMS") return "";
   const config = rule.config || {};
   const definition = limsMetadata.value?.extractionTypes.find(
@@ -224,7 +234,13 @@ async function selectField(field: StandardField, chapterId?: number) {
   await Promise.all([loadRules(field.fieldCode), loadReferences(field.fieldCode)]);
 }
 async function loadRules(fieldCode: string) {
-  try { rules.value = await adminApi.systemFieldRules(fieldCode) as CatalogRule[]; }
+  try {
+    rules.value = await adminApi.systemFieldRules(fieldCode) as CatalogRule[];
+    if (rules.value.some((rule) => rule.sourceType === "PROTOCOL") && !protocolMetadata.value) {
+      try { protocolMetadata.value = await loadProtocolMetadata(); }
+      catch (error) { ElMessage.error(`方案提取方式详情加载失败：${errorText(error)}`); }
+    }
+  }
   catch (error) { ElMessage.error(errorText(error)); }
 }
 async function loadReferences(fieldCode: string) {

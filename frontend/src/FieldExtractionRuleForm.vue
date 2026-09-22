@@ -7,7 +7,8 @@ import ExcelWorkbookLocation from './ExcelWorkbookLocation.vue'
 import ExcelFieldRuleEditor from './ExcelFieldRuleEditor.vue'
 import ProtocolFieldRuleEditor from './ProtocolFieldRuleEditor.vue'
 import LimsFieldRuleEditor from './LimsFieldRuleEditor.vue'
-import { sourceTypes, transforms } from './fieldRuleOptions'
+import KeyedLookupRuleEditor from './KeyedLookupRuleEditor.vue'
+import { shouldResetProtocolConfig, sourceTypes, transforms } from './fieldRuleOptions'
 type CatalogRule = SystemFieldRule
 const rule = defineModel<Partial<CatalogRule>>('rule', { required: true })
 const config = defineModel<Record<string, unknown>>('config', { required: true })
@@ -51,7 +52,7 @@ async function loadLimsMetadata() {
 }
 watch(() => rule.value.sourceType, (sourceType, previous) => {
   emit('mapping-dirty', false)
-  if (sourceType === 'PROTOCOL' || previous === 'PROTOCOL') config.value = {}
+  if (shouldResetProtocolConfig(sourceType, previous)) config.value = {}
   if (sourceType === 'LIMS') void loadLimsMetadata()
   if (sourceType !== 'LIMS' && rule.value.transform === 'REGEX_REPLACE') rule.value.transform = 'TRIM'
 }, { immediate: true })
@@ -76,13 +77,13 @@ watch(() => rule.value.sourceType, (sourceType, previous) => {
           <SystemAiRuleEditor v-model="config" :fields="fields" :groups="groups" :field-code="fieldCode" />
         </template>
         <template v-if="rule.sourceType === 'CALCULATED'">
-          <el-form-item label="依赖系统字段"><el-select v-model="config.dependencies" multiple filterable><el-option v-for="item in fields" :key="item.fieldCode" :label="`${item.label} · ${item.fieldCode}`" :value="item.fieldCode" /></el-select></el-form-item>
-          <el-form-item label="计算表达式"><el-input v-model="config.expression" placeholder="例如 {sample.weight} / {sample.volume}" /></el-form-item>
-          <el-form-item label="文本拼接模板"><el-input v-model="config.textTemplate" type="textarea" :rows="4" placeholder="例如 {sample.name}（批号：{sample.batchNo}）" /><small class="form-help">计算表达式和文本拼接模板二选一。文本模板用 {系统字段编码} 引用下面的上下文变量。</small></el-form-item>
-          <el-form-item v-if="config.textTemplate" label="上下文变量">
-            <SystemContextVariables v-model="calculatedVariables" :fields="fields" :groups="groups" />
-            <small class="form-help">成组字段（一个字段多条取值）必须在这里声明取值方式，否则模板拿到的是整个列表。</small>
-          </el-form-item>
+          <KeyedLookupRuleEditor v-model="config" :fields="fields" :field-code="fieldCode" />
+          <template v-if="String(config.operation || '').toUpperCase() !== 'KEYED_LOOKUP'">
+            <el-form-item v-if="config.textTemplate" label="上下文变量">
+              <SystemContextVariables v-model="calculatedVariables" :fields="fields" :groups="groups" />
+              <small class="form-help">成组字段（一个字段多条取值）必须在这里声明取值方式，否则模板拿到的是整个列表。</small>
+            </el-form-item>
+          </template>
         </template>
         <el-skeleton v-if="rule.sourceType === 'LIMS' && limsMetadataLoading" :rows="3" animated />
         <div v-else-if="rule.sourceType === 'LIMS' && limsMetadataError" class="rule-load-error">

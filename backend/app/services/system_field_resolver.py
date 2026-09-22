@@ -13,6 +13,7 @@ from .excel_standard_path import excel_target_path
 from .payload_paths import PayloadPathError, read_payload_path, set_payload_path
 from .ai_context_inputs import prepare_ai_context
 from .system_field_rule_invariant import rules_by_field_source
+from .keyed_lookup_calculation import evaluate_keyed_lookup, is_keyed_lookup
 
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,8 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
     if source_type == "MANUAL":
         return report_data.get(field_code)
     if source_type == "CALCULATED":
+        if is_keyed_lookup(config):
+            return evaluate_keyed_lookup(config, values)
         dependencies = [str(item) for item in config.get("dependencies", [])]
         template = str(config.get("textTemplate") or "")
         if template:
@@ -436,4 +439,9 @@ def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, An
                 logger.warning(message)
                 if message not in warnings:
                     warnings.append(message)
+        keyed_failures = [f"{code}：{failures[code]}" for code in pending
+                          if isinstance(failures.get(code), CalculationError)
+                          and is_keyed_lookup((by_field_source.get(code, {}).get("CALCULATED") or {}).get("config") or {})]
+        if keyed_failures:
+            raise ValueError("按项目组装验证结论失败：" + "；".join(keyed_failures))
     return payload

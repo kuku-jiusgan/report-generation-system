@@ -14,6 +14,7 @@ from .docx_field_values import (
 )
 from .docx_images import embed_image_controls
 from .docx_language import normalize_part_languages, write_docx_parts_atomic
+from .docx_protocol_raw import copy_protocol_raw_blocks
 from .docx_repeat_rows import Warn, fill_repeat_rows
 from .table_layout_rules import TableLayoutRules
 
@@ -141,7 +142,9 @@ def _remove_relationship_parts(parts: dict[str, tuple[Any, bytes]], relationship
 
 def build_mapped_docx(compiled_template: Path, output: Path, mappings: list[dict[str, Any]],
                       payload: dict[str, Any] | None = None, report_data: dict[str, Any] | None = None,
-                      table_rules: list[dict[str, Any]] | None = None) -> None:
+                      table_rules: list[dict[str, Any]] | None = None,
+                      protocol_document: Path | None = None,
+                      protocol_rules: list[dict[str, Any]] | None = None) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(compiled_template, "r") as archive:
         parts = {}
@@ -182,6 +185,8 @@ def build_mapped_docx(compiled_template: Path, output: Path, mappings: list[dict
         )
 
     embed_image_controls(parts, roots, active_mappings)
+    copy_protocol_raw_blocks(parts, roots["word/document.xml"], mappings,
+                             protocol_rules or [], protocol_document)
 
     for name, root in roots.items():
         parts[name] = (parts[name][0], etree.tostring(

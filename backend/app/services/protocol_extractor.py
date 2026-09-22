@@ -117,6 +117,18 @@ def _scalar(scope: list[dict], config: dict) -> tuple[str, list[dict]]:
     return value, locations
 
 
+def _raw_block(blocks: list[dict], config: dict) -> tuple[str, list[dict]]:
+    scope = _scope(blocks, config)
+    selected = scope if config.get('includeStart', False) else scope[1:]
+    if not selected:
+        raise ProtocolMatchError('方案原文块内容为空')
+    value = '\n'.join(block.get('text', '') for block in selected)
+    locations = [_quote(block, quote=block.get('text', '')) for block in selected]
+    if not value.strip():
+        raise ProtocolMatchError('方案原文块内容为空')
+    return value, locations
+
+
 def _rows(blocks: list[dict], config: dict, field: dict, groups: list[dict], cache: dict):
     code = config['groupCode']
     group = next(item for item in groups if item['groupCode'] == code)
@@ -173,6 +185,8 @@ def extract_protocol(path: Path | None, document_id: str, fields: list[dict], ru
                 raise ProtocolMatchError('未上传 Word 方案，请上传 DOCX 文件')
             if config['mode'] == 'TABLE_ROWS':
                 value, locations = _rows(blocks, config, field, groups, cache)
+            elif config['mode'] == 'RAW_BLOCK':
+                value, locations = _raw_block(blocks, config)
             else:
                 value, locations = _scalar(_scope(blocks, config), config)
             value = _transform(value, rule.get('transform', 'TRIM'))

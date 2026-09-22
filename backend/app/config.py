@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     def reports_dir(self) -> Path:
         return self.data_dir / "reports"
 
+    @property
+    def database_backups_dir(self) -> Path:
+        return self.data_dir / "backups" / "mysql"
+
     def ensure_directories(self) -> None:
         for path in (self.data_dir, self.uploads_dir, self.reports_dir, self.template_path.parent):
             path.mkdir(parents=True, exist_ok=True)

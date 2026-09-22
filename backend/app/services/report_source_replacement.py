@@ -37,7 +37,6 @@ def replace_report_source(data: dict[str, Any], source: dict[str, Any], source_t
             "id": source["id"], "fileName": source["file_name"], "sha256": source.get("sha256", ""),
         }
     data["source_payloads"] = payloads
-    data["active_source_type"] = source_type
     warnings = data.setdefault("warnings", [])
     for warning in source.get("warnings", []):
         if warning not in warnings:

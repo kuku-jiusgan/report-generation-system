@@ -75,6 +75,29 @@ def test_protocol_repeat_rows_fill_from_protocol_namespace(tmp_path):
     assert root.xpath('.//w:tbl/w:tr//w:t/text()', namespaces=NS) == ['仪器甲', 'A', '仪器乙', 'B']
 
 
+def test_repeat_rows_use_excel_group_when_lims_group_is_empty(tmp_path):
+    data = {
+        'source_payloads': {
+            'EXCEL': {'systemSuitability': [{'name': '系统适用性样品', 'result': '通过'}]},
+            'LIMS': {'systemSuitability': []},
+        },
+        'field_sources': {
+            'systemSuitability.name': {'type': 'EXCEL'},
+            'systemSuitability.result': {'type': 'EXCEL'},
+        },
+    }
+    mappings = [{'fieldCode': f'systemSuitability.{key}', 'standardFieldCode': f'systemSuitability.{key}',
+        'sourcePath': f'$.systemSuitability[*].{key}', 'groupItemPath': '$.systemSuitability[*]',
+        'controlTag': key, 'repeatType': 'ROW', 'tableNo': 'T1', 'sourceType': 'SYSTEM', 'enabled': True}
+        for key in ('name', 'result')]
+    body = f'<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc>{control("name")}</w:tc><w:tc>{control("result")}</w:tc></w:tr></w:tbl>'
+    rules = [{'tableNo': 'T1', 'mode': 'ROW_REPEAT', 'enabled': True, 'physicalTableIndex': 1, 'dataRowStart': 1}]
+
+    root = generate(tmp_path, body, mappings, data, rules)
+
+    assert root.xpath('.//w:tbl/w:tr//w:t/text()', namespaces=NS) == ['系统适用性样品', '通过']
+
+
 def test_generated_snapshot_ai_group_reads_protocol_and_remains_immutable():
     data = {'source_payloads': {'EXCEL': {'instruments': [{'name': '旧仪器'}]}}}
     replace_protocol_result(data, source_payload([{'name': '仪器甲'}, {'name': '仪器乙'}], 'instruments'), 'hash')

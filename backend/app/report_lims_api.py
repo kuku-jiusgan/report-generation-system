@@ -111,7 +111,6 @@ def create_report_lims_router(
         record_lims_field_provenance(
             data, payload, fields, "+".join(request.instance_ids),
         )
-        data["active_source_type"] = "LIMS"
         try:
             output_name = render_report_word(item, data, payload,
                                              phase="载入 LIMS 实验记录", actor=user["id"])

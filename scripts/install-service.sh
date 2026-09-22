@@ -9,6 +9,10 @@ HEALTHCHECK_SERVICE_SOURCE="$PROJECT_ROOT/deploy/report-generation-healthcheck.s
 HEALTHCHECK_SERVICE_TARGET="/etc/systemd/system/report-generation-healthcheck.service"
 HEALTHCHECK_TIMER_SOURCE="$PROJECT_ROOT/deploy/report-generation-healthcheck.timer"
 HEALTHCHECK_TIMER_TARGET="/etc/systemd/system/report-generation-healthcheck.timer"
+BACKUP_SERVICE_SOURCE="$PROJECT_ROOT/deploy/report-generation-backup.service"
+BACKUP_SERVICE_TARGET="/etc/systemd/system/report-generation-backup.service"
+BACKUP_TIMER_SOURCE="$PROJECT_ROOT/deploy/report-generation-backup.timer"
+BACKUP_TIMER_TARGET="/etc/systemd/system/report-generation-backup.timer"
 
 if [[ "$(id -u)" -ne 0 ]]; then
     echo "Please run this installer with sudo: sudo ./scripts/install-service.sh" >&2
@@ -24,17 +28,26 @@ if [[ ! -f "$PROJECT_ROOT/.env" ]]; then
     echo "Missing $PROJECT_ROOT/.env" >&2
     exit 1
 fi
+if ! command -v mysqldump >/dev/null 2>&1; then
+    echo "mysqldump is missing. Install the MySQL client before enabling database backups." >&2
+    exit 1
+fi
 
 install -m 0644 "$SERVICE_SOURCE" "$SERVICE_TARGET"
 install -m 0644 "$HEALTHCHECK_SERVICE_SOURCE" "$HEALTHCHECK_SERVICE_TARGET"
 install -m 0644 "$HEALTHCHECK_TIMER_SOURCE" "$HEALTHCHECK_TIMER_TARGET"
+install -m 0644 "$BACKUP_SERVICE_SOURCE" "$BACKUP_SERVICE_TARGET"
+install -m 0644 "$BACKUP_TIMER_SOURCE" "$BACKUP_TIMER_TARGET"
 chmod 0755 "$PROJECT_ROOT/scripts/service-healthcheck.sh"
 systemctl daemon-reload
 systemctl enable --now report-generation.service
 systemctl enable --now report-generation-healthcheck.timer
+systemctl enable --now report-generation-backup.timer
 
 echo "report-generation.service has been installed and started."
 echo "Health monitoring runs once per minute."
+echo "Database backups run daily at 00:00 server time."
 echo "Status: sudo systemctl status report-generation.service"
 echo "Timer:  sudo systemctl status report-generation-healthcheck.timer"
+echo "Backup: sudo systemctl status report-generation-backup.timer"
 echo "Logs:   sudo journalctl -u report-generation.service -f"

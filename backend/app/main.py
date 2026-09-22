@@ -34,13 +34,14 @@ from .services.mapped_docx_generator import build_mapped_docx
 from .services.docx_field_refresher import refresh_docx_fields
 from .services.docx_export import export_docx_bytes, export_docx_response, write_export_docx
 from .services.system_field_resolver import resolve_system_fields
-from .services.standard_payloads import active_standard_payload
+from .services.standard_payloads import standard_context_payload
+from .services.keyed_lookup_calculation import calculated_dependencies
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
 from .services.template_block_rules import apply_template_block_rules
 from .services.excel_report_source import apply_excel_source, apply_pdf_source, build_source_document
 from .services.rule_admin import RuleAdminRepository
-from .services.protocol_report_source import refresh_protocol_source
+from .services.protocol_report_source import protocol_document_path, refresh_protocol_source
 from .services.protocol_document import apply_protocol_document
 from .services.report_lims_refresh import refresh_report_lims_payload
 from .services.report_template_runtime import resolve_runtime_template
@@ -163,16 +164,13 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
     output_name = (f"report-{item['id']}-{output_suffix}.docx" if output_suffix
                    else f"report-{item['id']}-working.docx")
     refresh_protocol_source(database, settings, data)
-    if payload is None and str(data.get("active_source_type") or "").upper() == "LIMS":
+    if payload is None and isinstance(data.get("source_payloads", {}).get("LIMS_SOURCE"), dict):
         refresh_report_lims_payload(database, settings, data)
     source_payloads = data.get("source_payloads", {})
-    active_payload = payload or active_standard_payload(data)
-    apply_group_contracts(active_payload, list_system_field_groups(database))
-    if not payload:
-        for source_name in ("EXCEL", "LIMS", "PDF"):
-            if source_payloads.get(source_name) is active_payload:
-                data.setdefault("source_payloads", {})[source_name] = active_payload
-                break
+    for source_name in ("EXCEL", "LIMS", "PDF"):
+        source_payload = source_payloads.get(source_name)
+        if isinstance(source_payload, dict):
+            apply_group_contracts(source_payload, list_system_field_groups(database))
     bound_codes = {str(mapping.get("standardFieldCode") or "") for mapping in mappings}
     all_fields = database.list_lims_fields()
     all_rules = database.list_system_field_rules()
@@ -188,7 +186,7 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
         for rule in rules_by_field.get(code, []):
             config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
             # 收集计算规则的依赖字段
-            dependencies = list(config.get("dependencies", []) or [])
+            dependencies = calculated_dependencies(config)
             # 收集上下文变量中的字段依赖（兼容旧的 fieldCode）
             dependencies += [
                 item.get("fieldCode") for item in (config.get("contextVariables", []) or [])
@@ -200,11 +198,18 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
                     required_codes.add(dependency)
                     pending_codes.append(dependency)
     system_fields = [field for field in all_fields if field["fieldCode"] in required_codes]
-    resolve_system_fields(system_fields, all_rules, active_payload, data)
+    render_payload = standard_context_payload(data, payload)
+    resolve_system_fields(system_fields, all_rules, render_payload, data)
     output_path = settings.reports_dir / output_name
     candidate_path = output_path.with_name(f".{output_path.stem}-{uuid.uuid4().hex[:8]}.docx")
     try:
-        build_mapped_docx(template, candidate_path, mappings, active_payload, data, table_rules)
+        protocol_path = (protocol_document_path(database, settings, data)
+                         if any(rule.get("enabled", True)
+                                and rule.get("sourceType") == "PROTOCOL"
+                                and (rule.get("config") or {}).get("mode") == "RAW_BLOCK"
+                                for rule in all_rules) else None)
+        build_mapped_docx(template, candidate_path, mappings, render_payload, data, table_rules,
+                          protocol_document=protocol_path, protocol_rules=all_rules)
         refresh_docx_fields(
             candidate_path, settings.libreoffice_executable, settings.libreoffice_timeout,
             settings.libreoffice_python_executable,
@@ -345,9 +350,9 @@ def create_report(request: CreateReportRequest,
                 apply_group_contracts(source_payload, list_system_field_groups(database))
         refresh_protocol_source(database, settings, data)
         # 在报告和首条生成历史入库前解析系统字段，确保后台详情反映本次提取结果。
-        active_payload = active_standard_payload(data)
-        resolve_system_fields(database.list_lims_fields(), database.list_system_field_rules(),
-                              active_payload, data)
+        fields = database.list_lims_fields()
+        rules = database.list_system_field_rules()
+        resolve_system_fields(fields, rules, standard_context_payload(data), data)
         if not data["project_name"] and data["sample"]:
             data["project_name"] = f"{data['sample']}分析报告"
         report_id = uuid.uuid4().hex

@@ -1,8 +1,24 @@
 """报告流程接入方案解析；先完成解析再替换旧值，失败不修改报告数据。"""
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from .protocol_extractor import extract_protocol
+from .protocol_document import validate_protocol_document
+
+
+def protocol_document_path(database, settings, data: dict[str, Any]) -> Path:
+    document = data.get('source_payloads', {}).get('PROTOCOL_DOCUMENT')
+    if not isinstance(document, dict) or not document.get('id'):
+        raise ValueError('报告未关联 Word 方案，请先上传方案文件')
+    source = database.get_source(document['id'])
+    if not source or source.get('source_type') != 'PROTOCOL':
+        raise ValueError('报告关联的方案文件不存在或类型无效')
+    path = settings.uploads_dir / source['stored_name']
+    if not path.is_file():
+        raise ValueError('报告关联的方案原始文件不存在，请重新上传')
+    validate_protocol_document(path, settings.max_upload_mb * 1024 * 1024)
+    return path
 
 
 def refresh_protocol_source(database, settings, data: dict[str, Any]) -> None:

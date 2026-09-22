@@ -23,7 +23,6 @@ def apply_excel_source(data: dict[str, Any], source: dict[str, Any], api_prefix:
         "id": source["id"], "fileName": source["file_name"], "sha256": source.get("sha256", ""),
         "downloadUrl": f"{api_prefix}/source-documents/{source['id']}/preview",
     }
-    data["active_source_type"] = "EXCEL"
     warnings = data.setdefault("warnings", [])
     for warning in source.get("warnings", []):
         if warning not in warnings:
@@ -68,7 +67,6 @@ def _record_excel_field_provenance(data: dict[str, Any], payload: dict[str, Any]
 
 def apply_pdf_source(data: dict[str, Any], source: dict[str, Any]) -> None:
     pdf_payload = data.setdefault("source_payloads", {}).setdefault("PDF", {})
-    data["active_source_type"] = "PDF"
     for field in source["extracted_fields"]:
         code, value = field["field_code"], field["value"]
         pdf_payload[code] = value

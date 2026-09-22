@@ -9,7 +9,7 @@ from backend.app.services.report_lims_refresh import (
     recognize_imported_lims,
     recognize_latest_lims,
 )
-from backend.app.services.standard_payloads import active_standard_payload
+from backend.app.services.standard_payloads import active_standard_payload, standard_group_values
 
 
 def _field(code: str, key: str) -> dict:
@@ -126,13 +126,41 @@ def test_report_refresh_queries_latest_lims_and_keeps_source_binding(monkeypatch
 
     refresh_report_lims_payload(database, settings, data)
 
-    assert data["active_source_type"] == "LIMS"
+    assert "active_source_type" not in data
     assert data["source_payloads"]["LIMS_SOURCE"] == source
     assert data["source_payloads"]["LIMS"]["referenceStandards"][0]["name"] == "最新对照品"
     assert data["field_sources"]["referenceStandards.name"]["type"] == "LIMS"
     assert data["field_sources"]["excel.only"]["type"] == "EXCEL"
-    assert active_standard_payload(data) is data["source_payloads"]["LIMS"]
+    assert standard_group_values(data, None, {"referenceStandards"})["referenceStandards"] == data["source_payloads"]["LIMS"]["referenceStandards"]
     database.get_lims_instance_payload.assert_not_called()
+
+
+def test_report_refresh_keeps_excel_only_group_when_lims_group_is_empty(monkeypatch) -> None:
+    database = _database()
+    settings = MagicMock()
+    _mock_latest_query(monkeypatch)
+    monkeypatch.setattr(
+        "backend.app.services.report_lims_refresh.list_system_field_groups", lambda _database: [],
+    )
+    source = lims_source_metadata("project-1", ["instance-1"], {})
+    excel_rows = [{"name": "系统适用性样品", "batchNo": "EX-001"}]
+    data = {
+        "source_payloads": {
+            "EXCEL": {"systemSuitability": excel_rows},
+            "LIMS": {"systemSuitability": []},
+            "LIMS_SOURCE": source,
+        },
+        "field_sources": {
+            "systemSuitability.name": {"type": "EXCEL"},
+            "systemSuitability.batchNo": {"type": "EXCEL"},
+        },
+    }
+
+    refresh_report_lims_payload(database, settings, data)
+
+    assert data["source_payloads"]["LIMS"].get("systemSuitability", []) == []
+    assert standard_group_values(data, None, {"systemSuitability"})["systemSuitability"] == excel_rows
+    assert "active_source_type" not in data
 
 
 def test_legacy_report_without_lims_source_binding_fails_clearly() -> None:

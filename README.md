@@ -90,12 +90,13 @@ sudo ./scripts/install-service.sh
 ```bash
 sudo systemctl status report-generation.service
 sudo systemctl status report-generation-healthcheck.timer
+sudo systemctl status report-generation-backup.timer
 sudo systemctl restart report-generation.service
 sudo systemctl stop report-generation.service
 sudo journalctl -u report-generation.service -f
 ```
 
-服务名为 `report-generation.service`，监听器为 `report-generation-healthcheck.timer`。启动时会先通过 [docker-compose.onlyoffice.yml](docker-compose.onlyoffice.yml) 启动 `report-system-onlyoffice`，再启动 `0.0.0.0:8010` 上的报告系统。监听器启用期间，即使手动停止主服务也会在下一次检查时重新启动；维护时应先停止监听器。配置了 `restart: unless-stopped` 的 ONLYOFFICE 容器会继续运行。
+服务名为 `report-generation.service`，监听器为 `report-generation-healthcheck.timer`。数据库备份定时器 `report-generation-backup.timer` 每天按服务器本地时间 00:00 执行；如果服务器当时关机，下一次开机后会补做一次。启动时会先通过 [docker-compose.onlyoffice.yml](docker-compose.onlyoffice.yml) 启动 `report-system-onlyoffice`，再启动 `0.0.0.0:8010` 上的报告系统。监听器启用期间，即使手动停止主服务也会在下一次检查时重新启动；维护时应先停止监听器。配置了 `restart: unless-stopped` 的 ONLYOFFICE 容器会继续运行。
 
 不安装 systemd、仅临时运行时仍可使用统一启动命令：
 
@@ -174,7 +175,17 @@ templates/             报告模板
 mapping/               模板字段映射
 ```
 
-备份时停止服务，然后复制整个 `data`、`templates` 和 `mapping` 目录。建议每天定时备份到另一块磁盘或 NAS，并设置备份保留周期。
+正式部署通过 systemd 每天 00:00 自动执行一次 MySQL 一致性备份，压缩文件保存在
+`data/backups/mysql/`。备份使用临时权限文件传递数据库密码，成功前不会暴露未完成文件；历史备份不会自动删除。
+可以手动备份并查看日志：
+
+```bash
+sudo systemctl start report-generation-backup.service
+sudo journalctl -u report-generation-backup.service
+```
+
+完整灾备还应复制整个 `data`、`templates` 和 `mapping` 目录到另一块磁盘或 NAS。数据库恢复前应先停止应用，
+解压目标 `.sql.gz` 后使用 MySQL 客户端导入；恢复会覆盖业务数据，必须在确认目标数据库和备份文件后手动执行。
 
 ## 生产部署
 

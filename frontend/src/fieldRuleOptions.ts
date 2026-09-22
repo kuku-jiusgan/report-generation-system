@@ -9,6 +9,11 @@ export const sourceTypes = [
 
 export const sourceTypeLabel = (value: string) =>
   sourceTypes.find((item) => item.value === value)?.label || `未知提取方式（${value}）`;
+
+export function shouldResetProtocolConfig(sourceType: string | undefined, previous: string | undefined): boolean {
+  return previous !== undefined && sourceType !== previous
+    && (sourceType === 'PROTOCOL' || previous === 'PROTOCOL');
+}
 export const transforms = [
   { value: "TRIM", label: "去除首尾空白" }, { value: "NUMBER", label: "转换为数值" },
   { value: "DATE", label: "转换为日期" }, { value: "UPPER", label: "转为大写" },

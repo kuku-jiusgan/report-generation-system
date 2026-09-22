@@ -151,7 +151,6 @@ def refresh_report_lims_payload(
         report_data, recognition["payload"], database.list_lims_fields(True),
         "+".join(str(value) for value in instance_ids),
     )
-    report_data["active_source_type"] = "LIMS"
     return recognition
 
 

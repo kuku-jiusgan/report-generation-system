@@ -95,7 +95,14 @@ onBeforeUnmount(() => emit('mapping-dirty', false))
             <el-alert v-if="mappingError" :title="mappingError" type="error" :closable="false" show-icon role="alert" />
           </template>
         </el-form-item>
-        <el-form-item v-else :label="metadata.inputs[key].label"><el-input :model-value="String(config[key] || '')" @update:model-value="config[key] = $event" /><small class="help">{{ metadata.inputs[key].help }}</small></el-form-item>
+        <el-form-item v-else-if="key === 'includeStart'" :label="metadata.inputs[key].label">
+          <el-switch v-model="config[key]" active-text="包含起始段落" />
+          <small class="help">{{ metadata.inputs[key].help }}</small>
+        </el-form-item>
+        <el-form-item v-else :label="metadata.inputs[key].label">
+          <el-input :model-value="String(config[key] || '')" @update:model-value="config[key] = $event" />
+          <small class="help">{{ metadata.inputs[key].help }}</small>
+        </el-form-item>
       </template>
       <div class="preview-area">
         <el-form-item label="试提取方案"><el-select v-model="documentId" filterable placeholder="选择已上传的 DOCX 方案"><el-option v-for="document in metadata.documents" :key="document.id" :label="document.fileName" :value="document.id" /></el-select></el-form-item>

@@ -8,18 +8,21 @@ from .protocol_row_expansion import validate_expanded_path, validate_row_expansi
 PROTOCOL_MODES = [
     {'value': 'LABEL', 'label': '正文标签取值', 'inputs': ['sectionPattern', 'endPattern', 'labelPattern', 'valuePattern']},
     {'value': 'SECTION', 'label': '章节正文', 'inputs': ['sectionPattern', 'endPattern', 'valuePattern']},
+    {'value': 'RAW_BLOCK', 'label': '连续原文块（保留 Word 格式）',
+     'inputs': ['sectionPattern', 'endPattern', 'includeStart']},
     {'value': 'TABLE_CELL', 'label': '表格标签右侧单元格', 'inputs': ['sectionPattern', 'endPattern', 'headerPattern', 'labelPattern', 'rowPattern', 'valuePattern']},
     {'value': 'TABLE_COLUMN', 'label': '表格列单值', 'inputs': ['sectionPattern', 'endPattern', 'headerPattern', 'columnPattern', 'rowPattern', 'valuePattern']},
     {'value': 'TABLE_ROWS', 'label': '表格全部明细行', 'inputs': ['groupCode']},
 ]
 PROTOCOL_INPUTS = {
-    'sectionPattern': {'label': '章节路径 / 起始段落正则', 'help': '有标题层级时完整匹配标题路径（层级用 / 分隔）；普通段落按正则定位起点。'},
-    'endPattern': {'label': '结束段落正则（可选）', 'help': '没有标题层级时必须填写；结束段落不包含在结果中。'},
+    'sectionPattern': {'label': '起始章节 / 段落正则', 'help': '标题按完整章节路径匹配（层级用 / 分隔），普通段落按文字匹配；必须唯一。'},
+    'endPattern': {'label': '结束段落正则（可选）', 'help': '起点没有标题层级时必须填写；结束段落本身不复制。'},
     'labelPattern': {'label': '标签正则', 'help': '正文取标签后的文字；表格取标签右侧单元格。'},
     'valuePattern': {'label': '取值正则（可选）', 'help': '存在捕获组时取第一组，否则取完整匹配；必须唯一匹配。'},
     'headerPattern': {'label': '表头正则', 'help': '完整表头行以制表符连接，必须唯一匹配。'},
     'columnPattern': {'label': '列标题正则', 'help': '必须唯一匹配一个表头单元格。'},
     'rowPattern': {'label': '明细行过滤正则（可选）', 'help': '在以制表符连接的整行文字中匹配。'},
+    'includeStart': {'label': '是否包含起始段落', 'help': '关闭时只复制起始段落之后的连续内容；适合在报告模板中保留原有章节标题或表题。'},
 }
 
 MODES = {item['value'] for item in PROTOCOL_MODES}
@@ -83,6 +86,19 @@ def validate_protocol_rule(field: dict, config: dict, groups: list[dict]) -> Non
                 raise ValueError(f'方案表格列正则无效：{error}') from error
         if any(key in config and config[key] for key in PATTERNS):
             raise ValueError('方案表格明细的定位条件必须配置在编组来源映射中')
+        return
+    if mode == 'RAW_BLOCK':
+        if not str(config.get('sectionPattern') or '').strip():
+            raise ValueError('连续原文块必须配置起始章节或段落正则')
+        for key in ('sectionPattern', 'endPattern'):
+            pattern = str(config.get(key) or '')
+            if pattern:
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    raise ValueError(f'方案原文块 {key} 正则无效：{error}') from error
+        if not isinstance(config.get('includeStart', False), bool):
+            raise ValueError('原文块是否包含起始段落必须是布尔值')
         return
     validate_protocol_locator(config)
     if '[*]' in str(field.get('legacyJsonPath', '')):

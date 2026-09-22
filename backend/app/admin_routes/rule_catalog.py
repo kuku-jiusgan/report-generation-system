@@ -15,6 +15,9 @@ from ..services.system_field_group_levels import delete_group_level, move_field_
 from ..services.excel_standard_path import excel_target_path
 from ..services.protocol_rules import validate_protocol_conflicts
 from ..services.lims_rule_schema import validate_lims_rule_config
+from ..services.keyed_lookup_calculation import (
+    calculated_dependencies, is_keyed_lookup, validate_keyed_lookup_config,
+)
 
 
 CHAPTER_FIELD_PREFIXES = {
@@ -169,20 +172,26 @@ def _validate_system_rule(repository: RuleAdminRepository, item: dict[str, Any])
             except re.error as error:
                 raise HTTPException(422, f"{key} 正则无效：{error}") from error
     if source_type == "CALCULATED":
-        dependencies = [str(value) for value in config.get("dependencies", [])]
-        known = {field["fieldCode"] for field in repository.database.list_lims_fields(True)}
+        fields = repository.database.list_lims_fields(True)
+        if is_keyed_lookup(config):
+            try:
+                config = validate_keyed_lookup_config(config, field_code, fields)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+        dependencies = calculated_dependencies(config)
+        known = {field["fieldCode"] for field in fields}
         missing = [value for value in dependencies if value not in known]
         if missing:
             raise HTTPException(422, f"依赖的系统字段不存在：{', '.join(missing)}")
         if field_code in dependencies:
             raise HTTPException(422, "计算或拼接规则不能依赖自身")
-        if not str(config.get("textTemplate") or "").strip():
+        if not is_keyed_lookup(config) and not str(config.get("textTemplate") or "").strip():
             try:
                 validate_calculation(str(config.get("expression") or ""), dependencies)
             except CalculationError as error:
                 raise HTTPException(422, str(error)) from error
         graph = {
-            str(rule["fieldCode"]): [str(value) for value in rule.get("config", {}).get("dependencies", [])]
+            str(rule["fieldCode"]): calculated_dependencies(rule.get("config", {}))
             for rule in repository.database.list_system_field_rules()
             if rule.get("sourceType") == "CALCULATED"
         }

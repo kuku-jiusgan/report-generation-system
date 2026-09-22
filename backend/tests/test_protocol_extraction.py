@@ -85,6 +85,14 @@ def test_section_has_exact_boundary_and_paragraphs(tmp_path):
     assert result['project']['code'] == '第一段原文。\n第二段原文。'
 
 
+def test_raw_block_extracts_plain_preview_for_word_copy(tmp_path):
+    result = extract(scheme(tmp_path), rules=[rule(
+        mode='RAW_BLOCK', sectionPattern='概述 / 目的', includeStart=False,
+    )])
+    assert result['project']['code'] == '第一段原文。\n第二段原文。'
+    assert result['_meta']['fields']['project.code']['source']['locations'][0]['section'] == '概述 / 目的'
+
+
 def test_validation_methods_and_criteria_from_protocol_sections(tmp_path):
     projects = [
         ('validation.field_001', 'validation.field_002', '系统适用性'),

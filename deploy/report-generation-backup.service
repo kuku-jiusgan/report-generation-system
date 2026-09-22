@@ -1,0 +1,14 @@
+[Unit]
+Description=Report Generation System MySQL backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=zoutengda
+Group=zoutengda
+WorkingDirectory=/home/zoutengda/report-generation-system
+EnvironmentFile=/home/zoutengda/report-generation-system/.env
+Environment=PYTHONPATH=/home/zoutengda/report-generation-system/backend
+UMask=0077
+ExecStart=/home/zoutengda/report-generation-system/.venv/bin/python -m app.database_backup
