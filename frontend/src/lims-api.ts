@@ -39,8 +39,21 @@ export interface LimsImport {
 export interface LimsInstance extends LimsInstanceSummary {
   project: { id?: string; name?: string }
   document: { code?: string; version?: string }
-  samples: Array<{ sampleName?: string; clientName?: string; sourceRecordId?: string }>
+  samples: Array<LimsSampleRecord>
   approval: Array<{ field1?: string; field3?: string }>
+}
+
+export interface LimsSampleInjection {
+  sampleName?: string
+  clientName?: string
+  [key: string]: unknown
+}
+
+export interface LimsSampleRecord {
+  batchNo?: string
+  sourceRecordId?: string
+  injections?: LimsSampleInjection[]
+  [key: string]: unknown
 }
 
 export interface LimsEvidence {

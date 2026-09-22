@@ -15,6 +15,21 @@ from .services.report_lims_refresh import (
     recognition_metadata,
     require_latest_lims,
 )
+from .services.payload_paths import first_payload_value
+
+
+def _standard_value(
+    payload: dict[str, Any], fields: list[dict[str, Any]], collection: str, json_key: str,
+) -> Any:
+    matches = [
+        field for field in fields
+        if field.get("enabled", True)
+        and field.get("collectionCode") == collection
+        and field.get("jsonKey") == json_key
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"标准字段目录中 {collection}.{json_key} 必须且只能配置一次")
+    return first_payload_value(payload, str(matches[0].get("legacyJsonPath") or ""))
 
 
 def create_report_lims_router(
@@ -43,6 +58,9 @@ def create_report_lims_router(
                 database, settings, request.project_id, request.instance_ids, request.conflict_resolutions,
             )
             payload = recognition["payload"]
+            fields = database.list_lims_fields(True)
+            sample_name = _standard_value(payload, fields, "samples", "sampleName")
+            client_name = _standard_value(payload, fields, "samples", "clientName")
         except LimsConflictError as error:
             raise HTTPException(409, {
                 "message": str(error), "conflicts": error.conflicts,
@@ -63,8 +81,8 @@ def create_report_lims_router(
         values = {
             "report_no": payload.get("document", {}).get("code") or "+".join(request.instance_ids),
             "project_name": payload.get("project", {}).get("name") or first_instance.get("title", ""),
-            "sample": sample.get("sampleName", ""),
-            "customer": sample.get("clientName", ""),
+            "sample": sample_name or "",
+            "customer": client_name or "",
             "author": first_instance.get("createdBy", "") or "",
             "template_version": payload.get("document", {}).get("version") or data.get("template_version", "V1.0"),
         }

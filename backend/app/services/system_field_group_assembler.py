@@ -57,6 +57,74 @@ def _ordered_like(value: Any, template: Any) -> Any:
     return {key: _ordered_like(value[key], template.get(key)) for key in keys}
 
 
+def _field_locations(record: dict[str, Any], key: str) -> list[tuple[str, Any]]:
+    locations: list[tuple[str, Any]] = []
+    if key in record:
+        locations.append(("", record[key]))
+    summary = record.get("summary")
+    if isinstance(summary, dict) and key in summary:
+        locations.append(("summary", summary[key]))
+    injections = record.get("injections")
+    if isinstance(injections, list):
+        values = [item[key] for item in injections if isinstance(item, dict) and key in item]
+        if values:
+            locations.append(("injections", values))
+    return locations
+
+
+def _remove_field(record: dict[str, Any], level: str, key: str) -> None:
+    if not level:
+        record.pop(key, None)
+    elif level == "summary" and isinstance(record.get(level), dict):
+        record[level].pop(key, None)
+    elif level == "injections" and isinstance(record.get(level), list):
+        for item in record[level]:
+            if isinstance(item, dict):
+                item.pop(key, None)
+
+
+def _move_field(record: dict[str, Any], field: dict[str, Any]) -> None:
+    """Move a legacy field when the configured level changed and the move is unambiguous."""
+    key = str(field.get("jsonKey") or field.get("fieldCode", "").rsplit(".", 1)[-1])
+    target = str(field.get("levelKey") or "")
+    locations = _field_locations(record, key)
+    if any(level == target for level, _ in locations) or not locations:
+        return
+    if len(locations) != 1:
+        raise ValueError(f"字段 {field.get('fieldCode')} 在旧载荷中存在多个层级，无法自动迁移")
+    source, value = locations[0]
+    if source == "injections":
+        if len(value) != 1:
+            raise ValueError(
+                f"字段 {field.get('fieldCode')} 有 {len(value)} 条明细，无法迁移到单值层"
+            )
+        value = value[0]
+    if target == "injections":
+        details = record.get("injections")
+        if details is None:
+            details = [{}]
+            record["injections"] = details
+        if not isinstance(details, list) or len(details) != 1 or not isinstance(details[0], dict):
+            count = len(details) if isinstance(details, list) else 0
+            raise ValueError(
+                f"字段 {field.get('fieldCode')} 的旧单值无法确定应写入 {count} 条明细中的哪一条"
+            )
+        details[0][key] = value
+    elif target == "summary":
+        summary = record.setdefault("summary", {})
+        if not isinstance(summary, dict):
+            raise ValueError("编组的 summary 层必须是对象")
+        summary[key] = value
+    else:
+        record[key] = value
+    _remove_field(record, source, key)
+
+
+def _migrate_record_structure(record: dict[str, Any], fields: list[dict[str, Any]]) -> None:
+    for field in fields:
+        _move_field(record, field)
+
+
 def apply_group_contracts(payload: dict[str, Any], groups: list[dict[str, Any]]) -> dict[str, Any]:
     """Normalize grouped payload without discarding source rows or evidence."""
     for group in groups:
@@ -77,6 +145,9 @@ def apply_group_contracts(payload: dict[str, Any], groups: list[dict[str, Any]])
             if not isinstance(current, list):
                 raise ValueError(f"编组 {group.get('label') or code} 的数据列表必须是多行列表：{source_key}")
             records = current
+            for record in records:
+                if isinstance(record, dict):
+                    _migrate_record_structure(record, list(group.get("fields") or []))
             normalized = [_ordered_like(record, template) for record in records if isinstance(record, dict)]
             if item_path:
                 existing = _read_json_path(payload, item_path)
@@ -91,14 +162,21 @@ def apply_group_contracts(payload: dict[str, Any], groups: list[dict[str, Any]])
                 missing = [index for index, record in enumerate(current_records)
                            if _read_relative(record, item_key) in (None, "")]
                 if missing:
-                    logger.warning("编组记录缺少 itemKey group=%s itemKey=%s rows=%s", code, item_key, missing)
+                    raise ValueError(
+                        f"编组 {group.get('label') or code} 的记录缺少身份字段 {item_key}："
+                        f"第 {', '.join(str(index + 1) for index in missing)} 行"
+                    )
         elif isinstance(current, list):
+            for record in current:
+                if isinstance(record, dict):
+                    _migrate_record_structure(record, list(group.get("fields") or []))
             normalized = _ordered_like(current[0], template) if current else {}
             if item_path:
                 _write_json_path(payload, item_path, normalized)
             else:
                 payload[source_key] = normalized
         elif isinstance(current, dict):
+            _migrate_record_structure(current, list(group.get("fields") or []))
             normalized = _ordered_like(current, template)
             if item_path:
                 _write_json_path(payload, item_path, normalized)

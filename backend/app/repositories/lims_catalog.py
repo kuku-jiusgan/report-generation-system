@@ -218,18 +218,22 @@ class LimsCatalogRepositoryMixin:
                 if rule.get("sourceType") == "LIMS"]
 
     def save_system_field_rule(self, item: dict[str, Any], rule_id: int | None = None) -> dict[str, Any]:
+        source_type = str(item.get("sourceType") or "LIMS").upper()
         values = (
-            item["fieldCode"], item["name"], item.get("sourceType", "LIMS"),
+            item["fieldCode"], item["name"], source_type,
             int(item.get("priority", 100)), json.dumps(item.get("config", {}), ensure_ascii=False),
             item.get("transform", "TRIM"), int(item.get("enabled", True)), now_iso(),
         )
         with self.connect() as connection:
             if rule_id is None:
                 existing = connection.execute(
-                    "SELECT id FROM system_field_rules WHERE field_code=%s", (item["fieldCode"],),
+                    "SELECT id FROM system_field_rules WHERE field_code=%s AND source_type=%s",
+                    (item["fieldCode"], source_type),
                 ).fetchone()
                 if existing:
-                    raise ValueError(f"系统字段 {item['fieldCode']} 已有提取规则，请编辑现有规则")
+                    raise ValueError(
+                        f"系统字段 {item['fieldCode']} 已有 {source_type} 来源规则，请编辑现有规则"
+                    )
                 cursor = connection.execute(
                     """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
                        transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", values,
@@ -242,11 +246,11 @@ class LimsCatalogRepositoryMixin:
                 if not current:
                     raise KeyError(rule_id)
                 conflict = connection.execute(
-                    "SELECT id FROM system_field_rules WHERE field_code=%s AND id<>%s",
-                    (item["fieldCode"], rule_id),
+                    "SELECT id FROM system_field_rules WHERE field_code=%s AND source_type=%s AND id<>%s",
+                    (item["fieldCode"], source_type, rule_id),
                 ).fetchone()
                 if conflict:
-                    raise ValueError(f"系统字段 {item['fieldCode']} 已有提取规则")
+                    raise ValueError(f"系统字段 {item['fieldCode']} 已有 {source_type} 来源规则")
                 connection.execute(
                     """UPDATE system_field_rules SET field_code=%s,name=%s,source_type=%s,priority=%s,config=%s,
                        transform=%s,enabled=%s,updated_at=%s WHERE id=%s""", (*values, rule_id),

@@ -18,6 +18,11 @@ def _label_paths(fields: list[dict[str, Any]], root: tuple[str, ...]) -> dict[tu
         for key in paths:
             if key[:len(root)] != root:
                 continue
+            # Older callers may provide a partial field descriptor. An explicitly
+            # empty label remains invalid; an omitted label simply has no display
+            # alias and keeps the source key unchanged.
+            if "label" not in field:
+                continue
             label = str(field.get("label") or "").strip()
             if key in labels and labels[key] != label:
                 raise ValueError(f"AI 上下文字段名称配置冲突：{'.'.join(key)}")

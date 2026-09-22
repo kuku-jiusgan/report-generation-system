@@ -277,11 +277,11 @@ async function removeField() {
 }
 function editRule(rule?: CatalogRule) {
   if (!draft.value?.fieldCode) return ElMessage.warning("请先保存标准字段，再配置提取规则");
-  const nextRule: Partial<CatalogRule> = rule ? JSON.parse(JSON.stringify(rule)) : (rules.value[0] ? JSON.parse(JSON.stringify(rules.value[0])) : {
+  const nextRule: Partial<CatalogRule> = rule ? JSON.parse(JSON.stringify(rule)) : {
     fieldCode: draft.value.fieldCode, name: "新来源规则", sourceType: "LIMS",
     transform: "TRIM", priority: (rules.value.length + 1) * 10,
     config: JSON.parse(JSON.stringify(limsMetadata.value?.extractionTypes[0]?.defaultConfig || {})), enabled: true,
-  });
+  };
   ruleDraft.value = nextRule;
   ruleConfig.value = JSON.parse(JSON.stringify(nextRule.config || {}));
   ruleDialog.value = true;
@@ -343,6 +343,7 @@ onMounted(() => { void Promise.all([loadLimsMetadata(), loadFields()]); });
               <el-form-item label="编组名称"><el-input v-model="groupDraft.label" /></el-form-item>
               <el-form-item label="数据关系"><el-select v-model="groupDraft.cardinality"><el-option label="单值" value="ONE" /><el-option label="数组/多行" value="MANY" /></el-select></el-form-item>
               <el-form-item label="数据集合"><el-input :model-value="groupDataPath" disabled /></el-form-item>
+              <el-form-item label="记录身份字段"><el-select v-model="groupDraft.itemKey" clearable :disabled="groupDraft.cardinality !== 'MANY'"><el-option v-for="field in selectedGroup.fields.filter((item) => !item.levelKey)" :key="field.fieldCode" :label="field.label" :value="field.jsonKey" /></el-select></el-form-item>
             </div>
           </el-form>
           <el-button type="primary" @click="saveSelectedGroup">保存编组</el-button><el-button type="danger" plain @click="removeSelectedGroup">删除编组</el-button>
@@ -380,7 +381,7 @@ onMounted(() => { void Promise.all([loadLimsMetadata(), loadFields()]); });
               <div class="form-grid three">
                 <el-form-item label="标准数据路径">
                   <el-input v-if="draftGroup" :model-value="draftStandardPath" disabled />
-                  <el-input v-else v-model="draft.legacyJsonPath" placeholder="$.samples[*].sampleName" />
+                  <el-input v-else v-model="draft.legacyJsonPath" placeholder="$.samples[*].injections[*].sampleName" />
                 </el-form-item>
                 <el-form-item label="填充规则">
                   <el-input v-model="draft.fillRule" placeholder="例如: APPEND_SUFFIX:--定量限试验结果表" />
@@ -417,7 +418,7 @@ onMounted(() => { void Promise.all([loadLimsMetadata(), loadFields()]); });
             <el-empty v-else description="当前字段暂未被模板字段引用" :image-size="55" />
           </section>
           <div class="rules-band">
-            <div class="rules-head"><div><h2>提取规则</h2></div><el-button type="primary" plain :icon="EditPen" @click="editRule(rules[0])">配置规则</el-button></div>
+            <div class="rules-head"><div><h2>提取规则</h2></div><el-button type="primary" plain :icon="Plus" @click="editRule()">新增来源规则</el-button></div>
             <el-table :data="rules" row-key="id">
               <el-table-column prop="name" label="规则名称" min-width="150" />
               <el-table-column label="字段提取来源" min-width="260"><template #default="scope"><span class="rule-source"><b>{{ ruleOrigin(scope.row) }}</b><small>{{ ruleMethodNote(scope.row) }}</small></span></template></el-table-column>

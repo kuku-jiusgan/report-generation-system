@@ -9,10 +9,13 @@ from ..services.template_compiler import compile_template
 def register_publishing_routes(router: APIRouter, repository: RuleAdminRepository,
                                ensure_draft_template: Callable[[], Path],
                                publish_version_document: Callable[[str, str, Path], Path],
-                               compiled_dir: Path) -> None:
+                               compiled_dir: Path,
+                               apply_content_block_rules: Callable[[dict[str, Any]], list[dict[str, Any]]]) -> None:
     def run_compile() -> tuple[Path, dict[str, Any]]:
-        snapshot = repository.snapshot(); output = compiled_dir / f"report-template-bound-{uuid.uuid4().hex[:8]}.docx"
-        return output, compile_template(ensure_draft_template(), output, snapshot["mappings"], snapshot["tableRules"])
+        snapshot = repository.snapshot()
+        output = compiled_dir / f"report-template-bound-{uuid.uuid4().hex[:8]}.docx"
+        mappings = apply_content_block_rules(snapshot)
+        return output, compile_template(ensure_draft_template(), output, mappings, snapshot["tableRules"])
     @router.post('/validate')
     def validate_rules() -> dict[str, Any]:
         output, report = run_compile(); report['previewTemplate'] = output.name; return report

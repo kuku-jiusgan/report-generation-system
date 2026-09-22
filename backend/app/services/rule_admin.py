@@ -24,7 +24,8 @@ from .lims_direct_rule_migration import migrate_lims_direct_rules
 from .system_field_defaults import ensure_system_field_defaults
 from .system_field_groups import ensure_system_field_groups
 from .excel_rule_defaults import ensure_excel_field_rules
-from .system_field_rule_invariant import ensure_single_system_field_rule_schema
+from .group_mapping_migration import migrate_group_mapping_identity_keys
+from .system_field_rule_invariant import ensure_system_field_rule_source_schema
 
 
 def _chapter_for_mapping(item: dict[str, Any]) -> str:
@@ -63,7 +64,7 @@ class RuleAdminRepository(
         self.mapping_path = mapping_path
 
     def seed(self) -> None:
-        ensure_single_system_field_rule_schema(self.database)
+        ensure_system_field_rule_source_schema(self.database)
         self._seed_template_chapters()
         with self.database.connect() as connection:
             mapping_count = connection.execute("SELECT COUNT(*) FROM admin_mapping_rules").fetchone()[0]
@@ -93,6 +94,7 @@ class RuleAdminRepository(
         ensure_excel_field_rules(self.database)
         self._localize_standard_field_groups()
         migrate_lims_direct_rules(self.database)
+        migrate_group_mapping_identity_keys(self.database)
         self._seed_template_catalog()
         self.save_active_workspace()
 

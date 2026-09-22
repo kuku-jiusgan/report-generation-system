@@ -61,14 +61,24 @@ class WorkspaceRepositoryMixin:
                 f"UPDATE admin_template_versions SET {assignment},updated_at=%s WHERE id=%s", values,
             )
 
-    def _restore_snapshot(self, snapshot: dict[str, Any]) -> None:
+    def _restore_snapshot(self, snapshot: dict[str, Any], version_id: str | None = None) -> None:
         chapters = snapshot.get("chapters") or self.list_template_chapters()
+        target_version_id = version_id
+        if not target_version_id:
+            active = self.active_workspace()
+            target_version_id = active["versionId"] if active else None
+        if target_version_id:
+            self.ensure_template_block_table()
         with self.database.connect() as connection:
             self._clear_workspace(connection)
             self._restore_chapters(connection, chapters)
             self._restore_mappings(connection, snapshot.get("mappings", []))
             self._restore_table_rules(connection, snapshot.get("tableRules", []))
             self._restore_ai_rules(connection, snapshot.get("aiRules", []))
+            if target_version_id:
+                self._restore_template_blocks(
+                    connection, target_version_id, snapshot.get("templateBlocks", []),
+                )
 
     @staticmethod
     def _clear_workspace(connection: Any) -> None:
@@ -77,6 +87,33 @@ class WorkspaceRepositoryMixin:
             "admin_mapping_rules", "admin_template_chapters", "admin_table_rules", "admin_ai_rules",
         ):
             connection.execute(f"DELETE FROM {table}")
+
+    def _restore_template_blocks(
+        self, connection: Any, version_id: str, blocks: list[dict[str, Any]],
+    ) -> None:
+        """Restore version-owned standard-group layouts from the version snapshot."""
+        connection.execute(
+            "DELETE FROM admin_template_version_blocks WHERE version_id=%s", (version_id,),
+        )
+        for item in blocks:
+            group_code = str(item.get("standardGroupCode") or "").strip()
+            if not group_code:
+                raise ValueError("模板快照中的标准编组编码不能为空")
+            connection.execute(
+                """INSERT INTO admin_template_version_blocks
+                   (version_id,standard_group_code,chapter_id,title,kind,table_no,source_path,repeat_key,
+                    prototype_location,dedup_key,sort_rule,empty_behavior,merge_rule,order_no,enabled,updated_at)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    version_id, group_code, item["chapterId"], item.get("title", ""),
+                    item.get("kind", "MAPPED_FIELD"), item.get("tableNo", ""),
+                    item.get("sourcePath", ""), item.get("repeatKey", ""),
+                    item.get("prototypeLocation", ""), item.get("dedupKey", ""),
+                    item.get("sortRule", ""), item.get("emptyBehavior", "KEEP"),
+                    item.get("mergeRule", "NONE"), item.get("orderNo", 0),
+                    int(item.get("enabled", True)), now_iso(),
+                ),
+            )
 
     @staticmethod
     def _restore_chapters(connection: Any, chapters: list[dict[str, Any]]) -> None:

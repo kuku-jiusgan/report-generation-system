@@ -15,6 +15,33 @@ class PayloadPathError(ValueError):
     pass
 
 
+def read_payload_path(source: Any, path: str) -> Any:
+    """Read a standard payload path and flatten every configured array level."""
+    values = [source]
+    has_array = False
+    for raw_part in str(path).strip().removeprefix("$").lstrip(".").split("."):
+        if not raw_part:
+            continue
+        many = raw_part.endswith("[*]")
+        has_array = has_array or many
+        key = raw_part[:-3] if many else raw_part
+        next_values: list[Any] = []
+        for value in values:
+            current = value.get(key) if isinstance(value, dict) else None
+            if many and isinstance(current, list):
+                next_values.extend(current)
+            elif current is not None:
+                next_values.append(current)
+        values = next_values
+    return values if has_array else (values[0] if values else None)
+
+
+def first_payload_value(source: Any, path: str) -> Any:
+    value = read_payload_path(source, path)
+    values = value if isinstance(value, list) else [value]
+    return next((item for item in values if item not in (None, "", [], {})), None)
+
+
 def path_depth(path: str) -> int:
     """路径里的数组层数，用来决定写入顺序：层数少的先写。"""
     return str(path).count("[*]")

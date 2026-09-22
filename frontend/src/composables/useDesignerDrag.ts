@@ -32,6 +32,10 @@ export function useDesignerDrag(
   }
 
   function startBlockDrag(event: DragEvent, block: DesignerBlock) {
+    if (block.id <= 0 || !block.standardGroupCode) {
+      event.preventDefault()
+      return
+    }
     draggingBlockId.value = block.id
     event.dataTransfer?.setData('text/plain', `block:${block.id}`)
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
@@ -41,7 +45,7 @@ export function useDesignerDrag(
     event.preventDefault()
     const chapter = selectedChapter.value
     const sourceId = draggingBlockId.value
-    if (!chapter || !sourceId || reordering.value) return
+    if (!chapter || !sourceId || sourceId <= 0 || target.id <= 0 || reordering.value) return
     const ordered = moveByDrop(chapter.blocks, sourceId, target.id, dropAfter(event))
     if (ordered === chapter.blocks) return
     ordered.forEach((item, orderNo) => { item.orderNo = orderNo })
@@ -70,7 +74,7 @@ export function useDesignerDrag(
     event.preventDefault()
     event.stopPropagation()
     const sourceId = draggingMappingId.value
-    if (!sourceId || reordering.value) return
+    if (!sourceId || block.id <= 0 || !block.standardGroupCode || reordering.value) return
     const ordered = moveByDrop(block.mappings, sourceId, target.id, dropAfter(event))
     if (ordered === block.mappings) return
     block.mappings = ordered

@@ -144,6 +144,29 @@ def test_resolve_context_values_current_record_with_nested_data():
     assert len(missing) == 0
 
 
+def test_current_record_uses_catalog_path_for_nested_array_field():
+    config = {
+        "contextVariables": [{
+            "fieldCode": "samples.sampleName", "mode": "CURRENT_RECORD", "required": True,
+        }]
+    }
+    fields = [{
+        "fieldCode": "samples.sampleName",
+        "legacyJsonPath": "$.samples[*].injections[*].sampleName",
+    }]
+    current_record = {
+        "batchNo": "B-001",
+        "injections": [{"sampleName": "样品甲"}, {"sampleName": "样品乙"}],
+    }
+
+    resolved, missing = resolve_context_values(
+        config, {}, current_record, context_fields=fields,
+    )
+
+    assert resolved["samples.sampleName"] == '[\n  "样品甲",\n  "样品乙"\n]'
+    assert missing == []
+
+
 def test_resolve_context_values_current_record_group_uses_record_object():
     """仅配置 groupCode 时，CURRENT_RECORD 使用整条编组记录作为上下文。"""
     config = {

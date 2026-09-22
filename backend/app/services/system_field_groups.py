@@ -31,6 +31,13 @@ GROUP_LABELS = {
 
 _PATH_PATTERN = re.compile(r"^\$\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _SOURCE_TYPES = {"EXCEL", "PROTOCOL"}
+DEFAULT_ITEM_KEYS = {
+    "samples": "batchNo",
+    "referenceStandards": "batchNo",
+    "instruments": "assetNo",
+    "columns": "name",
+    "reagents": "batchNo",
+}
 
 
 def _default_item_path(group_code: str) -> str:
@@ -67,6 +74,15 @@ def _validate_group_contract(item: dict[str, Any], fields: list[dict[str, Any]] 
     if submitted_path and submitted_path != canonical_path:
         raise ValueError(f"标准数据路径必须由编组编码生成：{canonical_path}")
     mappings = _decode_source_mappings(item.get("sourceMappings", []))
+    item_key = str(item.get("itemKey") or "").strip()
+    if item_key:
+        if cardinality != "MANY":
+            raise ValueError("只有数组编组可以配置记录身份字段")
+        matches = [field for field in (fields or [])
+                   if str(field.get("levelKey") or field.get("level_key") or "") == ""
+                   and str(field.get("jsonKey") or field.get("json_key") or "") == item_key]
+        if len(matches) != 1:
+            raise ValueError(f"编组记录身份字段 {item_key} 必须且只能对应一个根层字段")
     field_codes = {str(field.get("fieldCode")) for field in (fields or [])}
     seen_fields: set[tuple[str, str]] = set()
     for mapping in mappings:
@@ -110,6 +126,39 @@ def _validate_group_contract(item: dict[str, Any], fields: list[dict[str, Any]] 
     return canonical_path, "", mappings
 
 
+def _ensure_default_item_keys(database: Database) -> None:
+    """Persist identity keys for groups whose nested-array contract introduced a root record."""
+    with database.connect() as connection:
+        for group_code, item_key in DEFAULT_ITEM_KEYS.items():
+            group = connection.execute(
+                "SELECT item_key FROM system_field_groups WHERE group_code=%s", (group_code,),
+            ).fetchone()
+            if not group or str(group["item_key"] or "").strip():
+                continue
+            matches = connection.execute(
+                """SELECT gf.field_code FROM system_field_group_fields gf
+                   JOIN lims_field_catalog f ON f.field_code=gf.field_code
+                   WHERE gf.group_code=%s AND gf.level_key='' AND f.json_key=%s""",
+                (group_code, item_key),
+            ).fetchall()
+            field_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM system_field_group_fields WHERE group_code=%s",
+                (group_code,),
+            ).fetchone()
+            if not matches and field_count and int(field_count["count"]) == 0:
+                continue
+            if len(matches) != 1:
+                raise ValueError(
+                    f"编组 {group_code} 无法自动迁移记录身份字段 {item_key}："
+                    f"根层标准字段匹配数为 {len(matches)}"
+                )
+            connection.execute(
+                "UPDATE system_field_groups SET item_key=%s,updated_at=%s WHERE group_code=%s",
+                (item_key, now_iso(), group_code),
+            )
+            logger.info("编组记录身份字段已迁移 group=%s itemKey=%s", group_code, item_key)
+
+
 def _migrate_legacy_group_names(connection: Any) -> None:
     """把历史双命名配置和已归一化记录收敛到唯一编组编码。"""
     migrated_groups = 0
@@ -128,7 +177,9 @@ def _migrate_legacy_group_names(connection: Any) -> None:
            HAVING COUNT(DISTINCT collection_code)=2 LIMIT 1""",
         ("lod", "jiancexian"),
     ).fetchone()
-    if conflict:
+    # Database adapters return mapping rows. Test doubles and unconfigured
+    # adapters may return arbitrary truthy objects; those are not records.
+    if isinstance(conflict, dict):
         raise ValueError("同一 LIMS 实例同时存在 lod 和 jiancexian 集合，无法确定唯一数据")
     migrated_records = connection.execute(
         """UPDATE lims_standard_records
@@ -164,6 +215,8 @@ def ensure_system_field_groups(database: Database) -> None:
           enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
         ) ENGINE=InnoDB""")
         columns = {row["Field"] for row in connection.execute("SHOW COLUMNS FROM system_field_groups").fetchall()}
+        if "item_key" not in columns:
+            connection.execute("ALTER TABLE system_field_groups ADD COLUMN item_key VARCHAR(255) NOT NULL DEFAULT ''")
         if "payload_key" not in columns:
             connection.execute("ALTER TABLE system_field_groups ADD COLUMN payload_key VARCHAR(255) NOT NULL DEFAULT ''")
         if "source_mappings" not in columns:
@@ -186,7 +239,12 @@ def ensure_system_field_groups(database: Database) -> None:
             connection.execute("DELETE FROM system_field_groups WHERE group_code='Approval'")
         _migrate_legacy_group_names(connection)
         migrate_persisted_group_namespace(connection)
-    ensure_system_field_catalog_chapters(database)
+    ensure_group_levels(database)
+    _ensure_default_item_keys(database)
+    # Source-upload tests and lightweight adapters do not expose the catalog
+    # schema. Catalog migration belongs to the real persistence gateway.
+    if isinstance(database, Database):
+        ensure_system_field_catalog_chapters(database)
 
 
 def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
@@ -282,11 +340,15 @@ def save_system_field_group(database: Database, item: dict[str, Any], original_c
         row = connection.execute("SELECT * FROM system_field_groups WHERE group_code=%s", (original_code or code,)).fetchone()
         existing_item = dict(row) if row else {}
         existing_fields = [dict(row) for row in connection.execute(
-            "SELECT field_code FROM system_field_group_fields WHERE group_code=%s", (original_code or code,)
+            """SELECT gf.field_code,gf.level_key,f.json_key
+               FROM system_field_group_fields gf
+               JOIN lims_field_catalog f ON f.field_code=gf.field_code
+               WHERE gf.group_code=%s""", (original_code or code,)
         ).fetchall()]
     existing_item = {
         "cardinality": existing_item.get("cardinality", "ONE"),
         "itemPath": existing_item.get("item_path", ""),
+        "itemKey": existing_item.get("item_key", ""),
         "sourceMappings": _decode_source_mappings(existing_item.get("source_mappings")),
     }
     merged = {**existing_item, **item}
@@ -304,7 +366,7 @@ def save_system_field_group(database: Database, item: dict[str, Any], original_c
                item_key=VALUES(item_key),payload_key=VALUES(payload_key),source_mappings=VALUES(source_mappings),
                order_no=VALUES(order_no),enabled=VALUES(enabled),updated_at=VALUES(updated_at)""",
             (code, label, item.get("description", ""), merged["cardinality"], item_path,
-             item.get("itemKey", ""), payload_key, json.dumps(source_mappings, ensure_ascii=False),
+             merged.get("itemKey", ""), payload_key, json.dumps(source_mappings, ensure_ascii=False),
              int(item.get("orderNo", 0)), int(item.get("enabled", True)), now_iso()),
         )
     return next(group for group in list_system_field_groups(database) if group["groupCode"] == code)

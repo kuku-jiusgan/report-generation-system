@@ -9,7 +9,7 @@ from .system_field_rule_invariant import rules_by_field
 from lxml import html
 
 from .lims_table_utils import table_grid
-from .payload_paths import set_payload_path
+from .payload_paths import path_depth, read_payload_path, set_payload_path
 
 
 @dataclass(frozen=True)
@@ -30,25 +30,6 @@ def _extraction_type(rule: dict[str, Any]) -> str:
 def _parts(path: str) -> list[str]:
     value = path.strip().removeprefix("$").lstrip(".")
     return [part for part in value.replace("[*]", "").split(".") if part]
-
-
-def _read_path(source: Any, path: str) -> Any:
-    values = [source]
-    raw_parts = path.strip().removeprefix("$").lstrip(".").split(".")
-    for raw_part in raw_parts:
-        many = raw_part.endswith("[*]")
-        part = raw_part[:-3] if many else raw_part
-        next_values: list[Any] = []
-        for value in values:
-            current = value.get(part) if isinstance(value, dict) else None
-            if many and isinstance(current, list):
-                next_values.extend(current)
-            elif current is not None:
-                next_values.append(current)
-        values = next_values
-    if "[*]" in path:
-        return values
-    return values[0] if values else None
 
 
 def _matches(pattern: str, text: str) -> bool:
@@ -379,7 +360,7 @@ def _extract(instance: dict[str, Any], payload: dict[str, Any], rule: dict[str, 
     source_type = _extraction_type(rule)
     config = _rule_config(rule)
     if source_type == "INSTANCE_PATH":
-        return _read_path(instance, str(config.get("sourcePath") or ""))
+        return read_payload_path(instance, str(config.get("sourcePath") or ""))
     if source_type == "RAW_UNIT_FIELD":
         values = []
         source_paths = config.get("sourcePaths")
@@ -392,7 +373,7 @@ def _extract(instance: dict[str, Any], payload: dict[str, Any], rule: dict[str, 
                 continue
             value = None
             for path in paths:
-                candidate = _read_path(item.get("data", {}), path)
+                candidate = read_payload_path(item.get("data", {}), path)
                 if candidate not in (None, ""):
                     value = candidate
                     break
@@ -454,7 +435,14 @@ def apply_configured_extraction(
     rules: list[dict[str, Any]],
 ) -> dict[str, Any]:
     by_field = rules_by_field(rules)
-    for field in fields:
+    ordered_fields = sorted(
+        enumerate(fields),
+        key=lambda item: (
+            path_depth(str(item[1].get("legacyJsonPath") or item[1].get("fieldCode") or "")),
+            item[0],
+        ),
+    )
+    for _, field in ordered_fields:
         if not field.get("enabled", True):
             continue
         rule = by_field.get(field["fieldCode"])

@@ -4,7 +4,7 @@ from typing import Any
 from .ai_field_generator import AiGenerationError, context_variables, needs_per_record_generation, resolve_context_values
 from .standard_payloads import standard_context_payload
 from .ai_context_inputs import prepare_ai_context
-from .system_field_resolver import _read_path
+from .payload_paths import read_payload_path
 
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def _snapshot_field_value(code: str, active: dict[str, Any], original: dict[str,
     if field is not None:
         path = str(field.get("legacyJsonPath") or "")
         if path.startswith("$."):
-            return _read_path(active, path)
+            return read_payload_path(active, path)
     return None
 
 

@@ -9,6 +9,7 @@ from ..config import get_settings
 from .ai_service_config import load_ai_service_config
 from .ai_context_labels import serialize_ai_context
 from .ai_multimodal import build_message_content
+from .payload_paths import read_payload_path
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,24 @@ def needs_per_record_generation(config: dict[str, Any]) -> bool:
     return False
 
 
+def _current_record_value(current_record: dict[str, Any], field_code: str,
+                          context_fields: list[dict[str, Any]] | None) -> Any:
+    """Read a field relative to the outer record selected by CURRENT_RECORD."""
+    field = next(
+        (item for item in context_fields or [] if item.get("fieldCode") == field_code),
+        None,
+    )
+    if field is None:
+        # Callers without a field catalog use the historical record-local key contract.
+        return current_record.get(field_code.rsplit(".", 1)[-1])
+    path = str(field.get("legacyJsonPath") or "")
+    parts = path.removeprefix("$").lstrip(".").split(".") if path.startswith("$.") else []
+    boundary = next((index for index, part in enumerate(parts) if part.endswith("[*]")), None)
+    if boundary is None or boundary == len(parts) - 1:
+        raise AiGenerationError(f"AI 上下文字段缺少记录内标准路径：{field_code}")
+    return read_payload_path(current_record, "$." + ".".join(parts[boundary + 1:]))
+
+
 def resolve_context_values(config: dict[str, Any],
                            values: dict[str, Any],
                            current_record: dict[str, Any] | None = None,
@@ -127,10 +146,9 @@ def resolve_context_values(config: dict[str, Any],
                     # 这支持按编组记录生成结论，而不要求规则虚构一个字段路径。
                     record_value = current_record
                 else:
-                    # 从当前记录中读取字段（相对路径）。字段路径如
-                    # "limit.impurityName"，取最后一个点之后的记录内键名。
-                    relative_key = field_code.split(".")[-1] if field_code else ""
-                    record_value = current_record.get(relative_key) if relative_key else None
+                    record_value = _current_record_value(
+                        current_record, str(field_code or ""), context_fields,
+                    )
                 text = _format_context(record_value, variable, context_fields) or str(variable.get("defaultValue") or "")
         elif group_code:
             # 编组：传递整个编组的数据（对象或数组）

@@ -4,5 +4,5 @@
   "model": "deepseek-flash",
   "timeout": 300.0,
   "maxTokens": 20000,
-  "thinkingEnabled": true
+  "thinkingEnabled": false
 }

@@ -9,7 +9,10 @@ from .lims_normalizer import (
 
 def _identity(item: dict[str, Any], item_key: str) -> str:
     if item_key:
-        return _semantic(item.get(item_key))
+        value = item.get(item_key)
+        if value in (None, ""):
+            raise ValueError(f"LIMS 编组记录缺少身份字段：{item_key}")
+        return _semantic(value)
     return _content_hash(item)
 
 

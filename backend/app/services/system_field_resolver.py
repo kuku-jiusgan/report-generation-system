@@ -10,14 +10,16 @@ from .ai_field_generator import (
     resolve_context_values,
 )
 from .excel_standard_path import excel_target_path
-from .payload_paths import PayloadPathError, set_payload_path
+from .payload_paths import PayloadPathError, read_payload_path, set_payload_path
 from .ai_context_inputs import prepare_ai_context
 from .standard_payloads import standard_group_values
-from .system_field_rule_invariant import rules_by_field
+from .system_field_rule_invariant import rules_by_field_source
 
 
 logger = logging.getLogger(__name__)
 AI_MAX_CONCURRENCY = 200
+_BASE_SOURCE_TYPES = {"LIMS", "EXCEL", "PDF"}
+_DERIVED_SOURCE_TYPES = {"AI", "CALCULATED", "FIXED", "MANUAL"}
 _AI_EXECUTOR = ThreadPoolExecutor(max_workers=AI_MAX_CONCURRENCY,
                                   thread_name_prefix="report-ai")
 
@@ -39,24 +41,6 @@ class _AiFieldBatch:
     record_count: int | None = None
 
 
-def _read_path(source: Any, path: str) -> Any:
-    values = [source]
-    for raw in path.strip().removeprefix("$").lstrip(".").split("."):
-        if not raw:
-            continue
-        many = raw.endswith("[*]")
-        key = raw[:-3] if many else raw
-        next_values: list[Any] = []
-        for value in values:
-            current = value.get(key) if isinstance(value, dict) else None
-            if many and isinstance(current, list):
-                next_values.extend(current)
-            elif current is not None:
-                next_values.append(current)
-        values = next_values
-    return values if "[*]" in path else (values[0] if values else None)
-
-
 def _write_path(target: dict[str, Any], path: str, value: Any) -> None:
     try:
         set_payload_path(target, path, value)
@@ -66,6 +50,47 @@ def _write_path(target: dict[str, Any], path: str, value: Any) -> None:
 
 def _available(value: Any) -> bool:
     return value not in (None, "", [], {})
+
+
+def _active_source_type(report_data: dict[str, Any]) -> str:
+    configured = str(report_data.get("active_source_type") or "").upper()
+    if configured:
+        if configured not in _BASE_SOURCE_TYPES:
+            raise ValueError(f"报告当前数据源类型无效：{configured}")
+        return configured
+    payloads = report_data.get("source_payloads", {})
+    candidates = [source for source in _BASE_SOURCE_TYPES
+                  if isinstance(payloads, dict) and isinstance(payloads.get(source), dict)]
+    if len(candidates) > 1:
+        raise ValueError("报告存在多个数据源但未记录当前来源，无法选择系统字段规则")
+    return candidates[0] if candidates else ""
+
+
+def _select_rule(field_code: str, sources: dict[str, dict[str, Any]],
+                 active_source_type: str) -> dict[str, Any] | None:
+    enabled = {source: rule for source, rule in sources.items() if rule.get("enabled", True)}
+    if not enabled:
+        return None
+    protocol = enabled.get("PROTOCOL")
+    if protocol:
+        if len(enabled) != 1:
+            raise ValueError(f"系统字段 {field_code} 的方案规则不能与其他来源规则同时启用")
+        return protocol
+    derived = [rule for source, rule in enabled.items() if source in _DERIVED_SOURCE_TYPES]
+    direct = {source: rule for source, rule in enabled.items() if source in _BASE_SOURCE_TYPES}
+    unknown = [source for source in enabled
+               if source not in _BASE_SOURCE_TYPES | _DERIVED_SOURCE_TYPES]
+    if unknown:
+        raise ValueError(f"系统字段 {field_code} 存在不支持的来源规则：{', '.join(sorted(unknown))}")
+    if len(derived) > 1 or (derived and direct):
+        raise ValueError(f"系统字段 {field_code} 的派生规则与数据源规则存在冲突")
+    if derived:
+        return derived[0]
+    if active_source_type:
+        return direct.get(active_source_type)
+    if len(direct) > 1:
+        raise ValueError(f"系统字段 {field_code} 有多个数据源规则，但报告未指定当前数据源")
+    return next(iter(direct.values()), None)
 
 
 def _template_value(template: str, values: dict[str, Any]) -> str | None:
@@ -85,7 +110,8 @@ def _template_value(template: str, values: dict[str, Any]) -> str | None:
 
 def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, Any],
                 report_data: dict[str, Any], values: dict[str, Any],
-                current_record: dict[str, Any] | None = None) -> Any:
+                current_record: dict[str, Any] | None = None,
+                context_fields: list[dict[str, Any]] | None = None) -> Any:
     config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
     source_type = str(rule.get("sourceType") or "LIMS").upper()
     field_code = field["fieldCode"]
@@ -93,13 +119,13 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
         if current_record:
             relative_key = str(field.get("jsonKey") or field_code.rsplit(".", 1)[-1])
             return current_record.get(relative_key)
-        return _read_path(payload, str(field.get("legacyJsonPath") or field_code))
+        return read_payload_path(payload, str(field.get("legacyJsonPath") or field_code))
     if source_type == "PROTOCOL":
         result = report_data.get("source_payloads", {}).get("PROTOCOL", {}).get("_meta", {}).get("fields", {}).get(field_code, {})
         return result.get("value") if result.get("status") == "SUCCESS" else None
     if source_type == "PDF":
         pdf = report_data.get("source_payloads", {}).get("PDF", {})
-        value = _read_path(pdf, str(config.get("sourcePath") or field_code))
+        value = read_payload_path(pdf, str(config.get("sourcePath") or field_code))
         if not _available(value):
             value = report_data.get("original_values", {}).get(field_code)
         if not _available(value):
@@ -107,7 +133,7 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
         return value
     if source_type == "EXCEL":
         excel = report_data.get("source_payloads", {}).get("EXCEL", {})
-        return _read_path(excel, excel_target_path(field, config.get("sourcePath")))
+        return read_payload_path(excel, excel_target_path(field, config.get("sourcePath")))
     if source_type == "FIXED":
         return config.get("value")
     if source_type == "MANUAL":
@@ -119,7 +145,9 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
             # 上下文变量和 AI 规则用同一套取值方式（FIRST / JOIN_UNIQUE / COUNT_UNIQUE
             # 加后缀），成组字段才能拼成"1.4%、0.3%、0.5%"这样的文字。
             if config.get("contextVariables") or config.get("inputFields"):
-                resolved, missing = resolve_context_values(config, values, current_record)
+                resolved, missing = resolve_context_values(
+                    config, values, current_record, context_fields,
+                )
                 return None if missing else _template_value(template, resolved)
             return _template_value(template, values)
         return evaluate_formula(
@@ -130,19 +158,21 @@ def _rule_value(rule: dict[str, Any], field: dict[str, Any], payload: dict[str, 
 
 
 def _require_ai_dependencies(config: dict[str, Any], values: dict[str, Any],
-                             current_record: dict[str, Any] | None) -> None:
-    _, missing = resolve_context_values(config, values, current_record)
+                             current_record: dict[str, Any] | None,
+                             context_fields: list[dict[str, Any]]) -> None:
+    _, missing = resolve_context_values(config, values, current_record, context_fields)
     if missing:
         raise AiGenerationError(f"AI 上下文字段缺失：{', '.join(missing)}")
 
 
 def _prepare_ai_batch(field: dict[str, Any], rule: dict[str, Any],
-                      values: dict[str, Any]) -> _AiFieldBatch:
+                      values: dict[str, Any],
+                      context_fields: list[dict[str, Any]]) -> _AiFieldBatch:
     config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
     field_code = field["fieldCode"]
     if not needs_per_record_generation(config):
         inputs, record = prepare_ai_context(config, values, None, field)
-        _require_ai_dependencies(config, inputs, record)
+        _require_ai_dependencies(config, inputs, record, context_fields)
         return _AiFieldBatch(field, rule, [_AiCall(field_code, rule, inputs, record)])
 
     collection_code = field.get("collectionCode")
@@ -156,7 +186,7 @@ def _prepare_ai_batch(field: dict[str, Any], rule: dict[str, Any],
         if not isinstance(record, dict):
             continue
         inputs, ai_record = prepare_ai_context(config, values, record, field)
-        _require_ai_dependencies(config, inputs, ai_record)
+        _require_ai_dependencies(config, inputs, ai_record, context_fields)
         calls.append(_AiCall(field_code, rule, inputs, ai_record, index))
     return _AiFieldBatch(field, rule, calls, len(records))
 
@@ -220,10 +250,13 @@ def _store_resolved_value(field_code: str, field: dict[str, Any], rule: dict[str
 
 def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, Any]],
                           payload: dict[str, Any], report_data: dict[str, Any]) -> dict[str, Any]:
-    by_field = rules_by_field(rules)
+    by_field_source = rules_by_field_source(rules)
+    active_source_type = _active_source_type(report_data)
     # values 包含两类：字段值（fieldCode）和编组数据（groupCode）
     values = {
-        field["fieldCode"]: _read_path(payload, str(field.get("legacyJsonPath") or field["fieldCode"]))
+        field["fieldCode"]: read_payload_path(
+            payload, str(field.get("legacyJsonPath") or field["fieldCode"])
+        )
         for field in fields
     }
     protocol = report_data.get("source_payloads", {}).get("PROTOCOL", {})
@@ -244,7 +277,9 @@ def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, An
         progressed = False
         ai_batches: list[_AiFieldBatch] = []
         for field_code, field in list(pending.items()):
-            rule = by_field.get(field_code)
+            rule = _select_rule(
+                field_code, by_field_source.get(field_code, {}), active_source_type,
+            )
             if rule and rule.get("enabled", True):
                 config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
                 source_type = str(rule.get("sourceType") or "LIMS").upper()
@@ -259,10 +294,13 @@ def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, An
                         if _available(existing):
                             value = existing
                         else:
-                            ai_batches.append(_prepare_ai_batch(field, rule, values))
+                            ai_batches.append(_prepare_ai_batch(field, rule, values, fields))
                             continue
                     else:
-                        value = _rule_value(rule, field, payload, report_data, values)
+                        value = _rule_value(
+                            rule, field, payload, report_data, values,
+                            context_fields=fields,
+                        )
                 except (CalculationError, AiGenerationError) as error:
                     failures[field_code] = error
                     logger.info("系统字段规则等待依赖 field=%s rule=%s reason=%s", field_code, rule.get("name"), error)

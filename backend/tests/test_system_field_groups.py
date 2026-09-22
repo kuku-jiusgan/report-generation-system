@@ -20,6 +20,22 @@ def _database(directory: Path) -> Database:
     return make_test_database(directory)
 
 
+def test_group_schema_restores_item_key_after_code_rollback(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    ensure_system_field_groups(database)
+    with database.connect() as connection:
+        connection.execute("ALTER TABLE system_field_groups DROP COLUMN item_key")
+
+    ensure_system_field_groups(database)
+
+    with database.connect() as connection:
+        columns = {row["Field"] for row in connection.execute(
+            "SHOW COLUMNS FROM system_field_groups"
+        ).fetchall()}
+    assert "item_key" in columns
+    assert list_system_field_groups(database) == []
+
+
 def test_user_group_label_survives_default_synchronization() -> None:
     with tempfile.TemporaryDirectory() as directory:
         database = _database(Path(directory))

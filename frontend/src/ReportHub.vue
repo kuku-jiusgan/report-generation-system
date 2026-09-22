@@ -90,11 +90,25 @@ function isLifecycleTab(tab: ReportHubTab): tab is ReportLifecycle {
   return tab !== 'MINE' && tab !== 'ALL'
 }
 
+function sampleSearchValues(samples: unknown): string[] {
+  if (!Array.isArray(samples)) return []
+  return samples.flatMap((sample) => {
+    if (!sample || typeof sample !== 'object') return []
+    const record = sample as Record<string, unknown>
+    const injections = Array.isArray(record.injections) ? record.injections : []
+    return [record.batchNo, ...injections.flatMap((injection) => {
+      if (!injection || typeof injection !== 'object') return []
+      const item = injection as Record<string, unknown>
+      return [item.sampleName, item.clientName]
+    })]
+  }).filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+}
+
 const filtered = computed(() => reports.value.filter((item) => {
   const data = item.resolved_data
-  const samples = ((data.source_payloads?.LIMS?.samples || []) as Array<Record<string, unknown>>)
+  const samples = data.source_payloads?.LIMS?.samples
   const searchable = [item.title, item.report_number, data.report_no, data.sample, data.project_name,
-    ...samples.flatMap((sample) => [sample.sampleName, sample.batchNo])].join(' ').toLowerCase()
+    ...sampleSearchValues(samples)].join(' ').toLowerCase()
   const queryMatches = !filters.query.trim() || searchable.includes(filters.query.trim().toLowerCase())
   const statusMatches = !isLifecycleTab(activeTab.value) || lifecycle(item) === activeTab.value
   const changed = new Date(item.updated_at).getTime()

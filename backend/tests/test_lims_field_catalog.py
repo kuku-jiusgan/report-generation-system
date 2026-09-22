@@ -15,7 +15,7 @@ from backend.app.services.lims_rule_schema import lims_rule_metadata, validate_l
 from backend.app.services.system_field_rule_invariant import (
     MIGRATION_KEY,
     UNIQUE_INDEX,
-    ensure_single_system_field_rule_schema,
+    ensure_system_field_rule_source_schema,
 )
 from backend.tests.database_helpers import make_test_database
 
@@ -125,7 +125,7 @@ def test_structured_unit_body_rejects_unparseable_content() -> None:
         _body_items("not-json", "Standard")
 
 
-def test_repository_rejects_a_second_rule_for_the_same_field() -> None:
+def test_repository_rejects_a_second_rule_for_the_same_field_and_source() -> None:
     with tempfile.TemporaryDirectory() as directory:
         database = make_test_database(Path(directory))
         database.upsert_lims_field(catalog_field("custom.single", "custom", "single"))
@@ -133,19 +133,24 @@ def test_repository_rejects_a_second_rule_for_the_same_field() -> None:
             "custom.single", "INSTANCE_PATH", sourcePath="project.name",
         ))
 
-        with pytest.raises(ValueError, match="已有提取规则"):
+        with pytest.raises(ValueError, match="已有 LIMS 来源规则"):
             database.save_system_field_rule(rule(
                 "custom.single", "INSTANCE_PATH", sourcePath="document.code",
             ))
+
+        excel = database.save_system_field_rule({
+            **rule("custom.single", "INSTANCE_PATH", sourcePath="document.code"),
+            "name": "Excel 字段提取", "sourceType": "EXCEL",
+        })
 
         updated = database.save_system_field_rule({
             **saved, "config": {"extractionType": "INSTANCE_PATH", "sourcePath": "document.code"},
         }, saved["id"])
         assert updated["id"] == saved["id"]
-        assert database.list_system_field_rules("custom.single") == [updated]
+        assert database.list_system_field_rules("custom.single") == [updated, excel]
 
 
-def test_single_rule_migration_keeps_latest_rule_and_creates_unique_index() -> None:
+def test_source_rule_migration_keeps_latest_per_source_and_creates_unique_index() -> None:
     with tempfile.TemporaryDirectory() as directory:
         database = make_test_database(Path(directory))
         database.upsert_lims_field(catalog_field("custom.migrated", "custom", "migrated"))
@@ -160,13 +165,21 @@ def test_single_rule_migration_keeps_latest_rule_and_creates_unique_index() -> N
                 """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
                    transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", values,
             )
+            old_lims = (
+                "custom.migrated", "旧 LIMS 规则", "LIMS", 100, "{}", "TRIM", 1,
+                "2026-09-18T12:00:00+00:00",
+            )
+            connection.execute(
+                """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
+                   transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", old_lims,
+            )
             latest = connection.execute(
                 """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
                    transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (*values[:1], "新规则", "LIMS", *values[3:-1], "2026-09-19T00:00:00+00:00"),
+                (*values[:1], "新 LIMS 规则", "LIMS", *values[3:-1], "2026-09-19T00:00:00+00:00"),
             ).lastrowid
 
-        result = ensure_single_system_field_rule_schema(database)
+        result = ensure_system_field_rule_source_schema(database)
 
         rules = database.list_system_field_rules("custom.migrated")
         with database.connect() as connection:
@@ -175,11 +188,20 @@ def test_single_rule_migration_keeps_latest_rule_and_creates_unique_index() -> N
                    WHERE table_schema=DATABASE() AND table_name='system_field_rules'
                      AND index_name=%s""", (UNIQUE_INDEX,),
             ).fetchone()
+            source_column = connection.execute(
+                """SELECT data_type,character_maximum_length FROM information_schema.columns
+                   WHERE table_schema=DATABASE() AND table_name='system_field_rules'
+                     AND column_name='source_type'"""
+            ).fetchone()
         assert result == {"removed": 1}
-        assert len(rules) == 1
-        assert rules[0]["id"] == latest
-        assert rules[0]["sourceType"] == "LIMS"
+        assert len(rules) == 2
+        assert [(item["sourceType"], item["name"]) for item in rules] == [
+            ("EXCEL", "旧规则"), ("LIMS", "新 LIMS 规则"),
+        ]
+        assert next(item["id"] for item in rules if item["sourceType"] == "LIMS") == latest
         assert int(index["is_non_unique"]) == 0
+        assert source_column[0] == "varchar"
+        assert int(source_column[1]) == 32
 
 
 def test_instance_path_reads_only_configuration_inside_config() -> None:
@@ -462,3 +484,28 @@ def test_extractor_ignores_retired_top_level_configuration() -> None:
     apply_configured_extraction(rich_instance(), payload, fields, [configured])
 
     assert payload["project"]["name"] == "项目甲"
+
+
+def test_extractor_establishes_outer_records_before_nested_array_fields() -> None:
+    instance = {
+        "rawStructured": [
+            {"unitType": "Sample", "data": {"batchNo": "B1", "sampleName": "样品甲"}},
+            {"unitType": "Sample", "data": {"batchNo": "B2", "sampleName": "样品乙"}},
+        ],
+    }
+    fields = [
+        field("samples.sampleName", "$.samples[*].injections[*].sampleName"),
+        field("samples.batchNo", "$.samples[*].batchNo"),
+    ]
+    rules = [
+        rule("samples.sampleName", "RAW_UNIT_FIELD", sourceUnitType="Sample", sourcePath="sampleName"),
+        rule("samples.batchNo", "RAW_UNIT_FIELD", sourceUnitType="Sample", sourcePath="batchNo"),
+    ]
+    payload: dict = {}
+
+    apply_configured_extraction(instance, payload, fields, rules)
+
+    assert payload == {"samples": [
+        {"batchNo": "B1", "injections": [{"sampleName": "样品甲"}]},
+        {"batchNo": "B2", "injections": [{"sampleName": "样品乙"}]},
+    ]}

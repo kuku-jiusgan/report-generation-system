@@ -9,8 +9,8 @@ EXCEL_FIELD_PATHS = {
     "project.name": "$.project.name",
     "document.version": "$.document.version",
     "impurity.impurityName": "$.impurity[*].impurityName",
-    "referenceStandards.name": "$.referenceStandards[*].name",
-    "referenceStandards.content": "$.referenceStandards[*].content",
+    "referenceStandards.name": "$.referenceStandards[*].injections[*].name",
+    "referenceStandards.content": "$.referenceStandards[*].injections[*].content",
     "systemSuitability.impurityName": "$.systemSuitability[*].impurityName",
     "systemSuitability.solutionName": "$.systemSuitability[*].solutionName",
     "systemSuitability.sequence": "$.systemSuitability[*].sequence",
@@ -73,6 +73,14 @@ EXCEL_FIELD_PATHS = {
     "uncategorized.field_080": "$.custom_1788404594530[*].injections[*].field_080",
     "uncategorized.field_081": "$.custom_1788404594530[*].injections[*].field_081",
     "uncategorized.field_084": "$.xianxingjieguo[*].summary.field_084",
+    "uncategorized.field_097": "$.custom_1789628945793[*].injections[*].field_097",
+    "uncategorized.field_098": "$.custom_1789628945793[*].injections[*].field_098",
+    "uncategorized.field_099": "$.custom_1789628945793[*].injections[*].field_099",
+    "uncategorized.field_100": "$.custom_1789628945793[*].injections[*].field_100",
+    "uncategorized.field_101": "$.custom_1789628945793[*].injections[*].field_101",
+    "uncategorized.field_102": "$.custom_1789628945793[*].injections[*].field_102",
+    "uncategorized.field_103": "$.custom_1789628945793[*].injections[*].field_103",
+    "uncategorized.field_122": "$.custom_1789628945793[*].field_122",
     **{f"uncategorized.field_{index:03d}": f"$.custom.field_{index:03d}"
        for index in (60, 61, 62, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 96)},
     **{f"uncategorized.field_{index:03d}": f"$.custom.field_{index:03d}" for index in range(30, 43)},
@@ -135,6 +143,14 @@ EXCEL_WORKBOOK_LOCATIONS = {
     "uncategorized.field_058": {"sheet": "重复性跟中间精密度", "cells": "F11 与 I11、F44 与 I44……", "matchBy": "每个杂质重复性汇总行", "valueColumn": "含量 95% 置信区间"},
     "uncategorized.field_059": {"sheet": "重复性跟中间精密度", "cells": "F12 与 I12、F45 与 I45……", "matchBy": "每个杂质重复性汇总行", "valueColumn": "占理论含量百分比区间"},
     "uncategorized.field_084": {"sheet": "线性", "cells": "由实际浓度与峰面积生成", "matchBy": "每个杂质的首个结果表", "valueColumn": "回归曲线图"},
+    "uncategorized.field_097": {"sheet": "耐用性", "cells": "B2:C2", "matchBy": "两个色谱柱条件", "valueColumn": "B、C（试验条件）"},
+    "uncategorized.field_098": {"sheet": "耐用性", "cells": "B3:C3", "matchBy": "与色谱柱条件同列", "valueColumn": "B、C（空白溶液）"},
+    "uncategorized.field_099": {"sheet": "耐用性", "cells": "B4:C4", "matchBy": "与色谱柱条件同列", "valueColumn": "B、C（供试品溶液）"},
+    "uncategorized.field_100": {"sheet": "耐用性", "cells": "B5:C5", "matchBy": "与色谱柱条件同列", "valueColumn": "B、C（线性方程）"},
+    "uncategorized.field_101": {"sheet": "耐用性", "cells": "B6:C6", "matchBy": "与色谱柱条件同列", "valueColumn": "B、C（线性系数）"},
+    "uncategorized.field_102": {"sheet": "耐用性", "cells": "B7:C7", "matchBy": "与色谱柱条件同列", "valueColumn": "B、C（加标溶液测得浓度）"},
+    "uncategorized.field_103": {"sheet": "耐用性", "cells": "B8:C8", "matchBy": "合并单元格结果复制到两个条件", "valueColumn": "B（浓度比值）"},
+    "uncategorized.field_122": {"sheet": "耐用性", "cells": "B1", "matchBy": "杂质名称表头", "valueColumn": "B（杂质名称）"},
     **{f"uncategorized.field_{index:03d}": {
         "sheet": "准确度", "cells": f"{column}16:{column}24、{column}44:{column}52……",
         "matchBy": "每个杂质的准确度试验结果表，每 28 行一组", "valueColumn": column,
@@ -243,12 +259,23 @@ STABILITY_DETAIL_COLUMNS = {
 }
 STABILITY_FIELDS = {"uncategorized.field_076", *STABILITY_DETAIL_COLUMNS}
 EXCLUSIVE_EXCEL_FIELDS = {*ACCURACY_FIELDS, *STABILITY_FIELDS}
+DURABILITY_DETAIL_ROWS = {
+    "uncategorized.field_097": 2,
+    "uncategorized.field_098": 3,
+    "uncategorized.field_099": 4,
+    "uncategorized.field_100": 5,
+    "uncategorized.field_101": 6,
+    "uncategorized.field_102": 7,
+    "uncategorized.field_103": 8,
+}
+DURABILITY_FIELDS = (*DURABILITY_DETAIL_ROWS, "uncategorized.field_122")
 EXCEL_ONLY_FIELDS = {
     *EXCLUSIVE_EXCEL_FIELDS,
     *CURRENT_REPEATABILITY_DETAIL_COLUMNS,
     "uncategorized.field_055",
     *CURRENT_REPEATABILITY_SUMMARY_CELLS,
     *CURRENT_REPEATABILITY_INTERVAL_CELLS,
+    *DURABILITY_DETAIL_ROWS,
 }
 
 
@@ -325,7 +352,17 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
         "layout": "VBA_FIXED_BLOCKS",
         "workbookLocation": EXCEL_WORKBOOK_LOCATIONS.get(field_code, {}),
     }
-    if field_code == "systemSuitability.conclusion":
+    if field_code in DURABILITY_DETAIL_ROWS:
+        row = DURABILITY_DETAIL_ROWS[field_code]
+        config.update({"mode": "REPEAT_BLOCK", "sheet": "耐用性", "rowStart": row, "rowEnd": row,
+                       "startColumn": 2, "rowStep": 0, "repeatCount": 1, "maxRepeat": 1,
+                       "valueMode": "HORIZONTAL_CELL", "valueCountMode": "CONFIGURED",
+                       "valueCount": 2, "maxValueCount": 2})
+        if field_code == "uncategorized.field_103":
+            config.update({"valueMode": "MERGED_CELL", "broadcastRepeat": 2})
+    elif field_code == "uncategorized.field_122":
+        config.update({"mode": "FIXED_CELL", "sheet": "耐用性", "row": 1, "column": 2})
+    elif field_code == "systemSuitability.conclusion":
         config.update({"mode": "FIXED_CELL", "sheet": "系统适用性", "row": 10, "column": 2})
     elif field_code.startswith("systemSuitability."):
         field = field_code.rsplit(".", 1)[-1]
@@ -486,14 +523,10 @@ def ensure_excel_field_rules(database: Any) -> None:
             continue
         source_path = excel_target_path(field, str(field.get("legacyJsonPath") or "") or default_path)
         field_rules = database.list_system_field_rules(field_code)
-        if len(field_rules) > 1:
-            raise ValueError(f"字段 {field_code} 存在多条提取规则，请先解决规则冲突")
         existing = [rule for rule in field_rules if rule.get("sourceType") == "EXCEL"]
+        if len(existing) > 1:
+            raise ValueError(f"字段 {field_code} 存在多条 Excel 提取规则，请先解决规则冲突")
         if existing:
-            if field_code in EXCLUSIVE_EXCEL_FIELDS and any(
-                rule.get("sourceType") != "EXCEL" for rule in field_rules
-            ):
-                raise ValueError(f"字段 {field_code} 同时存在 Excel 与其他来源规则，请先解决来源冲突")
             for rule in existing:
                 config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
                 desired_row_count = 1 if (
@@ -507,7 +540,8 @@ def ensure_excel_field_rules(database: Any) -> None:
                     "uncategorized.field_048", "uncategorized.field_029",
                     "uncategorized.field_084",
                 } or field_code.startswith("systemSuitability.") \
-                    or field_code in LINEARITY_DIRECT_CELLS or field_code in EXCEL_ONLY_FIELDS
+                    or field_code in LINEARITY_DIRECT_CELLS \
+                    or (field_code in EXCEL_ONLY_FIELDS and field_code not in DURABILITY_DETAIL_ROWS)
                 if config.get("sourcePath") == source_path and not needs_row_count and not needs_field_config:
                     continue
                 updated_config = _rule_config(field_code, source_path) if needs_field_config else {**config, "sourcePath": source_path}
@@ -519,16 +553,18 @@ def ensure_excel_field_rules(database: Any) -> None:
             continue
         if field_rules and field_code not in EXCEL_ONLY_FIELDS:
             continue
-        replaceable = ([rule for rule in field_rules if rule.get("sourceType") in ({"LIMS", "AI"} if field_code in EXCLUSIVE_EXCEL_FIELDS else {"LIMS"})]
-                       if field_code in EXCEL_ONLY_FIELDS else [])
+        replaceable_sources = {"LIMS", "AI"} if field_code in EXCLUSIVE_EXCEL_FIELDS else {"LIMS"}
+        replaceable = [rule for rule in field_rules
+                       if rule.get("sourceType") in replaceable_sources]
         if len(replaceable) > 1:
             raise ValueError(f"字段 {field_code} 存在多条旧来源规则，不能确定要替换的规则")
         if replaceable:
-            database.save_system_field_rule({
-                **replaceable[0], "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",
-                "priority": 50, "transform": "TRIM", "enabled": True,
-                "config": _rule_config(field_code, source_path),
-            }, replaceable[0].get("id"))
+            database.save_system_field_rule(
+                {**replaceable[0], "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",
+                 "priority": 50, "transform": "TRIM", "enabled": True,
+                 "config": _rule_config(field_code, source_path)},
+                replaceable[0].get("id"),
+            )
             continue
         database.save_system_field_rule({
             "fieldCode": field_code, "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",

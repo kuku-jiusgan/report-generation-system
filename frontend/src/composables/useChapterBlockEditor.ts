@@ -191,6 +191,9 @@ export function useChapterBlockEditor(options: EditorOptions) {
   }
 
   async function removeBlock(block: DesignerBlock) {
+    if (block.id <= 0 || !block.standardGroupCode) {
+      return ElMessage.warning('系统字段块由标准编组管理，不能按旧内容块删除')
+    }
     try {
       await ElMessageBox.confirm(
         `删除内容块“${block.title}”？块内 ${block.mappings.length} 个字段也会一并删除，但不会删除 Word 中的文字。`,

@@ -40,7 +40,7 @@ class TemplateCatalogRepositoryMixin:
         # 新模板必须从空的设计工作区开始，不能继承当前活动模板的映射。
         snapshot = {
             "mappings": [], "tableRules": [], "dataSources": [], "aiRules": [],
-            "chapters": self.list_template_chapters(),
+            "chapters": self.list_template_chapters(), "templateBlocks": [],
         }
         with self.database.connect() as connection:
             connection.execute(
@@ -195,7 +195,7 @@ class TemplateCatalogRepositoryMixin:
         if not row:
             raise ValueError("模板版本不存在")
         if not active or active["versionId"] != version_id:
-            self._restore_snapshot(json.loads(row["snapshot"]))
+            self._restore_snapshot(json.loads(row["snapshot"]), version_id)
         with self.database.connect() as connection:
             connection.execute(
                 "INSERT INTO admin_template_workspace(id,active_template_id,active_version_id,updated_at) VALUES(1,%s,%s,%s) ON DUPLICATE KEY UPDATE active_template_id=VALUES(active_template_id),active_version_id=VALUES(active_version_id),updated_at=VALUES(updated_at)",

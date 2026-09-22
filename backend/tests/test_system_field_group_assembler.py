@@ -1,3 +1,5 @@
+import pytest
+
 from backend.app.services.system_field_group_assembler import apply_group_contracts
 from backend.app.services.system_field_group_levels import structure_preview
 
@@ -70,3 +72,42 @@ def test_missing_configured_data_list_is_skipped_for_this_source():
              "levels": [], "fields": []}
 
     assert apply_group_contracts({}, [group]) == {}
+
+
+def test_contract_migrates_flat_fields_into_a_single_detail_record():
+    payload = {"samples": [{
+        "batchNo": "B-01", "sampleName": "样品甲", "clientName": "委托方甲",
+    }]}
+    group = {
+        "groupCode": "samples", "cardinality": "MANY", "enabled": True,
+        "levels": [{"levelKey": "injections", "kind": "ARRAY", "orderNo": 0}],
+        "fields": [
+            {"fieldCode": "samples.batchNo", "jsonKey": "batchNo", "levelKey": ""},
+            {"fieldCode": "samples.sampleName", "jsonKey": "sampleName", "levelKey": "injections"},
+            {"fieldCode": "samples.clientName", "jsonKey": "clientName", "levelKey": "injections"},
+        ],
+    }
+
+    result = apply_group_contracts(payload, [group])
+
+    assert result["samples"] == [{
+        "batchNo": "B-01",
+        "injections": [{"sampleName": "样品甲", "clientName": "委托方甲"}],
+    }]
+
+
+def test_contract_rejects_ambiguous_single_value_to_multiple_details():
+    payload = {"samples": [{
+        "batchNo": "B-01", "sampleName": "样品甲",
+        "injections": [{"sequence": 1}, {"sequence": 2}],
+    }]}
+    group = {
+        "groupCode": "samples", "cardinality": "MANY", "enabled": True,
+        "levels": [{"levelKey": "injections", "kind": "ARRAY", "orderNo": 0}],
+        "fields": [{
+            "fieldCode": "samples.sampleName", "jsonKey": "sampleName", "levelKey": "injections",
+        }],
+    }
+
+    with pytest.raises(ValueError, match="无法确定应写入 2 条明细中的哪一条"):
+        apply_group_contracts(payload, [group])

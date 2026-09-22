@@ -481,12 +481,15 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
 
     @router.post("/system-fields/{field_code:path}/rules")
     def create_system_field_rule(field_code: str, item: dict[str, Any]) -> dict[str, Any]:
-        if repository.database.list_system_field_rules(field_code):
-            raise HTTPException(409, "该系统字段已有提取规则，请编辑现有规则")
         try:
-            return repository.database.save_system_field_rule(
-                _validate_system_rule(repository, {**item, "fieldCode": field_code, "id": None}),
+            validated = _validate_system_rule(
+                repository, {**item, "fieldCode": field_code, "id": None},
             )
+            source_type = validated["sourceType"]
+            if any(rule.get("sourceType") == source_type
+                   for rule in repository.database.list_system_field_rules(field_code)):
+                raise HTTPException(409, f"该系统字段已有 {source_type} 来源规则，请编辑现有规则")
+            return repository.database.save_system_field_rule(validated)
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
 

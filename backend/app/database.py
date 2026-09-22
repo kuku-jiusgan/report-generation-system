@@ -41,8 +41,8 @@ class Database(
             ).fetchone()
         if not row or int(row["count"]) != 1:
             raise RuntimeError("MySQL 数据库未完成 schema 初始化")
-        from .services.system_field_rule_invariant import ensure_single_system_field_rule_schema
-        ensure_single_system_field_rule_schema(self)
+        from .services.system_field_rule_invariant import ensure_system_field_rule_source_schema
+        ensure_system_field_rule_source_schema(self)
 
     def ensure_report_number_schema(self) -> None:
         if self._report_number_schema_ready:

@@ -8,7 +8,7 @@ from .lims_rule_schema import DIRECT_TYPES
 
 
 logger = logging.getLogger(__name__)
-MIGRATION_KEY = "20260920_lims_direct_field_rules_v2"
+MIGRATION_KEY = "20260921_lims_direct_field_rules_v4"
 DEPRECATED_KEYS = {
     "parser", "parserProfile", "inputField", "unitType", "tableSelector",
     "outputCollection", "outputField", "preserveEvidence",
@@ -76,9 +76,10 @@ def _migrate_group_rules(database: Any, fields: dict[str, dict[str, Any]]) -> in
                     "sourcePath": column_pattern, "sectionPattern": mapping.get("sectionPattern", ""),
                     "headerPattern": mapping.get("headerPattern", ""), "rowPattern": mapping.get("rowPattern", ""),
                 }
-                existing = database.list_system_field_rules(field_code)
+                existing = [item for item in database.list_system_field_rules(field_code)
+                            if item.get("sourceType") == "LIMS"]
                 if len(existing) > 1:
-                    raise ValueError(f"字段 {field_code} 存在多条提取规则，不能迁移 LIMS 编组规则")
+                    raise ValueError(f"字段 {field_code} 存在多条 LIMS 提取规则，不能自动迁移")
                 replaceable = next((item for item in existing if str(item.get("config", {}).get("extractionType") or "").upper()
                                     not in DIRECT_TYPES), None)
                 item = replaceable or (existing[0] if existing else {
@@ -124,15 +125,10 @@ def migrate_lims_direct_rules(database: Any) -> dict[str, int]:
                      if rule.get("sourceType") == "LIMS"]
         default = direct_rule_config(str(field.get("collectionCode") or ""), _field_key(field))
         if not remaining and default:
-            all_rules = database.list_system_field_rules(field_code)
-            if len(all_rules) > 1:
-                raise ValueError(f"字段 {field_code} 存在多条提取规则，不能迁移 LIMS 规则")
-            item = all_rules[0] if all_rules else {}
             database.save_system_field_rule({
-                **item,
                 "fieldCode": field_code, "name": "LIMS 原始数据 → 标准字段", "sourceType": "LIMS",
                 "priority": 100, "config": default, "transform": "TRIM", "enabled": True,
-            }, item.get("id"))
+            })
             created += 1
     if migrated or removed or created or group_count:
         logger.info(

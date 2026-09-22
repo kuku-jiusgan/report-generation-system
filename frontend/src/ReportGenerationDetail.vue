@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { adminApi, type GenerationHistoryItem, type StandardField, type StandardFieldCatalog, type SystemFieldGroup } from './admin-api'
+import { adminApi, type GenerationHistoryItem, type StandardField, type StandardFieldCatalog, type SystemFieldGroup, type SystemFieldRule } from './admin-api'
 import SystemFieldCatalogTree from './SystemFieldCatalogTree.vue'
 
 /** 一次生成的详情：逐字段列出取值与来源，而不是把整份快照当一坨 JSON 丢出来。 */
@@ -12,7 +12,7 @@ const SOURCE_LABELS: Record<string, string> = {
 }
 const labels = ref<Record<string, string>>({})
 const catalog = ref<StandardFieldCatalog>()
-const configuredRules = ref<Record<string, any>>({})
+const configuredRules = ref<Record<string, SystemFieldRule[]>>({})
 const selectedField = ref<StandardField>()
 const selectedGroup = ref<SystemFieldGroup>()
 const keyword = ref('')
@@ -24,10 +24,10 @@ watch(() => props.detail?.id, async () => {
     labels.value = Object.fromEntries(fields.map((item: StandardField) => [item.fieldCode, item.label]))
     catalog.value = directory
     const rules = await Promise.all(fields.map(async (field: StandardField) => {
-      try { return [field.fieldCode, (await adminApi.systemFieldRules(field.fieldCode)).find((rule) => rule.enabled)] as const }
-      catch { return [field.fieldCode, undefined] as const }
+      try { return [field.fieldCode, (await adminApi.systemFieldRules(field.fieldCode)).filter((rule) => rule.enabled)] as const }
+      catch { return [field.fieldCode, []] as const }
     }))
-    configuredRules.value = Object.fromEntries(rules.filter(([, rule]) => rule))
+    configuredRules.value = Object.fromEntries(rules)
   } catch { labels.value = {} }
 }, { immediate: true })
 
@@ -54,7 +54,11 @@ const fieldRows = computed(() => {
   const codes = Array.from(new Set([...catalogCodes, ...Object.keys(sources), ...Object.keys(values)])).sort()
   return codes.map((code) => {
     const source = sources[code] || {}
-    const configured = configuredRules.value[code] || {}
+    const candidates = configuredRules.value[code] || []
+    const preferredSource = String(source.type || resolved.value.active_source_type || '')
+    const configured = candidates.find((rule) => rule.sourceType === preferredSource)
+      || (candidates.length === 1 ? candidates[0] : undefined)
+      || ({} as Partial<SystemFieldRule>)
     const config = configured.config && typeof configured.config === 'object' ? configured.config : {}
     const field = catalogFields.find((item) => item.fieldCode === code)
     const extractedValue = source.type === 'PROTOCOL' ? values[code] : hasValue(values[code]) ? values[code] : readResolvedValue(field?.legacyJsonPath || code)

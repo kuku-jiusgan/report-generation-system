@@ -2,7 +2,13 @@
 
 import pytest
 
-from backend.app.services.payload_paths import PayloadPathError, path_depth, set_payload_path
+from backend.app.services.payload_paths import (
+    PayloadPathError,
+    first_payload_value,
+    path_depth,
+    read_payload_path,
+    set_payload_path,
+)
 from backend.app.services.system_field_group_levels import (
     ARRAY, OBJECT, field_path_for, json_path_for, structure_preview,
 )
@@ -78,3 +84,15 @@ def test_structure_preview_mirrors_the_configured_levels() -> None:
         "summary": {"peakAreaRsd": "峰面积 RSD"},
         "injections": [{"peakArea": "峰面积"}],
     }
+
+
+def test_read_payload_path_flattens_nested_array_levels() -> None:
+    payload = {"samples": [
+        {"batchNo": "B1", "injections": [{"sampleName": "样品甲"}]},
+        {"batchNo": "B2", "injections": [{"sampleName": "样品乙"}]},
+    ]}
+
+    path = "$.samples[*].injections[*].sampleName"
+
+    assert read_payload_path(payload, path) == ["样品甲", "样品乙"]
+    assert first_payload_value(payload, path) == "样品甲"

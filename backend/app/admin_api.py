@@ -26,6 +26,8 @@ from .services.onlyoffice_force_save import (
 )
 from .services.template_file_store import TemplateFileStore
 from .services.template_mapping_reconciliation import mappings_for_removed_controls
+from .services.system_field_groups import list_system_field_groups
+from .services.template_block_rules import apply_template_block_rules
 from .admin_routes.protocol_rules import register_protocol_rule_routes
 from .admin_routes.lims_rules import register_lims_rule_routes
 from .admin_routes.rule_catalog import register_rule_catalog_routes
@@ -559,6 +561,9 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     register_data_source_routes(router, repository)
     register_publishing_routes(
         router, repository, file_store.ensure_active_draft, file_store.publish_version, compiled_dir,
+        lambda snapshot: apply_template_block_rules(
+            snapshot, list_system_field_groups(repository.database), repository.database.list_lims_fields(True),
+        ),
     )
 
     return router

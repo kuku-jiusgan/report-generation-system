@@ -29,29 +29,22 @@ class ContentBlockRegressionTest(unittest.TestCase):
     def test_blocks_are_persisted_with_fields_in_version_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = self.repository(directory)
-            chapter = repository.list_template_chapters()[0]
-            block = repository.create_content_block({
-                "chapterId": chapter["id"], "title": "测试循环表格", "kind": "REPEATING_TABLE",
-                "tableNo": "T99", "sourcePath": "$.columns[*]", "repeatKey": "serialNo",
-                "prototypeLocation": "body.T99.dataRow", "dedupKey": "serialNo",
+            chapter = next(item for item in repository.list_template_chapters() if item["code"] == "4.4")
+            block = repository.save_template_block(repository.active_workspace()["versionId"], {
+                "chapterId": chapter["id"], "standardGroupCode": "columns", "title": "色谱柱信息",
+                "kind": "REPEATING_TABLE", "tableNo": "T99", "sourcePath": "$.columns",
+                "repeatKey": "name", "prototypeLocation": "body.T99.dataRow", "dedupKey": "name",
                 "sortRule": "name ASC", "emptyBehavior": "KEEP", "mergeRule": "NONE", "enabled": True,
             })
-            mapping = repository.create_mapping({
-                "chapterId": chapter["id"], "blockId": block["id"],
-                "locationId": "body.T99.dataRow.cell1", "sectionCode": "test", "tableNo": "T99",
-                "wordLabel": "色谱柱名称", "fieldCode": "columns[].name", "dataType": "string",
-                "sourceType": "LIMS", "sourcePath": "$.columns[*].name", "repeatType": "ROW",
-                "repeatKey": "serialNo", "mergeRule": "PRESERVE", "fillRule": "TEXT",
-                "calculationRule": "", "controlTag": "columns.name.test", "required": False,
-                "sourcePending": False, "enabled": True,
-            })
             snapshot = repository.snapshot()
-            saved = next(item for item in snapshot["contentBlocks"] if item["id"] == block["id"])
-            self.assertEqual(saved["sourcePath"], "$.columns[*]")
-            self.assertIn(mapping["id"], saved["mappingIds"])
-            repository._restore_snapshot(snapshot)
-            restored = next(item for item in repository.list_content_blocks() if item["id"] == block["id"])
-            self.assertIn(mapping["id"], restored["mappingIds"])
+            saved = next(item for item in snapshot["templateBlocks"]
+                         if item["standardGroupCode"] == block["standardGroupCode"])
+            self.assertEqual(saved["sourcePath"], "$.columns")
+            repository._restore_snapshot(snapshot, repository.active_workspace()["versionId"])
+            restored = next(item for item in repository.list_template_blocks(
+                repository.active_workspace()["versionId"]
+            ) if item["standardGroupCode"] == "columns")
+            self.assertEqual(restored["repeatKey"], "name")
 
     def test_new_mapping_generates_name_and_all_word_identifiers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -80,32 +73,17 @@ class ContentBlockRegressionTest(unittest.TestCase):
     def test_block_and_field_order_is_persisted_in_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = self.repository(directory)
-            chapters = repository.list_template_chapters()
-            blocks = repository.list_content_blocks()
-            chapter = next(
-                item for item in chapters
-                if len([block for block in blocks if block["chapterId"] == item["id"]]) >= 2
-            )
-            chapter_blocks = [block for block in blocks if block["chapterId"] == chapter["id"]]
-            reversed_blocks = [block["id"] for block in reversed(chapter_blocks)]
-            repository.reorder_content_blocks(chapter["id"], reversed_blocks)
-            self.assertEqual(
-                [
-                    block["id"] for block in repository.list_content_blocks()
-                    if block["chapterId"] == chapter["id"]
-                ],
-                reversed_blocks,
-            )
-
-            field_block = next(block for block in repository.list_content_blocks() if len(block["mappingIds"]) >= 2)
-            reversed_fields = list(reversed(field_block["mappingIds"]))
-            repository.reorder_block_mappings(field_block["id"], reversed_fields)
+            active = repository.active_workspace()
+            chapter = next(item for item in repository.list_template_chapters() if item["code"] == "4.1")
+            repository.save_template_block(active["versionId"], {
+                "chapterId": chapter["id"], "standardGroupCode": "samples",
+                "title": "样品信息", "orderNo": 7, "enabled": True,
+            })
             snapshot = repository.snapshot()
-            repository._restore_snapshot(snapshot)
-            restored = next(
-                block for block in repository.list_content_blocks() if block["id"] == field_block["id"]
-            )
-            self.assertEqual(restored["mappingIds"], reversed_fields)
+            repository._restore_snapshot(snapshot, active["versionId"])
+            restored = next(item for item in repository.list_template_blocks(active["versionId"])
+                            if item["standardGroupCode"] == "samples")
+            self.assertEqual(restored["orderNo"], 7)
 
     def test_column_repeat_block_clones_word_prototype_row(self) -> None:
         settings = get_settings()
@@ -113,18 +91,34 @@ class ContentBlockRegressionTest(unittest.TestCase):
             output_dir = Path(directory)
             repository = self.repository(directory)
             snapshot = repository.snapshot()
+            column_paths = {
+                "columns[].field1": "$.columns[*].name",
+                "columns[].field2": "$.columns[*].injections[*].specification",
+                "columns[].serialNo": "$.columns[*].injections[*].serialNo",
+                "columns[].manufacturer": "$.columns[*].injections[*].manufacturer",
+                "columns[].field5": "$.columns[*].injections[*].stationaryPhase",
+            }
+            mappings = [
+                {**item, "groupItemPath": "$.columns[*]", "sourcePath": column_paths[item["fieldCode"]],
+                 "sourcePending": False}
+                for item in snapshot["mappings"] if item.get("tableNo") == "T8"
+            ]
+            self.assertEqual(len(mappings), 5)
             compiled = output_dir / "compiled.docx"
             report = compile_template(
-                settings.template_path, compiled, snapshot["mappings"], snapshot["tableRules"]
+                settings.template_path, compiled, mappings, snapshot["tableRules"]
             )
             self.assertTrue(report["valid"], report["errors"][:3])
             records = [
-                {"name": f"Column {index}", "specification": f"Spec {index}",
-                 "serialNo": f"SN-{index}", "manufacturer": f"Maker {index}", "stationaryPhase": "C18"}
+                {"name": f"Column {index}",
+                 "injections": [{"specification": f"Spec {index}",
+                                 "serialNo": f"SN-{index}",
+                                 "manufacturer": f"Maker {index}",
+                                 "stationaryPhase": "C18"}]}
                 for index in range(1, 4)
             ]
             output = output_dir / "columns.docx"
-            build_mapped_docx(compiled, output, snapshot["mappings"], {"columns": records}, {})
+            build_mapped_docx(compiled, output, mappings, {"columns": records}, {}, snapshot["tableRules"])
             with ZipFile(output) as archive:
                 document = etree.fromstring(archive.read("word/document.xml"))
             rows = document.xpath("./w:body/w:tbl", namespaces=NS)[7].xpath("./w:tr", namespaces=NS)
@@ -143,18 +137,32 @@ class ContentBlockRegressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             repository = self.repository(directory)
             snapshot = repository.snapshot()
+            sample_paths = {
+                "samples[].sampleName": "$.samples[*].injections[*].sampleName",
+                "samples[].batchNo": "$.samples[*].batchNo",
+                "samples[].field3": "$.samples[*].injections[*].field3",
+                "samples[].field4": "$.samples[*].injections[*].clientName",
+                "samples[].field5": "$.samples[*].injections[*].remark",
+            }
+            mappings = [
+                {**item, "groupItemPath": "$.samples[*]", "sourcePath": sample_paths[item["fieldCode"]],
+                 "sourcePending": False}
+                for item in snapshot["mappings"] if item.get("tableNo") == "T5"
+            ]
             compiled = Path(directory) / "compiled.docx"
             report = compile_template(
-                settings.template_path, compiled, snapshot["mappings"], snapshot["tableRules"]
+                settings.template_path, compiled, mappings, snapshot["tableRules"]
             )
             self.assertTrue(report["valid"], report["errors"][:3])
             output = Path(directory) / "samples.docx"
-            build_mapped_docx(compiled, output, snapshot["mappings"], {
+            build_mapped_docx(compiled, output, mappings, {
                 "samples": [{
-                    "sampleName": "供试品", "batchNo": "B-01", "specification": "1g",
-                    "clientName": "测试科技", "remark": "-",
+                    "batchNo": "B-01", "injections": [{
+                        "sampleName": "供试品", "field3": "1g",
+                        "clientName": "测试科技（上海）有限公司", "remark": "-",
+                    }],
                 }],
-            }, {})
+            }, {}, snapshot["tableRules"])
             with ZipFile(output) as archive:
                 document = etree.fromstring(archive.read("word/document.xml"))
             sample_table = document.xpath("./w:body/w:tbl", namespaces=NS)[4]
