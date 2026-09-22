@@ -1,8 +1,5 @@
 from typing import Any
 
-from ..database_common import now_iso
-
-
 VALIDATION_SUMMARY_FIELDS = (
     ("validationSummary.field1", "验证项目", "field1", "string"),
     ("validationSummary.acceptanceCriteria", "接受标准", "acceptanceCriteria", "richText"),
@@ -28,12 +25,6 @@ def ensure_lims_catalog_defaults(database: Any) -> None:
                 "legacyJsonPath": f"$.validationSummary[*].{json_key}", "enabled": True,
             })
     _ensure_limit_calculation_fields(database)
-    # 标签前缀归一化自带 NOT LIKE 守卫，可安全重复执行
-    with database.connect() as connection:
-        connection.execute(
-            """UPDATE lims_field_catalog SET group_code='杂质信息 · 杂质列表',label='【杂质列表】'||label,
-               updated_at=%s WHERE collection_code='impurity' AND label NOT LIKE '【杂质列表】%%'""", (now_iso(),)
-        )
 
 
 def _ensure_limit_calculation_fields(database: Any) -> None:

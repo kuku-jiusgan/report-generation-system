@@ -1,3 +1,6 @@
+import pytest
+
+from backend.app.services.docx_field_values import source_mapping_value
 from backend.app.services.system_field_resolver import resolve_system_fields
 
 
@@ -65,23 +68,103 @@ def test_pdf_rule_reads_original_extracted_value() -> None:
 
 def test_excel_rule_reads_imported_source_payload() -> None:
     field = [{"fieldCode": "sample.name", "legacyJsonPath": "$.sample.name", "enabled": True}]
-    report_data = {"source_payloads": {"EXCEL": {"rows": [{"name": "EXCEL样品"}]}}}
+    excel = {"rows": [{"name": "EXCEL样品"}]}
+    report_data = {"source_payloads": {"EXCEL": excel}}
 
     resolved = resolve_system_fields(
         field, [rule("sample.name", "EXCEL", 1, {"sourcePath": "$.rows[*].name"}, 8)],
-        {}, report_data,
+        excel, report_data,
     )
 
     assert resolved["sample"]["name"] == ["EXCEL样品"]
     assert report_data["field_sources"]["sample.name"]["type"] == "EXCEL"
 
 
+def test_field_source_selects_excel_while_lims_is_active() -> None:
+    field = [{"fieldCode": "sample.name", "legacyJsonPath": "$.sample.name", "enabled": True}]
+    report_data = {
+        "active_source_type": "LIMS",
+        "field_sources": {"sample.name": {"type": "EXCEL"}},
+        "source_payloads": {
+            "EXCEL": {"sample": {"name": "Excel 样品"}},
+            "LIMS": {"sample": {"name": "LIMS 样品"}},
+        },
+    }
+    rules = [
+        rule("sample.name", "EXCEL", 1, {}, 8),
+        rule("sample.name", "LIMS", 1, {}, 9),
+    ]
+
+    resolve_system_fields(field, rules, report_data["source_payloads"]["LIMS"], report_data)
+
+    assert report_data["original_values"]["sample.name"] == "Excel 样品"
+    assert report_data["field_sources"]["sample.name"]["type"] == "EXCEL"
+    assert report_data["source_payloads"]["LIMS"]["sample"]["name"] == "LIMS 样品"
+
+
+def test_multiple_direct_rules_require_field_source() -> None:
+    field = [{"fieldCode": "sample.name", "legacyJsonPath": "$.sample.name", "enabled": True}]
+    rules = [
+        rule("sample.name", "EXCEL", 1, {}, 8),
+        rule("sample.name", "LIMS", 1, {}, 9),
+    ]
+
+    with pytest.raises(ValueError, match="多个数据源.*未记录字段来源"):
+        resolve_system_fields(field, rules, {}, {
+            "source_payloads": {"EXCEL": {}, "LIMS": {}},
+        })
+
+
+def test_single_loaded_source_selects_matching_direct_rule() -> None:
+    field = [{"fieldCode": "sample.name", "legacyJsonPath": "$.sample.name", "enabled": True}]
+    excel = {"sample": {"name": "Excel 样品"}}
+    rules = [
+        rule("sample.name", "EXCEL", 1, {}, 8),
+        rule("sample.name", "LIMS", 1, {}, 9),
+    ]
+
+    resolve_system_fields(field, rules, excel, {"source_payloads": {"EXCEL": excel}})
+
+    assert excel["sample"]["name"] == "Excel 样品"
+
+
+def test_ai_result_is_kept_in_derived_source_namespace(monkeypatch) -> None:
+    field = {"fieldCode": "validation.field_003", "legacyJsonPath": "$.validation.field_003", "enabled": True}
+    rule_config = {"promptTemplate": "根据数据 {{systemSuitability}} 生成结论",
+                   "contextVariables": [{"groupCode": "systemSuitability", "required": True}]}
+    report_data = {"source_payloads": {"AI": {}, "EXCEL": {"systemSuitability": [{"name": "杂质A"}]}}}
+
+    monkeypatch.setattr("backend.app.services.system_field_resolver.generate_ai_text",
+                        lambda *args, **kwargs: "符合标准规定。")
+    payload = {"systemSuitability": [{"name": "杂质A"}]}
+    resolve_system_fields([field], [rule("validation.field_003", "AI", 1, rule_config, 3)],
+                          payload, report_data)
+
+    assert report_data["source_payloads"]["AI"]["validation.field_003"] == "符合标准规定。"
+
+
+def test_ai_mapping_reads_result_after_active_source_changes() -> None:
+    mapping = {
+        "fieldCode": "report.s7_1.conclusion", "standardFieldCode": "validation.field_003",
+        "sourceType": "SYSTEM", "sourcePath": "$.validation.field_003",
+    }
+    report_data = {
+        "active_source_type": "LIMS",
+        "field_sources": {"validation.field_003": {"type": "AI"}},
+        "source_payloads": {"LIMS": {}, "AI": {"validation.field_003": "符合标准规定。"}},
+    }
+
+    assert source_mapping_value(mapping, report_data["source_payloads"]["LIMS"], report_data) == "符合标准规定。"
+
+
 def test_grouped_excel_rule_reads_field_standard_path_when_rule_is_stale() -> None:
     field = [{"fieldCode": "result.value", "groupCode": "results", "legacyJsonPath": "$.results[*].value", "enabled": True}]
-    report_data = {"source_payloads": {"EXCEL": {"results": [{"value": "已落位"}]}}}
+    excel = {"results": [{"value": "已落位"}]}
+    report_data = {"source_payloads": {"EXCEL": excel}}
 
     resolved = resolve_system_fields(
-        field, [rule("result.value", "EXCEL", 1, {"sourcePath": "$[*].value"}, 9)], {}, report_data,
+        field, [rule("result.value", "EXCEL", 1, {"sourcePath": "$[*].value"}, 9)],
+        excel, report_data,
     )
 
     assert resolved["results"] == [{"value": "已落位"}]
@@ -101,7 +184,7 @@ def test_excel_many_fields_keep_record_indexes_aligned() -> None:
         rule("specificity.peakArea", "EXCEL", 1, {"sourcePath": "$.specificity[*].peakArea"}, 11),
     ]
 
-    resolved = resolve_system_fields(fields, rules, {}, {"source_payloads": {"EXCEL": excel}})
+    resolved = resolve_system_fields(fields, rules, excel, {"source_payloads": {"EXCEL": excel}})
 
     assert resolved["specificity"] == [
         {"impurityName": "杂质D", "peakArea": 10},

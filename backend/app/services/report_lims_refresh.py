@@ -3,6 +3,7 @@ from typing import Any
 
 from .lims_normalizer import merge_instances, normalize_instance
 from .lims_oracle import query_lims_project
+from .payload_paths import read_payload_path
 from .system_field_group_assembler import apply_group_contracts
 from .system_field_groups import list_system_field_groups
 from .system_field_rule_invariant import rules_by_field
@@ -20,6 +21,31 @@ class LimsConflictError(LimsSourceError):
     def __init__(self, conflicts: list[dict[str, Any]]):
         super().__init__("存在未处理的 LIMS 数据冲突")
         self.conflicts = conflicts
+
+
+def record_lims_field_provenance(
+    report_data: dict[str, Any], payload: dict[str, Any], fields: list[dict[str, Any]],
+    record_id: str,
+) -> None:
+    """只登记 LIMS 本次实际提供的标准字段，不覆盖其他来源独有字段。"""
+    sources = report_data.setdefault("field_sources", {})
+    originals = report_data.setdefault("original_values", {})
+    enabled_fields = [field for field in fields if field.get("enabled", True)]
+    field_codes = {str(field.get("fieldCode") or "") for field in enabled_fields}
+    for code in field_codes:
+        if str((sources.get(code) or {}).get("type") or "").upper() == "LIMS":
+            sources.pop(code, None)
+            originals.pop(code, None)
+    for field in enabled_fields:
+        code = str(field.get("fieldCode") or "")
+        path = str(field.get("legacyJsonPath") or code)
+        value = read_payload_path(payload, path)
+        if value in (None, "", [], {}):
+            continue
+        sources[code] = {
+            "type": "LIMS", "record_id": record_id, "sourcePath": path,
+        }
+        originals[code] = value
 
 
 def lims_source_metadata(
@@ -121,6 +147,10 @@ def refresh_report_lims_payload(
     updated_payloads["LIMS"] = recognition["payload"]
     updated_payloads["LIMS_RECOGNITION"] = recognition_metadata(recognition)
     report_data["source_payloads"] = updated_payloads
+    record_lims_field_provenance(
+        report_data, recognition["payload"], database.list_lims_fields(True),
+        "+".join(str(value) for value in instance_ids),
+    )
     report_data["active_source_type"] = "LIMS"
     return recognition
 

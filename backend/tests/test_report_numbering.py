@@ -1,7 +1,6 @@
 import threading
 
 from backend.app.services.report_numbering import (
-    REPORT_NUMBER_MIGRATION,
     ensure_report_number_schema,
     format_report_number,
     report_number_date,
@@ -39,38 +38,13 @@ def test_report_numbers_increment_daily_without_reuse(tmp_path) -> None:
     assert next_day["report_number"] == "JYD-20260920-001"
 
 
-def test_existing_reports_receive_numbers_before_new_reports(tmp_path) -> None:
+def test_report_number_schema_check_keeps_existing_number_unchanged(tmp_path) -> None:
     database = make_test_database(tmp_path)
-    database.ensure_report_number_schema()
-    with database.connect() as connection:
-        connection.execute(
-            "ALTER TABLE reports MODIFY COLUMN report_number VARCHAR(32) NULL"
-        )
-        connection.executemany(
-            """INSERT INTO reports(
-                   id,title,status,resolved_data,created_at,updated_at,word_edit_locked
-               ) VALUES(%s,%s,%s,%s,%s,%s,%s)""",
-            [
-                ("legacy-1", "历史报告一", "DATA_REVIEW", "{}",
-                 "2026-09-19T01:00:00+00:00", "2026-09-19T01:00:00+00:00", 0),
-                ("legacy-2", "历史报告二", "DATA_REVIEW", "{}",
-                 "2026-09-19T02:00:00+00:00", "2026-09-19T02:00:00+00:00", 0),
-            ],
-        )
-        connection.execute(
-            "DELETE FROM app_migrations WHERE `key`=%s",
-            (REPORT_NUMBER_MIGRATION,),
-        )
+    existing = database.create_report(report_item("existing", "2026-09-19T01:00:00+00:00"))
+
     ensure_report_number_schema(database)
 
-    reports = {item["id"]: item for item in database.list_reports()}
-    current = database.create_report(
-        report_item("current", "2026-09-19T03:00:00+00:00")
-    )
-
-    assert reports["legacy-1"]["report_number"] == "JYD-20260919-001"
-    assert reports["legacy-2"]["report_number"] == "JYD-20260919-002"
-    assert current["report_number"] == "JYD-20260919-003"
+    assert database.get_report(existing["id"])["report_number"] == existing["report_number"]
 
 
 def test_concurrent_report_creation_keeps_numbers_unique(tmp_path) -> None:

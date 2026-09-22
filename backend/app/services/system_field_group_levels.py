@@ -34,13 +34,12 @@ def ensure_group_levels(database: Database) -> None:
         ) ENGINE=InnoDB""")
         # 不声明外键：库的默认排序规则与 system_field_groups 建表时的不一致，
         # 外键会因排序规则不兼容建不起来；编组删除时在 delete_system_field_group 里显式清理。
-        columns = {row["Field"] for row in connection.execute(
-            "SHOW COLUMNS FROM system_field_group_fields"
-        ).fetchall()}
-        if "level_key" not in columns:
-            connection.execute(
-                "ALTER TABLE system_field_group_fields ADD COLUMN level_key VARCHAR(255) NOT NULL DEFAULT ''"
-            )
+        if isinstance(database, Database):
+            columns = {row["Field"] for row in connection.execute(
+                "SHOW COLUMNS FROM system_field_group_fields"
+            ).fetchall()}
+            if "level_key" not in columns:
+                raise RuntimeError("system_field_group_fields 缺少 level_key 列，请检查数据库结构")
 
 
 def list_group_levels(database: Database, group_code: str = "") -> dict[str, list[dict[str, Any]]]:

@@ -134,10 +134,14 @@ def mapping_source_path(mapping: dict[str, Any]) -> str:
 
 
 def source_mapping_value(mapping: dict[str, Any], payload: dict[str, Any],
-                          report_data: dict[str, Any]) -> Any:
+                         report_data: dict[str, Any]) -> Any:
     source = report_data.get("field_sources", {}).get(str(mapping.get("standardFieldCode") or ""), {})
     if source.get("type") == "PROTOCOL" and source.get("status") == "ERROR":
         return ""
+    if str(source.get("type") or mapping.get("sourceType") or "").upper() == "AI":
+        field_code = str(mapping.get("standardFieldCode") or mapping.get("fieldCode") or "")
+        ai_payload = report_data.get("source_payloads", {}).get("AI", {})
+        return ai_payload.get(field_code) if isinstance(ai_payload, dict) else None
     path = mapping_source_path(mapping)
     source_payload = payload_for_mapping(mapping, payload, report_data)
     repeat = repeat_source(path)

@@ -20,8 +20,14 @@ CONFIG = {
 }
 RECORDS = [{"name": "测试甲", "rsd": 1.4}, {"name": "测试乙", "rsd": 0.3}]
 FIELDS = [
-    {"fieldCode": "results.rsd", "legacyJsonPath": "$.results[*].rsd", "label": "RSD"},
-    {"fieldCode": "results.name", "legacyJsonPath": "$.results[*].name", "label": "名称"},
+    {"fieldCode": "results.rsd", "collectionCode": "results",
+     "legacyJsonPath": "$.results[*].rsd", "label": "RSD"},
+    {"fieldCode": "results.name", "collectionCode": "results",
+     "legacyJsonPath": "$.results[*].name", "label": "名称"},
+]
+EXCEL_RULES = [
+    {"fieldCode": field["fieldCode"], "sourceType": "EXCEL", "enabled": True, "config": {}}
+    for field in FIELDS
 ]
 
 
@@ -125,6 +131,44 @@ def test_does_not_merge_different_source_namespaces():
     assert "results" in report_ai_context(item, CONFIG)["missing"]
 
 
+def test_history_context_uses_group_member_rules_instead_of_active_report_source():
+    item = generation()
+    resolved_data = item["generation_snapshot"]["resolved_data"]
+    resolved_data["source_payloads"]["LIMS"] = {"results": []}
+    resolved_data["active_source_type"] = "LIMS"
+
+    imported = report_ai_context(
+        item, CONFIG, context_fields=FIELDS, context_rules=EXCEL_RULES,
+    )
+
+    assert imported["values"]["results"] == RECORDS
+    assert imported["missing"] == []
+
+
+def test_history_context_rejects_group_with_conflicting_direct_sources():
+    item = generation()
+    resolved_data = item["generation_snapshot"]["resolved_data"]
+    resolved_data["source_payloads"]["LIMS"] = {
+        "results": RECORDS,
+    }
+    resolved_data["active_source_type"] = "EXCEL"
+    rules = [
+        EXCEL_RULES[0],
+        {"fieldCode": FIELDS[1]["fieldCode"], "sourceType": "LIMS", "enabled": True, "config": {}},
+    ]
+
+    with pytest.raises(AiGenerationError, match="同时选择了多个直接来源"):
+        report_ai_context(item, CONFIG, context_fields=FIELDS, context_rules=rules)
+
+
+def test_history_context_rejects_missing_selected_source_payload():
+    item = generation("LIMS")
+    item["generation_snapshot"]["resolved_data"]["active_source_type"] = "LIMS"
+
+    with pytest.raises(AiGenerationError, match="缺少已选来源载荷：EXCEL"):
+        report_ai_context(item, CONFIG, context_fields=FIELDS, context_rules=EXCEL_RULES)
+
+
 @pytest.mark.parametrize("snapshot", [None, {}, {"resolved_data": {}}])
 def test_legacy_snapshot_is_rejected(snapshot):
     item = generation()
@@ -136,6 +180,9 @@ def test_legacy_snapshot_is_rejected(snapshot):
 def test_context_api_returns_values_and_reports_invalid_records(tmp_path):
     class Database:
         def list_lims_fields(self, include_disabled=False):
+            return []
+
+        def list_system_field_rules(self):
             return []
 
         def get_generation(self, identifier):

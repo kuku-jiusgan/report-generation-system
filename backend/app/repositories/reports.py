@@ -74,18 +74,10 @@ class ReportRepositoryMixin:
             connection.execute("DELETE FROM reports WHERE id=%s", (report_id,))
         return outputs
 
-    def migration_applied(self, key: str) -> bool:
-        with self.connect() as connection:
-            return bool(connection.execute("SELECT 1 FROM app_migrations WHERE `key`=%s", (key,)).fetchone())
-
     def clear_report_test_data(self) -> None:
         with self.connect() as connection:
             for table in ("report_generation_history", "change_history", "report_versions", "reports", "source_documents"):
                 connection.execute(f"DELETE FROM {table}")
-
-    def mark_migration_applied(self, key: str) -> None:
-        with self.connect() as connection:
-            connection.execute("INSERT IGNORE INTO app_migrations(`key`,applied_at) VALUES(%s,%s)", (key, now_iso()))
 
     def add_change(self, report_id: str, field_code: str, old_value: str, new_value: str,
                    operator: str = "当前用户", reason: str = "人工编辑") -> None:

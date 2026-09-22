@@ -34,13 +34,6 @@ class Database(
             yield connection
 
     def initialize(self) -> None:
-        with self.connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) AS count FROM information_schema.tables "
-                "WHERE table_schema=DATABASE() AND table_name='app_migrations'"
-            ).fetchone()
-        if not row or int(row["count"]) != 1:
-            raise RuntimeError("MySQL 数据库未完成 schema 初始化")
         from .services.system_field_rule_invariant import ensure_system_field_rule_source_schema
         ensure_system_field_rule_source_schema(self)
 

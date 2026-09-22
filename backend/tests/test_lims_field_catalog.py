@@ -7,14 +7,10 @@ from fastapi import HTTPException
 
 from backend.app.admin_routes.rule_catalog import _validate_system_rule
 from backend.app.services.lims_configured_extractor import apply_configured_extraction
-from backend.app.services.lims_direct_rule_defaults import direct_rule_config
-from backend.app.services.lims_direct_rule_migration import migrate_lims_direct_rules
 from backend.app.services.lims_normalizer import normalize_instance
 from backend.app.services.lims_parser import _body_items
 from backend.app.services.lims_rule_schema import lims_rule_metadata, validate_lims_rule_config
 from backend.app.services.system_field_rule_invariant import (
-    MIGRATION_KEY,
-    UNIQUE_INDEX,
     ensure_system_field_rule_source_schema,
 )
 from backend.tests.database_helpers import make_test_database
@@ -150,58 +146,16 @@ def test_repository_rejects_a_second_rule_for_the_same_field_and_source() -> Non
         assert database.list_system_field_rules("custom.single") == [updated, excel]
 
 
-def test_source_rule_migration_keeps_latest_per_source_and_creates_unique_index() -> None:
+def test_source_rule_schema_check_keeps_existing_rule_unchanged() -> None:
     with tempfile.TemporaryDirectory() as directory:
         database = make_test_database(Path(directory))
-        database.upsert_lims_field(catalog_field("custom.migrated", "custom", "migrated"))
-        with database.connect() as connection:
-            connection.execute(f"ALTER TABLE system_field_rules DROP INDEX {UNIQUE_INDEX}")
-            connection.execute("DELETE FROM app_migrations WHERE `key`=%s", (MIGRATION_KEY,))
-            values = (
-                "custom.migrated", "旧规则", "EXCEL", 100, "{}", "TRIM", 1,
-                "2026-09-18T00:00:00+00:00",
-            )
-            connection.execute(
-                """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
-                   transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", values,
-            )
-            old_lims = (
-                "custom.migrated", "旧 LIMS 规则", "LIMS", 100, "{}", "TRIM", 1,
-                "2026-09-18T12:00:00+00:00",
-            )
-            connection.execute(
-                """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
-                   transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", old_lims,
-            )
-            latest = connection.execute(
-                """INSERT INTO system_field_rules(field_code,name,source_type,priority,config,
-                   transform,enabled,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (*values[:1], "新 LIMS 规则", "LIMS", *values[3:-1], "2026-09-19T00:00:00+00:00"),
-            ).lastrowid
+        database.upsert_lims_field(catalog_field("custom.value", "custom", "value"))
+        saved = database.save_system_field_rule(rule(
+            "custom.value", "INSTANCE_PATH", sourcePath="project.name",
+        ))
 
-        result = ensure_system_field_rule_source_schema(database)
-
-        rules = database.list_system_field_rules("custom.migrated")
-        with database.connect() as connection:
-            index = connection.execute(
-                """SELECT non_unique AS is_non_unique FROM information_schema.statistics
-                   WHERE table_schema=DATABASE() AND table_name='system_field_rules'
-                     AND index_name=%s""", (UNIQUE_INDEX,),
-            ).fetchone()
-            source_column = connection.execute(
-                """SELECT data_type,character_maximum_length FROM information_schema.columns
-                   WHERE table_schema=DATABASE() AND table_name='system_field_rules'
-                     AND column_name='source_type'"""
-            ).fetchone()
-        assert result == {"removed": 1}
-        assert len(rules) == 2
-        assert [(item["sourceType"], item["name"]) for item in rules] == [
-            ("EXCEL", "旧规则"), ("LIMS", "新 LIMS 规则"),
-        ]
-        assert next(item["id"] for item in rules if item["sourceType"] == "LIMS") == latest
-        assert int(index["is_non_unique"]) == 0
-        assert source_column[0] == "varchar"
-        assert int(source_column[1]) == 32
+        assert ensure_system_field_rule_source_schema(database) is None
+        assert database.list_lims_extraction_rules("custom.value") == [saved]
 
 
 def test_instance_path_reads_only_configuration_inside_config() -> None:
@@ -275,10 +229,13 @@ def test_method_parameter_field3_ignores_two_column_tables(headers: tuple[str, s
         catalog_field(f"methodParameters.{key}", "methodParameters", key)
         for key in ("field1", "field2", "field3")
     ]
-    rules = [
-        rule(f"methodParameters.{key}", "HTML_TABLE_COLUMN", **direct_rule_config("methodParameters", key))
-        for key in ("field1", "field2", "field3")
-    ]
+    rules = [rule(
+        f"methodParameters.{key}", "HTML_TABLE_COLUMN", recordMode="ROWS", headerRows=1,
+        sectionPattern=r"仪器方法|分析方法",
+        headerPattern=(r"^(?=(?:[^|]*\|){2})(?=.*(?:项目.*参数|分析方法))"
+                       if key == "field3" else r"项目.*参数|分析方法"),
+        sourceColumnIndex=index, sourcePath="",
+    ) for index, key in enumerate(("field1", "field2", "field3"))]
 
     payload = normalize_instance(instance, fields, rules)
 
@@ -435,40 +392,6 @@ def test_lims_rule_schema_validates_visible_integer_and_regex_inputs() -> None:
         validate_lims_rule_config({
             "extractionType": "INSTANCE_PATH", "sourcePath": "project.name",
         }, "REGEX_REPLACE")
-
-
-def test_unified_migration_converts_legacy_rule_once_and_does_not_recreate_deleted_rule() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        database = make_test_database(Path(directory))
-        field_code = "systemSuitability.peakArea"
-        database.upsert_lims_field(catalog_field(field_code, "systemSuitability", "peakArea"))
-        legacy = database.save_system_field_rule({
-            "fieldCode": field_code,
-            "name": "旧标准集合读取",
-            "sourceType": "LIMS",
-            "priority": 100,
-            "config": {
-                "extractionType": "NORMALIZED_PATH",
-                "sourcePath": "$.systemSuitability[*].peakArea",
-                "parser": "HTML_TABLE_GRID",
-                "parserProfile": "SYSTEM_SUITABILITY_MATRIX",
-            },
-            "transform": "TRIM",
-            "enabled": True,
-        })
-
-        first = migrate_lims_direct_rules(database)
-        migrated = database.list_lims_extraction_rules(field_code)[0]
-        database.delete_system_field_rule(migrated["id"])
-        second = migrate_lims_direct_rules(database)
-
-        assert first["migrated"] == 1
-        assert migrated["id"] == legacy["id"]
-        assert migrated["config"]["extractionType"] == "HTML_TABLE_COLUMN"
-        assert "parser" not in migrated["config"]
-        assert "parserProfile" not in migrated["config"]
-        assert second == {"migrated": 0, "groupMappings": 0, "created": 0, "removed": 0}
-        assert database.list_lims_extraction_rules(field_code) == []
 
 
 def test_extractor_ignores_retired_top_level_configuration() -> None:

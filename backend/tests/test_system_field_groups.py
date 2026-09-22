@@ -20,12 +20,8 @@ def _database(directory: Path) -> Database:
     return make_test_database(directory)
 
 
-def test_group_schema_restores_item_key_after_code_rollback(tmp_path: Path) -> None:
+def test_group_schema_requires_item_key_column(tmp_path: Path) -> None:
     database = _database(tmp_path)
-    ensure_system_field_groups(database)
-    with database.connect() as connection:
-        connection.execute("ALTER TABLE system_field_groups DROP COLUMN item_key")
-
     ensure_system_field_groups(database)
 
     with database.connect() as connection:
@@ -121,7 +117,7 @@ def test_group_levels_only_accept_the_shared_summary_and_injections_contract() -
             save_group_level(database, "customResults", {"levelKey": "summary", "kind": "ARRAY"})
 
 
-def test_existing_detection_limit_records_migrate_to_group_code() -> None:
+def test_group_initialization_preserves_existing_detection_limit_records() -> None:
     with tempfile.TemporaryDirectory() as directory:
         database = _database(Path(directory))
         database.create_lims_import({
@@ -140,9 +136,9 @@ def test_existing_detection_limit_records_migrate_to_group_code() -> None:
         ensure_system_field_groups(database)
 
         payload = database.get_lims_normalized_payload("legacy-lod", "EXP-LOD")
-        assert "lod" not in payload
-        assert payload["jiancexian"][0]["name"] == "杂质A"
-        assert payload["validationSummary"][0]["validationItemCode"] == "jiancexian"
+        assert payload["lod"][0]["name"] == "杂质A"
+        assert "jiancexian" not in payload
+        assert payload["validationSummary"][0]["validationItemCode"] == "lod"
 
 
 def test_field_catalog_uses_formal_group_relationship_for_display() -> None:

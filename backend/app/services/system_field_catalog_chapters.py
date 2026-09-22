@@ -1,22 +1,11 @@
-import logging
 import re
 from typing import Any
 
 from ..database import Database, now_iso
 
 
-logger = logging.getLogger(__name__)
-MIGRATION_KEY = "decouple-system-field-catalog-chapters-v1"
 SQL_TYPE_PATTERN = re.compile(r"^varchar\([1-9][0-9]*\)$", re.IGNORECASE)
 SQL_COLLATION_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
-
-
-def _table_exists(connection: Any, table: str) -> bool:
-    return bool(connection.execute(
-        """SELECT 1 FROM information_schema.tables
-           WHERE table_schema=DATABASE() AND table_name=%s""",
-        (table,),
-    ).fetchone())
 
 
 def _reference_column_sql(connection: Any, table: str, column: str) -> str:
@@ -98,49 +87,10 @@ def _seed_catalog_chapters(connection: Any) -> int:
     return len(chapters)
 
 
-def _migrate_legacy_memberships(connection: Any) -> tuple[int, int]:
-    direct_count = group_count = 0
-    if _table_exists(connection, "system_field_chapters"):
-        direct_count = connection.execute(
-            """INSERT IGNORE INTO system_field_catalog_fields(field_code,chapter_id,order_no)
-               SELECT legacy.field_code,catalog.id,legacy.order_no
-               FROM system_field_chapters legacy
-               JOIN admin_template_chapters template ON template.id=legacy.chapter_id
-               JOIN system_field_catalog_chapters catalog ON catalog.code=template.code"""
-        ).rowcount
-    if _table_exists(connection, "system_field_group_chapters"):
-        group_count = connection.execute(
-            """INSERT IGNORE INTO system_field_catalog_groups(group_code,chapter_id,order_no)
-               SELECT legacy.group_code,catalog.id,legacy.order_no
-               FROM system_field_group_chapters legacy
-               JOIN admin_template_chapters template ON template.id=legacy.chapter_id
-               JOIN system_field_catalog_chapters catalog ON catalog.code=template.code"""
-        ).rowcount
-    return direct_count, group_count
-
-
 def ensure_system_field_catalog_chapters(database: Database) -> None:
     with database.connect() as connection:
         _create_catalog_tables(connection)
-        seeded = _seed_catalog_chapters(connection)
-        if not connection.execute(
-            "SELECT 1 FROM system_field_catalog_chapters LIMIT 1"
-        ).fetchone():
-            return
-        applied = connection.execute(
-            "SELECT 1 FROM app_migrations WHERE `key`=%s", (MIGRATION_KEY,),
-        ).fetchone()
-        if applied:
-            return
-        direct_count, group_count = _migrate_legacy_memberships(connection)
-        connection.execute(
-            "INSERT INTO app_migrations(`key`,applied_at) VALUES(%s,%s)",
-            (MIGRATION_KEY, now_iso()),
-        )
-        logger.info(
-            "字段目录章节已与模板章节解耦 chapters=%d directFields=%d groups=%d",
-            seeded, direct_count, group_count,
-        )
+        _seed_catalog_chapters(connection)
 
 
 def list_system_field_catalog_chapters(database: Database) -> list[dict[str, Any]]:

@@ -5,32 +5,6 @@
 从 rule_admin.py 拆出来是为了让该文件保持在仓库的 600 行上限内。
 """
 
-STANDARD_FIELD_GROUP_NAMES = {
-    "accuracySolutions": "准确度溶液",
-    "approval": "审批信息",
-    "columns": "色谱柱",
-    "document": "文档信息",
-    "impurity": "杂质信息",
-    "instruments": "仪器设备",
-    "intermediatePrecisionSolutions": "中间精密度溶液",
-    "lodSolutions": "检出限溶液",
-    "methodParameters": "方法参数",
-    "project": "项目信息",
-    "reagents": "试剂",
-    "referenceStandards": "对照品",
-    "repeatabilitySolutions": "重复性溶液",
-    "robustnessSequence": "耐用性序列",
-    "robustnessSolutions": "耐用性溶液",
-    "robustnessSpecificity": "耐用性专属性",
-    "samples": "样品信息",
-    "specificity": "专属性结果",
-    "specificitySolutions": "专属性溶液",
-    "stabilitySolutions": "稳定性溶液",
-    "systemSuitability": "系统适用性",
-    "systemSuitabilitySolutions": "系统适用性溶液",
-    "validationSummary": "验证结果汇总",
-}
-
 SOLUTION_TABLE_DEFAULTS = {
     "systemSuitabilitySolutions": {
         "chapterCode": "7.1", "rowPattern": r"(?:^|\|)验证项目=系统适用性(?:\||$)",

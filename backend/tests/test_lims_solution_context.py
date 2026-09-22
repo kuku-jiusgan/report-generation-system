@@ -1,5 +1,3 @@
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,8 +9,6 @@ from backend.app.services.lims_normalizer import normalize_instance
 from backend.app.services.rule_admin_defaults import (
     SOLUTION_TABLE_COLUMN_PATTERNS, SOLUTION_TABLE_DEFAULTS,
 )
-from backend.app.services.lims_direct_rule_migration import migrate_lims_direct_rules
-from backend.tests.database_helpers import make_test_database
 
 
 CALCULATION_PATTERN = r"(?:\([^()（）]*=[^()（）]*\)|（[^()（）]*=[^()（）]*）)"
@@ -169,87 +165,3 @@ def test_regex_replace_rule_requires_valid_replacement_config() -> None:
         _validate_system_rule(repository, {
             **base_rule, "config": {**base_rule["config"], "replacePattern": "["},
         })
-
-
-def test_unified_migration_preserves_direct_rule_configuration() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        database = make_test_database(Path(directory))
-        for collection in SOLUTION_TABLE_DEFAULTS:
-            for leaf in SOLUTION_TABLE_COLUMN_PATTERNS:
-                database.upsert_lims_field({
-                    "fieldCode": f"{collection}.{leaf}", "label": leaf,
-                    "groupCode": collection, "collectionCode": collection,
-                    "dataType": "string", "cardinality": "MANY", "jsonKey": leaf,
-                    "legacyJsonPath": f"$.{collection}[*].{leaf}", "enabled": True,
-                })
-        database.save_system_field_rule({
-            "fieldCode": "systemSuitabilitySolutions.preparation", "name": "清理称量计算",
-            "sourceType": "LIMS", "transform": "REGEX_REPLACE", "enabled": True,
-            "config": {
-                "extractionType": "NORMALIZED_PATH",
-                "sourcePath": "$.systemSuitabilitySolutions[*].preparation",
-                "derivedFromCollection": "solutions", "replacePattern": CALCULATION_PATTERN,
-                "replaceWith": "",
-            },
-        })
-        database.save_system_field_rule({
-            "fieldCode": "specificitySolutions.preparation", "name": "自定义专属性溶液列",
-            "sourceType": "LIMS", "transform": "TRIM", "enabled": True,
-            "config": {
-                "extractionType": "HTML_TABLE_COLUMN", "sourcePath": r"^具体配制步骤$",
-                "sectionPattern": r"专属性.*溶液", "headerPattern": r"具体配制步骤",
-                "rowPattern": r"验证项目=专属性", "valuePattern": r"^(.+)$",
-            },
-        })
-
-        first = migrate_lims_direct_rules(database)
-        second = migrate_lims_direct_rules(database)
-
-        rule = database.list_system_field_rules("systemSuitabilitySolutions.preparation")[0]
-        assert first["migrated"] >= 1
-        assert second == {"migrated": 0, "groupMappings": 0, "created": 0, "removed": 0}
-        assert rule["transform"] == "REGEX_REPLACE"
-        assert rule["config"]["extractionType"] == "HTML_TABLE_COLUMN"
-        assert rule["config"]["sourcePath"] == SOLUTION_TABLE_COLUMN_PATTERNS["preparation"]
-        assert rule["config"]["replacePattern"] == CALCULATION_PATTERN
-        assert "derivedFromCollection" not in rule["config"]
-        custom = database.list_system_field_rules("specificitySolutions.preparation")[0]
-        assert custom["config"]["sourcePath"] == r"^具体配制步骤$"
-        assert custom["config"]["sectionPattern"] == r"专属性.*溶液"
-        assert custom["config"]["headerPattern"] == r"具体配制步骤"
-        assert custom["config"]["rowPattern"] == r"验证项目=专属性"
-        assert custom["config"]["valuePattern"] == r"^(.+)$"
-        assert database.get_lims_field("systemSuitabilitySolutions.preparation") is not None
-
-
-def test_unified_migration_removes_deprecated_parser_keys_from_direct_rule() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        database = make_test_database(Path(directory))
-        field_code = "systemSuitabilitySolutions.preparation"
-        database.upsert_lims_field({
-            "fieldCode": field_code, "label": "系统适用性溶液配置",
-            "groupCode": "systemSuitabilitySolutions",
-            "collectionCode": "systemSuitabilitySolutions",
-            "dataType": "richText", "cardinality": "MANY", "jsonKey": "preparation",
-            "legacyJsonPath": "$.systemSuitabilitySolutions[*].preparation", "enabled": True,
-        })
-        database.save_system_field_rule({
-            "fieldCode": field_code, "name": "直接读取溶液配置表格列",
-            "sourceType": "LIMS", "transform": "TRIM", "enabled": True,
-            "config": {
-                "extractionType": "HTML_TABLE_COLUMN", "sourcePath": "^配制方法$",
-                "parser": "NORMALIZED_JSON", "inputField": "UNITBODY",
-                "outputCollection": "systemSuitabilitySolutions",
-                "outputField": "preparation",
-            },
-        })
-
-        migrate_lims_direct_rules(database)
-
-        config = database.list_system_field_rules(field_code)[0]["config"]
-        assert config["extractionType"] == "HTML_TABLE_COLUMN"
-        assert config["sourcePath"] == "^配制方法$"
-        assert "parser" not in config
-        assert "inputField" not in config
-        assert "outputCollection" not in config
-        assert "outputField" not in config

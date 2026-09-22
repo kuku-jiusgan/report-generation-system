@@ -118,6 +118,10 @@ def test_report_refresh_queries_latest_lims_and_keeps_source_binding(monkeypatch
             "LIMS": {"referenceStandards": []},
             "LIMS_SOURCE": source,
         },
+        "field_sources": {
+            "referenceStandards.name": {"type": "EXCEL"},
+            "excel.only": {"type": "EXCEL"},
+        },
     }
 
     refresh_report_lims_payload(database, settings, data)
@@ -125,6 +129,8 @@ def test_report_refresh_queries_latest_lims_and_keeps_source_binding(monkeypatch
     assert data["active_source_type"] == "LIMS"
     assert data["source_payloads"]["LIMS_SOURCE"] == source
     assert data["source_payloads"]["LIMS"]["referenceStandards"][0]["name"] == "最新对照品"
+    assert data["field_sources"]["referenceStandards.name"]["type"] == "LIMS"
+    assert data["field_sources"]["excel.only"]["type"] == "EXCEL"
     assert active_standard_payload(data) is data["source_payloads"]["LIMS"]
     database.get_lims_instance_payload.assert_not_called()
 

@@ -1,6 +1,5 @@
 import hashlib
 import hmac
-import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,7 +13,6 @@ from .database import Database, now_iso
 
 
 REPORT_SESSION_COOKIE = "report_user_session"
-logger = logging.getLogger(__name__)
 PERMISSIONS = {
     "ADMIN_ACCESS": "访问系统管理功能",
     "RULES_MANAGE": "管理报告模板与规则",
@@ -60,7 +58,6 @@ class AuthManager:
     def __init__(self, database: Database, settings: Settings):
         self.database = database
         self.settings = settings
-        self._permission_migration_checked = False
 
     @staticmethod
     def hash_password(password: str) -> str:
@@ -94,7 +91,6 @@ class AuthManager:
 
     def bootstrap(self) -> str | None:
         self.database.seed_roles(ROLE_DEFINITIONS, DEFAULT_ROLE_PERMISSIONS)
-        self._migrate_report_all_view_permission()
         if self.database.count_users():
             users = self.database.list_users()
             owner = next((user for user in users if user["role_code"] == "SUPER_ADMIN"), users[0])
@@ -114,21 +110,7 @@ class AuthManager:
         })
         return str(user["id"])
 
-    def _migrate_report_all_view_permission(self) -> None:
-        if self._permission_migration_checked:
-            return
-        migration_key = "grant-report-all-view-to-admins-v1"
-        if self.database.migration_applied(migration_key):
-            self._permission_migration_checked = True
-            return
-        self.database.add_role_permissions("SUPER_ADMIN", {"REPORT_ALL_VIEW"})
-        self.database.add_role_permissions("SYSTEM_ADMIN", {"REPORT_ALL_VIEW"})
-        self.database.mark_migration_applied(migration_key)
-        self._permission_migration_checked = True
-        logger.info("管理员跨用户报告只读权限迁移完成")
-
     def permissions_for(self, user: dict[str, Any]) -> set[str]:
-        self._migrate_report_all_view_permission()
         return self.database.role_permissions(user["role_code"])
 
     def authenticate(self, username: str, password: str) -> dict[str, Any] | None:

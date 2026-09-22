@@ -1,9 +1,8 @@
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 from backend.app.services.excel_field_extractor import extract_excel_fields
 from backend.app.services.excel_rule_defaults import (
-    ACCURACY_FIELDS, EXCEL_FIELD_PATHS, _rule_config, ensure_excel_field_rules,
+    ACCURACY_FIELDS, EXCEL_FIELD_PATHS, _rule_config,
 )
 
 
@@ -52,29 +51,6 @@ def test_accuracy_result_table_comes_from_excel() -> None:
         "field_075": "77.1～83", "field_096": None,
     }
     assert not payload["_meta"]["warnings"]
-
-
-def test_accuracy_rules_replace_prior_sources_without_duplicates() -> None:
-    database = Mock()
-    database.get_lims_field.side_effect = lambda code: (
-        {"fieldCode": code, "groupCode": GROUP, "legacyJsonPath": f"$.{GROUP}[*].{code.rsplit('.', 1)[-1]}"}
-        if code in ACCURACY_FIELDS else None
-    )
-    database.list_system_field_rules.side_effect = lambda code: [{
-        "id": 100 + int(code.rsplit("_", 1)[-1]), "fieldCode": code,
-        "name": "旧规则", "sourceType": "AI" if code.endswith("096") else "LIMS",
-    }]
-    with patch("backend.app.services.excel_rule_defaults._ensure_repeated_field_contracts"), patch(
-        "backend.app.services.excel_rule_defaults._ensure_quantitation_impurity_name_contract"
-    ):
-        ensure_excel_field_rules(database)
-
-    assert database.save_system_field_rule.call_count == len(ACCURACY_FIELDS)
-    for call in database.save_system_field_rule.call_args_list:
-        rule, rule_id = call.args
-        assert rule["sourceType"] == "EXCEL"
-        assert rule["config"]["sheet"] == "准确度"
-        assert rule_id == 100 + int(rule["fieldCode"].rsplit("_", 1)[-1])
 
 
 def test_accuracy_rules_read_each_block_without_guessing_values() -> None:

@@ -12,6 +12,7 @@ from .services.report_lims_refresh import (
     LimsConflictError,
     LimsSourceError,
     lims_source_metadata,
+    record_lims_field_provenance,
     recognition_metadata,
     require_latest_lims,
 )
@@ -107,6 +108,9 @@ def create_report_lims_router(
             request.project_id, request.instance_ids, request.conflict_resolutions,
         )
         data["source_payloads"] = source_payloads
+        record_lims_field_provenance(
+            data, payload, fields, "+".join(request.instance_ids),
+        )
         data["active_source_type"] = "LIMS"
         try:
             output_name = render_report_word(item, data, payload,

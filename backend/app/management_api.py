@@ -159,7 +159,7 @@ def create_management_router(database: Database, settings: Settings, auth: AuthM
                 raise HTTPException(404, "AI 目标标准字段不存在")
             return report_ai_context(item, payload.config,
                                      str((field or {}).get("collectionCode") or ""), payload.recordIndex, field,
-                                     database.list_lims_fields(True))
+                                     database.list_lims_fields(True), database.list_system_field_rules())
         except AiGenerationError as error:
             raise HTTPException(422, str(error)) from error
 

@@ -78,23 +78,3 @@ class TemplateFileStore:
         finally:
             temporary.unlink(missing_ok=True)
         return target
-
-    def migrate_legacy_published_versions(self) -> int:
-        migrated = 0
-        published_root = self.published_dir.resolve()
-        for template in self.repository.list_templates():
-            for version in self.repository.list_template_versions(str(template["id"])):
-                if version["status"] not in {"PUBLISHED", "ARCHIVED"}:
-                    continue
-                source_value = version.get("templateFile")
-                if not source_value:
-                    raise RuntimeError(f"发布模板版本 V{version['versionNo']} 缺少文件路径")
-                source = Path(source_value)
-                if source.resolve().is_relative_to(published_root):
-                    continue
-                if not source.is_file():
-                    raise RuntimeError(f"发布模板版本 V{version['versionNo']} 文件不存在：{source}")
-                target = self.publish_version(str(template["id"]), str(version["id"]), source)
-                self.repository.set_template_version_file(str(version["id"]), str(target))
-                migrated += 1
-        return migrated

@@ -45,8 +45,9 @@ def test_ai_receives_entire_group_for_nested_first_member(monkeypatch, member_pa
         {"fieldCode": "conclusion", "legacyJsonPath": "$.custom.conclusion"},
     ]
     payload = {GROUP: RECORDS}
+    report_data = {}
     system_field_resolver.resolve_system_fields(
-        fields, [make_rule("conclusion", "AI", CONFIG)], payload, {},
+        fields, [make_rule("conclusion", "AI", CONFIG)], payload, report_data,
     )
     assert contexts == [RECORDS]
     assert payload["custom"]["conclusion"] == "测试结论"
@@ -67,8 +68,8 @@ def test_ai_retries_with_group_created_by_extraction(monkeypatch):
     report_data = {"source_payloads": {"EXCEL": {GROUP: RECORDS}}}
     system_field_resolver.resolve_system_fields(fields, rules, payload, report_data)
     assert len(contexts) == 1
-    assert contexts[0] == [{"impurityName": "测试杂质"}]
-    assert contexts[0] == payload[GROUP]
+    assert contexts[0] == RECORDS
+    assert contexts[0] == report_data["source_payloads"]["EXCEL"][GROUP]
     assert payload["custom"]["conclusion"] == "测试结论"
     assert not report_data.get("warnings")
 

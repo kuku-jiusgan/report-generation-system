@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 from openpyxl import Workbook
 
@@ -8,7 +7,6 @@ from backend.app.services.excel_rule_defaults import (
     DURABILITY_FIELDS,
     EXCEL_FIELD_PATHS,
     _rule_config,
-    ensure_excel_field_rules,
 )
 
 
@@ -86,25 +84,3 @@ def test_durability_rules_split_one_impurity_into_two_injections(tmp_path: Path)
         },
     ]
     assert not payload["_meta"]["warnings"]
-
-
-def test_durability_rule_can_be_edited_from_catalog_without_being_reset() -> None:
-    database = Mock()
-    field_code = "uncategorized.field_097"
-    custom_config = {"sourcePath": EXCEL_FIELD_PATHS[field_code], "mode": "REPEAT_BLOCK",
-                     "sheet": "耐用性", "rowStart": 12, "rowEnd": 12,
-                     "repeatCount": 1, "valueMode": "CELL"}
-    database.get_lims_field.side_effect = lambda code: (
-        {"fieldCode": field_code, "groupCode": GROUP,
-         "legacyJsonPath": EXCEL_FIELD_PATHS[field_code]}
-        if code == field_code else None
-    )
-    database.list_system_field_rules.return_value = [{
-        "id": 1, "fieldCode": field_code, "sourceType": "EXCEL", "enabled": True,
-        "priority": 50, "transform": "TRIM", "config": custom_config,
-    }]
-    with patch("backend.app.services.excel_rule_defaults._ensure_repeated_field_contracts"), \
-         patch("backend.app.services.excel_rule_defaults._ensure_quantitation_impurity_name_contract"):
-        ensure_excel_field_rules(database)
-
-    database.save_system_field_rule.assert_not_called()

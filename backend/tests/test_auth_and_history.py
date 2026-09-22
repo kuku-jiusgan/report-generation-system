@@ -178,9 +178,6 @@ class AuthenticationAndHistoryTest(unittest.TestCase):
         self.database.clear_report_test_data()
         self.assertEqual([], self.database.list_reports(user["id"]))
         self.assertIsNotNone(self.database.get_user(user["id"]))
-        self.database.mark_migration_applied("lifecycle-test")
-        self.database.mark_migration_applied("lifecycle-test")
-        self.assertTrue(self.database.migration_applied("lifecycle-test"))
 
 
 if __name__ == "__main__":

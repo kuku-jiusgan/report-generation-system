@@ -155,10 +155,16 @@ def _drop_stale_rows(parent: etree._Element, insert_at: int, direct_tags: set[st
 
 
 def _clone_rows(prototype: etree._Element, parent: etree._Element, insert_at: int,
-                records: list[dict[str, Any]]) -> list[etree._Element]:
+                records: list[dict[str, Any]],
+                empty_mappings: list[dict[str, Any]] | None = None) -> list[etree._Element]:
     if not records:
+        empty_values = {
+            str(mapping.get("controlTag")): format_value(None, mapping)
+            for mapping in (empty_mappings or [])
+            if mapping.get("controlTag")
+        }
         for control in prototype.xpath(".//w:sdt", namespaces=NS):
-            set_control_text(control, "")
+            set_control_text(control, empty_values.get(tag_of(control), ""))
         return []
     rows = [prototype]
     for offset in range(1, len(records)):
@@ -476,7 +482,7 @@ def _fill_row_repeat_table(document: etree._Element, table_no: str, group: list[
     _drop_stale_rows(parent, insert_at, direct_tags, layout.preserved_row_labels(table_no))
     detail_key = _detail_key(group, table_no, warn, prototype)
     units = _row_units(records, detail_key)
-    rows = _clone_rows(prototype, parent, insert_at, units)
+    rows = _clone_rows(prototype, parent, insert_at, units, group)
     for row, (group_record, detail_record) in zip(rows, units):
         _fill_level_controls(row.xpath("./w:tc", namespaces=NS), group_record, detail_record,
                              detail_key, table_no, group, source, report_data, values, warn)
@@ -501,14 +507,20 @@ def fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], p
             warn('BLOCK_SOURCE_MISSING', table_no, '循环表没有属于目标编组的字段映射，请修正模板绑定。')
             continue
         source_payload = payload_for_mapping(source_mapping, payload, report_data)
-        records = standard_group_values(report_data, source_payload, {source[0]})[source[0]]
-        if not isinstance(records, list):
+        raw_records = standard_group_values(report_data, source_payload, {source[0]}).get(source[0])
+        empty_behavior = next((item.get("blockEmptyBehavior") for item in group
+                               if item.get("blockEmptyBehavior")), "KEEP")
+        if raw_records is None and source[0] not in source_payload:
+            # 可选编组没有出现在当前来源时，仍按内容块的“无数据时”规则处理；
+            # 否则 KEEP 会跳过原型行，导致控件里的模板示例文字泄漏到报告。
+            records = []
+        elif isinstance(raw_records, list):
+            records = raw_records
+        else:
             warn("BLOCK_SOURCE_NOT_ARRAY", table_no,
                  f"循环集合 {source[0]} 缺失或不是数组，无法填充 Word 表格。")
             continue
         records = _prepare_repeat_records(records, group)
-        empty_behavior = next((item.get("blockEmptyBehavior") for item in group
-                               if item.get("blockEmptyBehavior")), "KEEP")
         if layout.is_table_repeat(table_no):
             fill_table_repeat(document, table_no, group, mappings, records, source,
                               empty_behavior, report_data, values, layout, warn,

@@ -5,6 +5,7 @@ from .ai_field_generator import AiGenerationError, context_variables, needs_per_
 from .standard_payloads import standard_context_payload
 from .ai_context_inputs import prepare_ai_context
 from .payload_paths import read_payload_path
+from .system_field_resolver import resolve_group_source_values
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ def _snapshot_field_value(code: str, active: dict[str, Any], original: dict[str,
 def report_ai_context(generation: dict[str, Any], config: dict[str, Any],
                       collection_code: str = "", record_index: int | None = None,
                       target_field: dict[str, Any] | None = None,
-                      context_fields: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                      context_fields: list[dict[str, Any]] | None = None,
+                      context_rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """仅使用不可变生成快照，不读取报告当前值或重新执行提取。"""
     snapshot = generation.get("generation_snapshot")
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("resolved_data"), dict):
@@ -35,8 +37,17 @@ def report_ai_context(generation: dict[str, Any], config: dict[str, Any],
         raise AiGenerationError("该生成记录没有字段取值快照，请选择其他报告生成记录")
     try:
         active = standard_context_payload(snapshot["resolved_data"])
+        group_codes = {
+            str(variable["groupCode"])
+            for variable in context_variables(config) if variable.get("groupCode")
+        }
+        if collection_code:
+            group_codes.add(collection_code)
+        active.update(resolve_group_source_values(
+            context_fields or [], context_rules or [], snapshot["resolved_data"], active, group_codes,
+        ))
     except ValueError as error:
-        raise AiGenerationError("该生成记录的数据源快照格式无效") from error
+        raise AiGenerationError(f"该生成记录的数据源快照格式无效：{error}") from error
     active, _ = prepare_ai_context(config, active, None, target_field)
     values = {}
     fields_by_code = {str(field["fieldCode"]): field for field in context_fields or []}

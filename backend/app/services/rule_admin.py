@@ -17,14 +17,10 @@ from .runtime_version_repository import RuntimeVersionRepositoryMixin
 from .rule_admin_defaults import (
     SEED_CLEAR_OBJECT_TABLES, SEED_MATRIX_LAYOUT, SEED_MATRIX_TABLES, SEED_PRESERVED_ROW_LABELS,
     seed_physical_table_index, DEFAULT_TEMPLATE_CHAPTERS,
-    STANDARD_FIELD_GROUP_NAMES,
 )
 from .lims_catalog_defaults import ensure_lims_catalog_defaults
-from .lims_direct_rule_migration import migrate_lims_direct_rules
 from .system_field_defaults import ensure_system_field_defaults
 from .system_field_groups import ensure_system_field_groups
-from .excel_rule_defaults import ensure_excel_field_rules
-from .group_mapping_migration import migrate_group_mapping_identity_keys
 from .system_field_rule_invariant import ensure_system_field_rule_source_schema
 
 
@@ -91,21 +87,8 @@ class RuleAdminRepository(
         ensure_system_field_defaults(self.database)
         ensure_system_field_groups(self.database)
         ensure_lims_catalog_defaults(self.database)
-        ensure_excel_field_rules(self.database)
-        self._localize_standard_field_groups()
-        migrate_lims_direct_rules(self.database)
-        migrate_group_mapping_identity_keys(self.database)
         self._seed_template_catalog()
         self.save_active_workspace()
-
-    def _localize_standard_field_groups(self) -> None:
-        """Translate known display groups without changing data collection codes."""
-        with self.database.connect() as connection:
-            for group_code, group_name in STANDARD_FIELD_GROUP_NAMES.items():
-                connection.execute(
-                    "UPDATE lims_field_catalog SET group_code=%s,updated_at=%s WHERE group_code=%s",
-                    (group_name, now_iso(), group_code),
-                )
 
     def _seed_template_catalog(self) -> None:
         with self.database.connect() as connection:
@@ -118,12 +101,12 @@ class RuleAdminRepository(
         with self.database.connect() as connection:
             connection.execute(
                 "INSERT INTO admin_templates(id,code,name,description,status,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s)",
-                (template_id, "REPORT", "默认报告模板", "由现有报告模板和映射规则自动迁移", "ACTIVE", timestamp, timestamp),
+                (template_id, "REPORT", "默认报告模板", "默认报告模板和映射规则", "ACTIVE", timestamp, timestamp),
             )
             connection.execute(
                 """INSERT INTO admin_template_versions(id,template_id,version_no,status,note,snapshot,
                    validation_report,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (version_id, template_id, 1, "DRAFT", "迁移现有模板配置",
+                (version_id, template_id, 1, "DRAFT", "初始化默认模板配置",
                  json.dumps(snapshot, ensure_ascii=False), "{}", timestamp, timestamp),
             )
             connection.execute(

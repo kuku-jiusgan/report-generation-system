@@ -12,7 +12,6 @@ from .ai_field_generator import (
 from .excel_standard_path import excel_target_path
 from .payload_paths import PayloadPathError, read_payload_path, set_payload_path
 from .ai_context_inputs import prepare_ai_context
-from .standard_payloads import standard_group_values
 from .system_field_rule_invariant import rules_by_field_source
 
 
@@ -52,22 +51,8 @@ def _available(value: Any) -> bool:
     return value not in (None, "", [], {})
 
 
-def _active_source_type(report_data: dict[str, Any]) -> str:
-    configured = str(report_data.get("active_source_type") or "").upper()
-    if configured:
-        if configured not in _BASE_SOURCE_TYPES:
-            raise ValueError(f"报告当前数据源类型无效：{configured}")
-        return configured
-    payloads = report_data.get("source_payloads", {})
-    candidates = [source for source in _BASE_SOURCE_TYPES
-                  if isinstance(payloads, dict) and isinstance(payloads.get(source), dict)]
-    if len(candidates) > 1:
-        raise ValueError("报告存在多个数据源但未记录当前来源，无法选择系统字段规则")
-    return candidates[0] if candidates else ""
-
-
 def _select_rule(field_code: str, sources: dict[str, dict[str, Any]],
-                 active_source_type: str) -> dict[str, Any] | None:
+                 field_source_type: str, loaded_source_types: set[str]) -> dict[str, Any] | None:
     enabled = {source: rule for source, rule in sources.items() if rule.get("enabled", True)}
     if not enabled:
         return None
@@ -86,11 +71,93 @@ def _select_rule(field_code: str, sources: dict[str, dict[str, Any]],
         raise ValueError(f"系统字段 {field_code} 的派生规则与数据源规则存在冲突")
     if derived:
         return derived[0]
-    if active_source_type:
-        return direct.get(active_source_type)
+    if field_source_type:
+        selected = direct.get(field_source_type)
+        if selected:
+            return selected
+        raise ValueError(
+            f"系统字段 {field_code} 已记录来源 {field_source_type}，但没有对应的启用规则"
+        )
+    loaded = [rule for source, rule in direct.items() if source in loaded_source_types]
+    if len(loaded) == 1:
+        return loaded[0]
+    if len(loaded) > 1:
+        raise ValueError(f"系统字段 {field_code} 的多个数据源均已载入，但未记录字段来源")
     if len(direct) > 1:
-        raise ValueError(f"系统字段 {field_code} 有多个数据源规则，但报告未指定当前数据源")
+        raise ValueError(f"系统字段 {field_code} 有多个数据源规则，但报告未记录字段来源")
     return next(iter(direct.values()), None)
+
+
+def _field_source_type(report_data: dict[str, Any], field_code: str) -> str:
+    sources = report_data.get("field_sources", {})
+    if not isinstance(sources, dict):
+        raise ValueError("报告字段来源格式无效")
+    detail = sources.get(field_code, {})
+    if detail and not isinstance(detail, dict):
+        raise ValueError(f"系统字段 {field_code} 的来源格式无效")
+    return str(detail.get("type") or "").upper()
+
+
+def _source_payload(report_data: dict[str, Any], source_type: str,
+                    fallback: dict[str, Any]) -> dict[str, Any]:
+    if source_type not in _BASE_SOURCE_TYPES:
+        return fallback
+    payloads = report_data.get("source_payloads", {})
+    source = payloads.get(source_type) if isinstance(payloads, dict) else None
+    return source if isinstance(source, dict) else fallback
+
+
+def _loaded_source_types(report_data: dict[str, Any]) -> set[str]:
+    payloads = report_data.get("source_payloads", {})
+    if not isinstance(payloads, dict):
+        raise ValueError("报告数据源载荷格式无效")
+    return {source for source in _BASE_SOURCE_TYPES if isinstance(payloads.get(source), dict)}
+
+
+def _group_values(fields: list[dict[str, Any]], by_field_source: dict[str, dict[str, Any]],
+                  report_data: dict[str, Any], fallback: dict[str, Any],
+                  group_codes: set[str], *, require_namespaced_source: bool = False) -> dict[str, Any]:
+    grouped_sources: dict[str, set[str]] = {code: set() for code in group_codes}
+    loaded_source_types = _loaded_source_types(report_data)
+    for field in fields:
+        group_code = str(field.get("collectionCode") or "")
+        if group_code not in grouped_sources:
+            continue
+        field_code = str(field.get("fieldCode") or "")
+        rule = _select_rule(
+            field_code, by_field_source.get(field_code, {}),
+            _field_source_type(report_data, field_code), loaded_source_types,
+        )
+        source_type = str((rule or {}).get("sourceType") or "").upper()
+        if source_type in _BASE_SOURCE_TYPES | {"PROTOCOL"}:
+            grouped_sources[group_code].add(source_type)
+
+    payloads = report_data.get("source_payloads", {})
+    values: dict[str, Any] = {}
+    for group_code, source_types in grouped_sources.items():
+        if len(source_types) > 1:
+            raise ValueError(
+                f"系统字段编组 {group_code} 同时选择了多个直接来源："
+                f"{', '.join(sorted(source_types))}"
+            )
+        source_type = next(iter(source_types), "")
+        source = payloads.get(source_type) if isinstance(payloads, dict) else None
+        if source_type and require_namespaced_source and not isinstance(source, dict):
+            raise ValueError(f"系统字段编组 {group_code} 缺少已选来源载荷：{source_type}")
+        selected_payload = source if isinstance(source, dict) else fallback
+        values[group_code] = selected_payload.get(group_code)
+    return values
+
+
+def resolve_group_source_values(
+    fields: list[dict[str, Any]], rules: list[dict[str, Any]],
+    report_data: dict[str, Any], fallback: dict[str, Any], group_codes: set[str],
+) -> dict[str, Any]:
+    """按正式生成使用的字段规则，从隔离的来源命名空间读取编组快照。"""
+    return _group_values(
+        fields, rules_by_field_source(rules), report_data, fallback, group_codes,
+        require_namespaced_source=True,
+    )
 
 
 def _template_value(template: str, values: dict[str, Any]) -> str | None:
@@ -233,6 +300,9 @@ def _store_resolved_value(field_code: str, field: dict[str, Any], rule: dict[str
                           values: dict[str, Any]) -> None:
     source_type = str(rule.get("sourceType") or "LIMS").upper()
     values[field_code] = value
+    if source_type == "AI":
+        # AI 结果不属于当前 Excel/LIMS/PDF 载荷；独立保存，避免切换基础数据源后丢失。
+        report_data.setdefault("source_payloads", {}).setdefault("AI", {})[field_code] = value
     if source_type != "PROTOCOL":
         _write_path(payload, str(field.get("legacyJsonPath") or field_code), value)
     report_data.setdefault("original_values", {})[field_code] = value
@@ -251,7 +321,7 @@ def _store_resolved_value(field_code: str, field: dict[str, Any], rule: dict[str
 def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, Any]],
                           payload: dict[str, Any], report_data: dict[str, Any]) -> dict[str, Any]:
     by_field_source = rules_by_field_source(rules)
-    active_source_type = _active_source_type(report_data)
+    loaded_source_types = _loaded_source_types(report_data)
     # values 包含两类：字段值（fieldCode）和编组数据（groupCode）
     values = {
         field["fieldCode"]: read_payload_path(
@@ -278,7 +348,8 @@ def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, An
         ai_batches: list[_AiFieldBatch] = []
         for field_code, field in list(pending.items()):
             rule = _select_rule(
-                field_code, by_field_source.get(field_code, {}), active_source_type,
+                field_code, by_field_source.get(field_code, {}),
+                _field_source_type(report_data, field_code), loaded_source_types,
             )
             if rule and rule.get("enabled", True):
                 config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
@@ -287,18 +358,22 @@ def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, An
                 if source_type == "AI" and rule_key in failed_ai_rules:
                     continue
                 try:
-                    # 前序规则可能刚写入或替换编组数据；每次执行都读取当前标准载荷。
-                    values.update(standard_group_values(report_data, payload, group_codes))
+                    # 前序规则可能刚写入或替换编组数据；每次按字段级来源读取编组。
+                    values.update(_group_values(
+                        fields, by_field_source, report_data, payload, group_codes,
+                    ))
                     if source_type == "AI":
-                        existing = report_data.get("source_payloads", {}).get("AI", {}).get(field_code)
+                        ai_payload = report_data.setdefault("source_payloads", {}).setdefault("AI", {})
+                        existing = ai_payload.get(field_code)
                         if _available(existing):
                             value = existing
                         else:
                             ai_batches.append(_prepare_ai_batch(field, rule, values, fields))
                             continue
                     else:
+                        rule_payload = _source_payload(report_data, source_type, payload)
                         value = _rule_value(
-                            rule, field, payload, report_data, values,
+                            rule, field, rule_payload, report_data, values,
                             context_fields=fields,
                         )
                 except (CalculationError, AiGenerationError) as error:
@@ -307,7 +382,10 @@ def resolve_system_fields(fields: list[dict[str, Any]], rules: list[dict[str, An
                     continue
                 if not _available(value):
                     continue
-                _store_resolved_value(field_code, field, rule, value, payload, report_data, values)
+                target_payload = _source_payload(report_data, source_type, payload)
+                _store_resolved_value(
+                    field_code, field, rule, value, target_payload, report_data, values,
+                )
                 del pending[field_code]
                 progressed = True
 

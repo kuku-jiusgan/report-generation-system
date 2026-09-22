@@ -45,14 +45,15 @@ def test_many_group_preserves_record_pairing_and_evidence():
     assert result["samples"][1]["evidence"] == {"row": 2}
 
 
-def test_one_group_converts_legacy_single_item_list():
+def test_one_group_rejects_list_payload():
     payload = {"project": [{"name": "项目A"}]}
     groups = [{
         "groupCode": "project", "cardinality": "ONE", "enabled": True, "levels": [],
         "fields": [{"fieldCode": "project.name", "jsonKey": "name", "levelKey": "", "orderNo": 0}],
     }]
 
-    assert apply_group_contracts(payload, groups)["project"] == {"name": "项目A"}
+    with pytest.raises(ValueError, match="单值数据必须是对象"):
+        apply_group_contracts(payload, groups)
 
 
 def test_record_key_order_follows_the_catalog_structure():
@@ -72,42 +73,3 @@ def test_missing_configured_data_list_is_skipped_for_this_source():
              "levels": [], "fields": []}
 
     assert apply_group_contracts({}, [group]) == {}
-
-
-def test_contract_migrates_flat_fields_into_a_single_detail_record():
-    payload = {"samples": [{
-        "batchNo": "B-01", "sampleName": "样品甲", "clientName": "委托方甲",
-    }]}
-    group = {
-        "groupCode": "samples", "cardinality": "MANY", "enabled": True,
-        "levels": [{"levelKey": "injections", "kind": "ARRAY", "orderNo": 0}],
-        "fields": [
-            {"fieldCode": "samples.batchNo", "jsonKey": "batchNo", "levelKey": ""},
-            {"fieldCode": "samples.sampleName", "jsonKey": "sampleName", "levelKey": "injections"},
-            {"fieldCode": "samples.clientName", "jsonKey": "clientName", "levelKey": "injections"},
-        ],
-    }
-
-    result = apply_group_contracts(payload, [group])
-
-    assert result["samples"] == [{
-        "batchNo": "B-01",
-        "injections": [{"sampleName": "样品甲", "clientName": "委托方甲"}],
-    }]
-
-
-def test_contract_rejects_ambiguous_single_value_to_multiple_details():
-    payload = {"samples": [{
-        "batchNo": "B-01", "sampleName": "样品甲",
-        "injections": [{"sequence": 1}, {"sequence": 2}],
-    }]}
-    group = {
-        "groupCode": "samples", "cardinality": "MANY", "enabled": True,
-        "levels": [{"levelKey": "injections", "kind": "ARRAY", "orderNo": 0}],
-        "fields": [{
-            "fieldCode": "samples.sampleName", "jsonKey": "sampleName", "levelKey": "injections",
-        }],
-    }
-
-    with pytest.raises(ValueError, match="无法确定应写入 2 条明细中的哪一条"):
-        apply_group_contracts(payload, [group])

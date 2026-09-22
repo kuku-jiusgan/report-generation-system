@@ -137,17 +137,3 @@ class AuthRepositoryMixin:
                 [(role_code, code, timestamp) for code in sorted(permissions)],
             )
             connection.execute("UPDATE auth_roles SET updated_at=%s WHERE code=%s", (timestamp, role_code))
-
-    def add_role_permissions(self, role_code: str, permissions: set[str]) -> None:
-        timestamp = now_iso()
-        with self.connect() as connection:
-            connection.executemany(
-                """INSERT IGNORE INTO auth_role_permissions(role_code,permission_code,updated_at)
-                   VALUES(%s,%s,%s)""",
-                [(role_code, code, timestamp) for code in sorted(permissions)],
-            )
-
-    def backfill_report_ownership(self, user_id: str) -> None:
-        with self.connect() as connection:
-            connection.execute("UPDATE reports SET created_by=%s WHERE created_by IS NULL", (user_id,))
-            connection.execute("UPDATE reports SET updated_by=%s WHERE updated_by IS NULL", (user_id,))

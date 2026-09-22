@@ -47,9 +47,6 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     compiled_dir = settings.template_path.parent / "compiled"
     compiled_dir.mkdir(parents=True, exist_ok=True)
     file_store = TemplateFileStore(repository, settings.template_path)
-    migrated_versions = file_store.migrate_legacy_published_versions()
-    if migrated_versions:
-        logger.info("已迁移历史发布模板到独立存储 migrated_versions=%s", migrated_versions)
     chapter_titles, section_titles = CHAPTER_TITLES, SECTION_TITLES
 
     def require_editable_workspace() -> dict[str, Any]:

@@ -32,8 +32,3 @@ def ensure_system_field_defaults(database: Database) -> None:
             "legacyJsonPath": "$.project.executingOrganization", "description": "方法开发及验证执行单位",
             "outputFormat": "", "defaultValue": "", "validationRegex": "", "orderNo": 20, "enabled": True,
         })
-    if not database.list_system_field_rules(executor_code):
-        database.save_system_field_rule({
-            "fieldCode": executor_code, "name": "默认执行单位", "sourceType": "FIXED", "priority": 100,
-            "config": {"value": "山东大学淄博生物医药研究院"}, "transform": "TRIM", "enabled": True,
-        })

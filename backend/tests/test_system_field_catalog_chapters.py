@@ -1,14 +1,13 @@
 from pathlib import Path
 
 from backend.app.services.system_field_catalog_chapters import (
-    MIGRATION_KEY,
     ensure_system_field_catalog_chapters,
 )
 from backend.app.services.system_field_groups import ensure_system_field_groups
 from backend.tests.database_helpers import make_test_database
 
 
-def test_legacy_memberships_migrate_by_code_and_survive_template_rebuild(tmp_path: Path) -> None:
+def test_legacy_memberships_are_not_migrated_when_chapters_initialize(tmp_path: Path) -> None:
     database = make_test_database(tmp_path)
     ensure_system_field_groups(database)
 
@@ -53,21 +52,16 @@ def test_legacy_memberships_migrate_by_code_and_survive_template_rebuild(tmp_pat
         catalog_parent = dict(connection.execute(
             "SELECT id FROM system_field_catalog_chapters WHERE code='7'"
         ).fetchone())
-        direct = dict(connection.execute(
-            "SELECT chapter_id,order_no FROM system_field_catalog_fields WHERE field_code=%s",
-            ("custom.catalogField",),
-        ).fetchone())
-        grouped = dict(connection.execute(
-            "SELECT chapter_id,order_no FROM system_field_catalog_groups WHERE group_code=%s",
-            ("catalogGroup",),
-        ).fetchone())
         assert connection.execute(
-            "SELECT 1 FROM app_migrations WHERE `key`=%s", (MIGRATION_KEY,),
-        ).fetchone()
+            "SELECT 1 FROM system_field_catalog_fields WHERE field_code=%s",
+            ("custom.catalogField",),
+        ).fetchone() is None
+        assert connection.execute(
+            "SELECT 1 FROM system_field_catalog_groups WHERE group_code=%s",
+            ("catalogGroup",),
+        ).fetchone() is None
 
     assert catalog_child["parent_id"] == catalog_parent["id"]
-    assert direct == {"chapter_id": catalog_child["id"], "order_no": 4}
-    assert grouped == {"chapter_id": catalog_child["id"], "order_no": 6}
 
     with database.connect() as connection:
         connection.execute("DELETE FROM admin_template_chapters")
@@ -80,11 +74,11 @@ def test_legacy_memberships_migrate_by_code_and_survive_template_rebuild(tmp_pat
     ensure_system_field_catalog_chapters(database)
 
     with database.connect() as connection:
-        assert dict(connection.execute(
-            "SELECT chapter_id,order_no FROM system_field_catalog_fields WHERE field_code=%s",
+        assert connection.execute(
+            "SELECT 1 FROM system_field_catalog_fields WHERE field_code=%s",
             ("custom.catalogField",),
-        ).fetchone()) == direct
-        assert dict(connection.execute(
-            "SELECT chapter_id,order_no FROM system_field_catalog_groups WHERE group_code=%s",
+        ).fetchone() is None
+        assert connection.execute(
+            "SELECT 1 FROM system_field_catalog_groups WHERE group_code=%s",
             ("catalogGroup",),
-        ).fetchone()) == grouped
+        ).fetchone() is None

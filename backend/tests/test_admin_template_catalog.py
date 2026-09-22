@@ -43,6 +43,36 @@ def _field_catalog_state(database: Database) -> dict[str, list[dict]]:
         }
 
 
+def test_seed_does_not_migrate_or_create_extraction_rules(tmp_path: Path) -> None:
+    database = make_test_database(tmp_path)
+    for key in ("peakArea", "sequence"):
+        database.upsert_lims_field({
+            "fieldCode": f"systemSuitability.{key}", "label": key,
+            "groupCode": "systemSuitability", "collectionCode": "systemSuitability",
+            "dataType": "string", "cardinality": "MANY", "jsonKey": key,
+            "legacyJsonPath": f"$.systemSuitability[*].{key}", "enabled": True,
+        })
+    saved = database.save_system_field_rule({
+        "fieldCode": "systemSuitability.peakArea", "name": "已有 LIMS 规则",
+        "sourceType": "LIMS", "priority": 100,
+        "config": {"extractionType": "INSTANCE_PATH", "sourcePath": "project.name"},
+        "transform": "TRIM", "enabled": True,
+    })
+    excel = database.save_system_field_rule({
+        "fieldCode": "systemSuitability.peakArea", "name": "已有 Excel 规则",
+        "sourceType": "EXCEL", "priority": 50,
+        "config": {"sourcePath": "$.systemSuitability[*].peakArea", "sheet": "自定义"},
+        "transform": "TRIM", "enabled": True,
+    })
+
+    repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
+    repository.seed()
+
+    assert database.list_lims_extraction_rules("systemSuitability.peakArea") == [saved]
+    assert excel in database.list_system_field_rules("systemSuitability.peakArea")
+    assert database.list_system_field_rules("systemSuitability.sequence") == []
+
+
 def test_activating_template_version_does_not_modify_field_catalog(tmp_path: Path) -> None:
     database = make_test_database(tmp_path)
     repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
@@ -239,14 +269,6 @@ def test_publish_freezes_artifact_without_creating_a_draft(tmp_path: Path, monke
     file_store = TemplateFileStore(repository, settings.template_path)
     with pytest.raises(ValueError, match="已发布模板不可进入编辑器"):
         file_store.ensure_version_draft(published["id"])
-
-    legacy_path = file_store.draft_dir / "legacy-published.docx"
-    legacy_path.write_bytes(frozen_bytes)
-    repository.set_template_version_file(published["id"], str(legacy_path))
-    assert file_store.migrate_legacy_published_versions() == 1
-    migrated = repository.get_template_version(published["id"])
-    assert Path(migrated["templateFile"]).parent.parent.name == "published"
-    assert Path(migrated["templateFile"]).read_bytes() == frozen_bytes
 
     repository.create_template({"code": "SECOND", "name": "备用模板"})
     with pytest.raises(ValueError, match="包含已发布或历史版本"):

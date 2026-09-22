@@ -88,3 +88,46 @@ def test_missing_repeated_excel_field_uses_empty_rule(tmp_path: Path) -> None:
     with zipfile.ZipFile(output) as archive:
         document = etree.fromstring(archive.read("word/document.xml"))
     assert document.xpath(".//w:sdt//w:t/text()", namespaces=NS) == ["-"]
+
+
+def test_missing_samples_group_replaces_prototype_values_with_dashes(tmp_path: Path) -> None:
+    template = tmp_path / "template.docx"
+    output = tmp_path / "report.docx"
+    controls = "".join(
+        f'''<w:tc><w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr>
+          <w:sdtContent><w:p><w:r><w:t>{template_value}</w:t></w:r></w:p></w:sdtContent>
+        </w:sdt></w:tc>'''
+        for tag, template_value in (
+            ("repeat.t5.sampleName", "模板样品"),
+            ("repeat.t5.batchNo", "模板批号"),
+            ("repeat.t5.clientName", "模板委托方"),
+            ("repeat.t5.remark", "模板备注"),
+        )
+    )
+    xml = f'''<w:document xmlns:w="{W_NS}"><w:body><w:tbl><w:tr>
+      {controls}
+    </w:tr></w:tbl></w:body></w:document>'''
+    with zipfile.ZipFile(template, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+    paths = {
+        "repeat.t5.sampleName": "$.samples[*].injections[*].sampleName",
+        "repeat.t5.batchNo": "$.samples[*].batchNo",
+        "repeat.t5.clientName": "$.samples[*].injections[*].clientName",
+        "repeat.t5.remark": "$.samples[*].injections[*].remark",
+    }
+    mappings = [{
+        "controlTag": tag, "fieldCode": tag, "sourcePath": path,
+        "groupItemPath": "$.samples[*]", "sourceType": "EXCEL",
+        "repeatType": "ROW", "tableNo": "T5", "enabled": True,
+        "fillRule": RULE,
+    } for tag, path in paths.items()]
+    table_rules = [{
+        "tableNo": "T5", "mode": "ROW_REPEAT", "physicalTableIndex": 1,
+        "dataRowStart": 1, "enabled": True,
+    }]
+
+    build_mapped_docx(template, output, mappings, {"unrelated": "value"}, {}, table_rules)
+
+    with zipfile.ZipFile(output) as archive:
+        document = etree.fromstring(archive.read("word/document.xml"))
+    assert document.xpath(".//w:sdt//w:t/text()", namespaces=NS) == ["-", "-", "-", "-"]

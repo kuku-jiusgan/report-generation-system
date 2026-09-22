@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 from backend.app.services.excel_field_extractor import extract_excel_fields
 from backend.app.services.excel_rule_defaults import (
@@ -8,7 +7,6 @@ from backend.app.services.excel_rule_defaults import (
     STABILITY_DETAIL_COLUMNS,
     STABILITY_FIELDS,
     _rule_config,
-    ensure_excel_field_rules,
 )
 
 
@@ -76,56 +74,3 @@ def test_solution_stability_rules_follow_nine_row_blocks() -> None:
         assert config["rowStep"] == 9
         assert config["repeatCountSource"] == {"sheet": "首页", "row": 8, "column": 2}
         assert config["workbookLocation"] == EXCEL_WORKBOOK_LOCATIONS[code]
-
-
-def test_solution_stability_rules_replace_prior_sources() -> None:
-    database = Mock()
-    database.get_lims_field.side_effect = lambda code: (
-        {"fieldCode": code, "groupCode": GROUP, "legacyJsonPath": EXCEL_FIELD_PATHS[code]}
-        if code in STABILITY_FIELDS else None
-    )
-    database.list_system_field_rules.side_effect = lambda code: [{
-        "id": 200 + int(code.rsplit("_", 1)[-1]),
-        "fieldCode": code,
-        "name": "旧规则",
-        "sourceType": "AI",
-    }]
-    with patch("backend.app.services.excel_rule_defaults._ensure_repeated_field_contracts"), patch(
-        "backend.app.services.excel_rule_defaults._ensure_quantitation_impurity_name_contract"
-    ):
-        ensure_excel_field_rules(database)
-
-    assert database.save_system_field_rule.call_count == len(STABILITY_FIELDS)
-    for call in database.save_system_field_rule.call_args_list:
-        rule, rule_id = call.args
-        assert rule["sourceType"] == "EXCEL"
-        assert rule["config"]["sheet"] == "溶液稳定性"
-        assert rule_id == 200 + int(rule["fieldCode"].rsplit("_", 1)[-1])
-
-
-def test_solution_stability_existing_excel_rules_receive_complete_config() -> None:
-    code = "uncategorized.field_078"
-    path = EXCEL_FIELD_PATHS[code]
-    database = Mock()
-    database.get_lims_field.side_effect = lambda field_code: (
-        {"fieldCode": code, "groupCode": GROUP, "legacyJsonPath": path}
-        if field_code == code else None
-    )
-    database.list_system_field_rules.return_value = [{
-        "id": 278,
-        "fieldCode": code,
-        "name": "已有标准数据路径",
-        "sourceType": "EXCEL",
-        "priority": 100,
-        "config": {"sourcePath": path},
-    }]
-    with patch("backend.app.services.excel_rule_defaults._ensure_repeated_field_contracts"), patch(
-        "backend.app.services.excel_rule_defaults._ensure_quantitation_impurity_name_contract"
-    ):
-        ensure_excel_field_rules(database)
-
-    rule, rule_id = database.save_system_field_rule.call_args.args
-    assert rule_id == 278
-    assert rule["config"]["sheet"] == "溶液稳定性"
-    assert rule["config"]["rowStart"] == 4
-    assert rule["config"]["startColumn"] == 4

@@ -17,7 +17,6 @@ class AuthDatabaseStub:
             "SUPER_ADMIN": {"ADMIN_ACCESS", "RULES_MANAGE"},
             "REPORT_USER": {"REPORT_EDIT"},
         }
-        self.migrations: set[str] = set()
 
     def add_user(self, user: dict) -> None:
         self.users[user["id"]] = user
@@ -46,15 +45,6 @@ class AuthDatabaseStub:
 
     def role_permissions(self, role_code: str) -> set[str]:
         return set(self.permissions[role_code])
-
-    def migration_applied(self, key: str) -> bool:
-        return key in self.migrations
-
-    def add_role_permissions(self, role_code: str, permissions: set[str]) -> None:
-        self.permissions.setdefault(role_code, set()).update(permissions)
-
-    def mark_migration_applied(self, key: str) -> None:
-        self.migrations.add(key)
 
 
 def create_auth() -> tuple[AuthManager, AuthDatabaseStub]:
@@ -92,7 +82,7 @@ def test_login_uses_single_application_session() -> None:
         assert REPORT_SESSION_COOKIE in response.cookies
         assert "report_admin_session" not in response.cookies
         assert client.get("/api/v1/auth/me").json()["username"] == "reporter"
-        assert "REPORT_ALL_VIEW" in database.permissions["SUPER_ADMIN"]
+        assert database.permissions["SUPER_ADMIN"] == {"ADMIN_ACCESS", "RULES_MANAGE"}
 
 
 def test_admin_guard_uses_application_session_and_enforces_module_permissions() -> None:

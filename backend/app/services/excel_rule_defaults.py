@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 import json
 from typing import Any
 
-from .excel_standard_path import excel_target_path
 
 
 EXCEL_FIELD_PATHS = {
@@ -258,7 +257,6 @@ STABILITY_DETAIL_COLUMNS = {
     "uncategorized.field_081": 7,
 }
 STABILITY_FIELDS = {"uncategorized.field_076", *STABILITY_DETAIL_COLUMNS}
-EXCLUSIVE_EXCEL_FIELDS = {*ACCURACY_FIELDS, *STABILITY_FIELDS}
 DURABILITY_DETAIL_ROWS = {
     "uncategorized.field_097": 2,
     "uncategorized.field_098": 3,
@@ -269,81 +267,6 @@ DURABILITY_DETAIL_ROWS = {
     "uncategorized.field_103": 8,
 }
 DURABILITY_FIELDS = (*DURABILITY_DETAIL_ROWS, "uncategorized.field_122")
-EXCEL_ONLY_FIELDS = {
-    *EXCLUSIVE_EXCEL_FIELDS,
-    *CURRENT_REPEATABILITY_DETAIL_COLUMNS,
-    "uncategorized.field_055",
-    *CURRENT_REPEATABILITY_SUMMARY_CELLS,
-    *CURRENT_REPEATABILITY_INTERVAL_CELLS,
-    *DURABILITY_DETAIL_ROWS,
-}
-
-
-def _sync_repeated_field_catalog(database: Any, repeated_fields: tuple[str, ...]) -> None:
-    with database.connect() as connection:
-        placeholders = ",".join("%s" for _ in repeated_fields)
-        connection.execute(
-            f"UPDATE lims_field_catalog SET cardinality='MANY' WHERE field_code IN ({placeholders})",
-            repeated_fields,
-        )
-        connection.execute(
-            f"""UPDATE lims_field_catalog
-                SET group_code=(SELECT gf.group_code FROM system_field_group_fields gf
-                                WHERE gf.field_code=lims_field_catalog.field_code LIMIT 1)
-                WHERE field_code IN ({placeholders})
-                  AND EXISTS(SELECT 1 FROM system_field_group_fields gf
-                             WHERE gf.field_code=lims_field_catalog.field_code)""",
-            repeated_fields,
-        )
-        connection.execute(
-            f"DELETE FROM system_field_catalog_fields WHERE field_code IN ({placeholders})",
-            repeated_fields,
-        )
-
-
-def _sync_repeatability_group_chapter(database: Any) -> None:
-    with database.connect() as connection:
-        group = connection.execute(
-            """SELECT DISTINCT gf.group_code FROM system_field_group_fields gf
-               WHERE gf.field_code IN ({}) LIMIT 1""".format(
-                ",".join("%s" for _ in REPEATABILITY_DETAIL_COLUMNS)
-            ), tuple(REPEATABILITY_DETAIL_COLUMNS),
-        ).fetchone()
-        chapter = connection.execute(
-            "SELECT id FROM system_field_catalog_chapters WHERE code='7.5' LIMIT 1"
-        ).fetchone()
-        if not group or not chapter:
-            return
-        connection.execute(
-            "INSERT IGNORE INTO system_field_catalog_groups(group_code,chapter_id) VALUES(%s,%s)",
-            (group["group_code"], chapter["id"]),
-        )
-
-
-def _ensure_repeated_field_contracts(database: Any) -> None:
-    repeated_fields = (*DETECTION_LIMIT_COLUMNS, *QUANTITATION_LIMIT_COLUMNS,
-                       *LINEARITY_ROWS, *LINEARITY_DIRECT_CELLS,
-                       "uncategorized.field_029", "uncategorized.field_047",
-                       "uncategorized.field_084",
-                       "uncategorized.field_046",
-                       *EXCEL_ONLY_FIELDS,
-                       *REPEATABILITY_DETAIL_COLUMNS, *REPEATABILITY_SUMMARY_CELLS)
-    _sync_repeated_field_catalog(database, repeated_fields)
-    _sync_repeatability_group_chapter(database)
-
-
-def _ensure_quantitation_impurity_name_contract(database: Any) -> None:
-    """杂质名称来自定量限分块，必须保留每个杂质一条记录。"""
-    with database.connect() as connection:
-        connection.execute(
-            """UPDATE lims_field_catalog
-               SET cardinality='MANY', group_code=COALESCE(
-                   (SELECT gf.group_code FROM system_field_group_fields gf
-                    WHERE gf.field_code='uncategorized.field_046' LIMIT 1), group_code)
-               WHERE field_code='uncategorized.field_046'"""
-        )
-
-
 def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
     config = {
         "sourcePath": source_path,
@@ -511,63 +434,3 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL"})
     return config
-
-
-def ensure_excel_field_rules(database: Any) -> None:
-    """补齐 Excel 规则，并同步编组字段的标准结果路径。"""
-    _ensure_repeated_field_contracts(database)
-    _ensure_quantitation_impurity_name_contract(database)
-    for field_code, default_path in EXCEL_FIELD_PATHS.items():
-        field = database.get_lims_field(field_code)
-        if not field:
-            continue
-        source_path = excel_target_path(field, str(field.get("legacyJsonPath") or "") or default_path)
-        field_rules = database.list_system_field_rules(field_code)
-        existing = [rule for rule in field_rules if rule.get("sourceType") == "EXCEL"]
-        if len(existing) > 1:
-            raise ValueError(f"字段 {field_code} 存在多条 Excel 提取规则，请先解决规则冲突")
-        if existing:
-            for rule in existing:
-                config = rule.get("config") if isinstance(rule.get("config"), dict) else {}
-                desired_row_count = 1 if (
-                    field_code in {"uncategorized.field_017", "uncategorized.field_018",
-                                   "uncategorized.field_019", "uncategorized.field_020"}
-                    and source_path.startswith("$.dingliangxianjieguo")
-                ) else None
-                needs_row_count = desired_row_count is not None and config.get("rowCount") != desired_row_count
-                needs_field_config = field_code in {
-                    "uncategorized.field_046", "uncategorized.field_047",
-                    "uncategorized.field_048", "uncategorized.field_029",
-                    "uncategorized.field_084",
-                } or field_code.startswith("systemSuitability.") \
-                    or field_code in LINEARITY_DIRECT_CELLS \
-                    or (field_code in EXCEL_ONLY_FIELDS and field_code not in DURABILITY_DETAIL_ROWS)
-                if config.get("sourcePath") == source_path and not needs_row_count and not needs_field_config:
-                    continue
-                updated_config = _rule_config(field_code, source_path) if needs_field_config else {**config, "sourcePath": source_path}
-                if desired_row_count is not None:
-                    updated_config["rowCount"] = desired_row_count
-                database.save_system_field_rule(
-                    {**rule, "config": updated_config}, rule.get("id")
-                )
-            continue
-        if field_rules and field_code not in EXCEL_ONLY_FIELDS:
-            continue
-        replaceable_sources = {"LIMS", "AI"} if field_code in EXCLUSIVE_EXCEL_FIELDS else {"LIMS"}
-        replaceable = [rule for rule in field_rules
-                       if rule.get("sourceType") in replaceable_sources]
-        if len(replaceable) > 1:
-            raise ValueError(f"字段 {field_code} 存在多条旧来源规则，不能确定要替换的规则")
-        if replaceable:
-            database.save_system_field_rule(
-                {**replaceable[0], "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",
-                 "priority": 50, "transform": "TRIM", "enabled": True,
-                 "config": _rule_config(field_code, source_path)},
-                replaceable[0].get("id"),
-            )
-            continue
-        database.save_system_field_rule({
-            "fieldCode": field_code, "name": "文霞 V49 验证结果计算页", "sourceType": "EXCEL",
-            "priority": 50, "transform": "TRIM", "enabled": True,
-            "config": _rule_config(field_code, source_path),
-        })
