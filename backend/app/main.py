@@ -271,9 +271,9 @@ def batch_export_reports(payload: dict, user: dict = Depends(auth.require("REPOR
             item = required_owned_report(report_id, user)
             path = settings.reports_dir / f"report-{report_id}-working.docx"
             if not path.exists():
-                output_name = render_report_word(item, item["resolved_data"])
-                item = database.update_report(report_id, output_name=output_name, status="EDITING") or item
-                path = settings.reports_dir / output_name
+                raise HTTPException(
+                    409, f"报告“{item['title']}”工作文件不存在，请先重新生成报告",
+                )
             base = "".join(value for value in item["title"] if value not in '\\/:*?"<>|').strip() or report_id
             name = f"{base}.docx"
             counter = 2
@@ -490,20 +490,16 @@ def create_report_version(report_id: str, note: str = "手工保存",
     return version
 
 
-@app.post(f"{settings.api_prefix}/reports/{{report_id}}/generate", response_model=ReportTask)
-def generate_report(report_id: str, user: dict = Depends(auth.require("REPORT_GENERATE"))) -> ReportTask:
+@app.post(f"{settings.api_prefix}/reports/{{report_id}}/export-word", response_model=ReportTask)
+def export_report_word(report_id: str, user: dict = Depends(auth.require("REPORT_DOWNLOAD"))) -> ReportTask:
+    item = required_owned_report(report_id, user)
+    working_path = settings.reports_dir / f"report-{report_id}-working.docx"
+    if not working_path.exists():
+        raise HTTPException(409, "报告工作文件不存在，请先重新生成报告")
     try:
-        logger.info("开始生成报告 report_id=%s user_id=%s", report_id, user.get("id"))
-        item = required_owned_report(report_id, user)
-        # 每次正式生成都重新按当前标准字段目录和提取规则解析，避免复用旧工作文件。
-        output_name = render_report_word(item, item["resolved_data"])
-        item = database.update_report(
-            report_id, output_name=output_name, status="EDITING",
-            resolved_data=item["resolved_data"], updated_by=user["id"],
-        ) or item
-        working_path = settings.reports_dir / output_name
-        logger.info("报告工作文件已准备 report_id=%s path=%s", report_id, working_path)
-        version = database.create_version(report_id, item["resolved_data"], "报告生成")
+        logger.info("开始导出当前 Word 工作文件 report_id=%s user_id=%s path=%s",
+                    report_id, user.get("id"), working_path)
+        version = database.create_version(report_id, item["resolved_data"], "导出 Word")
         generation_id = uuid.uuid4().hex
         database.create_generation({"id": generation_id, "report_id": report_id, "version_id": version["id"],
                                     "generated_by": user["id"], "status": "PROCESSING",
@@ -514,7 +510,7 @@ def generate_report(report_id: str, user: dict = Depends(auth.require("REPORT_GE
         output_name = f"report-{report_id}-export-{generation_id[:12]}.docx"
         write_export_docx(working_path, settings.reports_dir / output_name)
     except Exception as error:
-        logger.exception("报告生成失败 report_id=%s", report_id)
+        logger.exception("Word 导出失败 report_id=%s", report_id)
         if "generation_id" in locals():
             database.update_generation(generation_id, status="FAILED", error_message=str(error))
         raise HTTPException(500, f"导出 Word 失败：{error}") from error

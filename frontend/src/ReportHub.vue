@@ -5,7 +5,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import {
-  applyLimsToReport, batchExportReports, createReport, deleteReport, extractExcel, extractPdf, generateReport, getHistory,
+  applyLimsToReport, batchExportReports, createReport, deleteReport, exportReportWord, extractExcel, extractPdf, getHistory,
   listReportGenerations, listReports, rebuildReport, replaceReportSource, reportGenerationFileUrl, reportPdfUrl, uploadExcel, uploadPdf, uploadProtocol,
   type ChangeEvent, type ReportGeneration, type ReportTask, type SourceDocument,
 } from './api'
@@ -384,7 +384,7 @@ async function regenerate(item: ReportTask) {
 async function downloadWord(item: ReportTask) {
   actionId.value = item.id
   try {
-    await generateReport(item.id)
+    await exportReportWord(item.id)
     const history = await listReportGenerations()
     generations.value = history.items
     const exported = history.items.find((value) => value.report_id === item.id && value.status === 'SUCCESS')

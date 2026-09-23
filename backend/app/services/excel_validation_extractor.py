@@ -6,7 +6,7 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.cell.cell import TYPE_ERROR
 
-from .excel_rule_engine import excel_display_value
+from .excel_rule_engine import excel_display_text
 
 
 RESULT_SHEETS = {
@@ -31,7 +31,7 @@ class ValidationWorkbookReader:
     def cell(self, sheet: str, address: str, required: bool = False) -> Any:
         formula_cell = self.formulas[sheet][address]
         value_cell = self.values[sheet][address]
-        value = excel_display_value(_value(value_cell.value), formula_cell.number_format)
+        value = excel_display_text(_value(value_cell.value), formula_cell.number_format)
         missing_formula = formula_cell.data_type == "f" and value in (None, "")
         invalid = value_cell.data_type == TYPE_ERROR or (isinstance(value, str) and value.startswith("#"))
         if missing_formula or invalid:
@@ -174,7 +174,7 @@ def _sheet_matrix(value_sheet: Any, formula_sheet: Any) -> list[list[Any]]:
         for cell in row:
             formula_cell = formula_sheet[cell.coordinate]
             value = None if cell.data_type == TYPE_ERROR else _value(cell.value)
-            values.append(excel_display_value(value, formula_cell.number_format))
+            values.append(excel_display_text(value, formula_cell.number_format))
         if any(value not in (None, "") for value in values):
             rows.append(values)
     return rows

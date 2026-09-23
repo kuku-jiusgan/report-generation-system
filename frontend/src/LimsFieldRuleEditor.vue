@@ -22,7 +22,7 @@ function changeExtractionType(value: string) {
   config.value = { ...target.defaultConfig, ...retained }
 }
 function valueFor(key: string) {
-  return config.value[key]
+  return key === 'valueFormat' ? config.value[key] ?? 'TEXT' : config.value[key]
 }
 function numberFor(key: string) {
   const value = valueFor(key)

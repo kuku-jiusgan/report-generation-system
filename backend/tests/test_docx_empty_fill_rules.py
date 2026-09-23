@@ -90,6 +90,58 @@ def test_missing_repeated_excel_field_uses_empty_rule(tmp_path: Path) -> None:
     assert document.xpath(".//w:sdt//w:t/text()", namespaces=NS) == ["-"]
 
 
+def test_empty_image_field_removes_template_picture_before_dash(tmp_path: Path) -> None:
+    template = tmp_path / "template.docx"
+    output = tmp_path / "report.docx"
+    xml = f'''<w:document xmlns:w="{W_NS}"><w:body>
+      <w:sdt><w:sdtPr><w:tag w:val="chart"/></w:sdtPr>
+        <w:sdtContent><w:p><w:r><w:drawing/></w:r></w:p></w:sdtContent>
+      </w:sdt>
+    </w:body></w:document>'''
+    with zipfile.ZipFile(template, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+        archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+    mapping = {
+        "controlTag": "chart", "fieldCode": "chart", "sourcePath": "$.chart",
+        "sourceType": "LIMS", "dataType": "image", "enabled": True,
+        "fillRule": RULE,
+    }
+
+    build_mapped_docx(template, output, [mapping], {"chart": None})
+
+    with zipfile.ZipFile(output) as archive:
+        document = etree.fromstring(archive.read("word/document.xml"))
+    assert document.xpath(".//w:sdt//w:t/text()", namespaces=NS) == ["-"]
+    assert not document.xpath(".//w:sdt//w:drawing", namespaces=NS)
+
+
+def test_empty_image_field_without_extraction_value_removes_template_picture(tmp_path: Path) -> None:
+    template = tmp_path / "template.docx"
+    output = tmp_path / "report.docx"
+    xml = f'''<w:document xmlns:w="{W_NS}"><w:body>
+      <w:sdt><w:sdtPr><w:tag w:val="regression-chart"/></w:sdtPr>
+        <w:sdtContent><w:p><w:r><w:drawing/></w:r></w:p></w:sdtContent>
+      </w:sdt>
+    </w:body></w:document>'''
+    with zipfile.ZipFile(template, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+        archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+    mapping = {
+        "controlTag": "regression-chart", "fieldCode": "regression-chart",
+        "standardFieldCode": "uncategorized.field_084", "sourcePath": "$.linearity.chart",
+        "sourceType": "EXCEL", "dataType": "image", "enabled": True,
+    }
+
+    build_mapped_docx(
+        template, output, [mapping], {},
+        {"source_payloads": {"EXCEL": {"linearity": {}}}},
+    )
+
+    with zipfile.ZipFile(output) as archive:
+        document = etree.fromstring(archive.read("word/document.xml"))
+    assert not document.xpath(".//w:sdt//w:drawing", namespaces=NS)
+
+
 def test_missing_samples_group_replaces_prototype_values_with_dashes(tmp_path: Path) -> None:
     template = tmp_path / "template.docx"
     output = tmp_path / "report.docx"

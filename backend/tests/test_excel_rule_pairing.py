@@ -47,7 +47,7 @@ def test_repeat_block_dotted_output_nests_like_fixed() -> None:
 
     records = payload["nested"]["collection"]
     assert len(records) == 2
-    assert [record["a"] for record in records] == [10, 20]
+    assert [record["a"] for record in records] == ["10", "20"]
     assert [record["b"] for record in records] == ["x", "y"]
 
 

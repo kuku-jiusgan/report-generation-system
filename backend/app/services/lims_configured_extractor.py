@@ -9,6 +9,8 @@ from .system_field_rule_invariant import rules_by_field
 from lxml import html
 
 from .lims_table_utils import table_grid
+from .lims_rich_cells import rich_table_cell
+from .rich_blocks import RICH_BLOCKS, is_rich_value
 from .payload_paths import path_depth, read_payload_path, set_payload_path
 
 
@@ -302,7 +304,7 @@ def _template_value(value: Any, rows: list[list[str]], row: int, column: int,
         raise ValueError(f"LIMS 表格规则的取值模板无效：{error}") from error
 
 
-def _table_values(instance: dict[str, Any], rule: dict[str, Any]) -> list[Any]:
+def _table_values(instance: dict[str, Any], rule: dict[str, Any], field: dict[str, Any]) -> list[Any]:
     values: list[Any] = []
     mode = str(_rule_config(rule).get("recordMode") or "ROWS").upper()
     for rich_text, _, table_index, rows in _table_candidates(instance, rule):
@@ -317,9 +319,17 @@ def _table_values(instance: dict[str, Any], rule: dict[str, Any]) -> list[Any]:
             located = _matrix_values(rows, rule)
         else:
             raise ValueError(f"不支持的 LIMS 表格记录方向：{mode}")
+        rich = str(config.get("valueFormat") or "TEXT").upper() == RICH_BLOCKS
+        if rich and mode != "ROWS":
+            raise ValueError("保留 LIMS 单元格表格只支持按数据行提取")
+        source_table = None
+        if rich:
+            root = html.fragment_fromstring(rich_text.get("html") or "", create_parent="div")
+            source_table = root.xpath(".//table")[table_index - 1]
         values.extend(
             _LocatedValue(
-                _template_value(value, rows, row, column, headers, config),
+                rich_table_cell(source_table, row, column, lambda text: _transform(text, field, rule))
+                if source_table is not None else _template_value(value, rows, row, column, headers, config),
                 {**evidence, "rowIndex": row, "columnIndex": column},
             )
             for row, column, value in located
@@ -355,7 +365,8 @@ def _table_values_for_rows(rows: list[list[str]], rule: dict[str, Any]) -> list[
     raise ValueError(f"不支持的 LIMS 表格记录方向：{mode}")
 
 
-def _extract(instance: dict[str, Any], payload: dict[str, Any], rule: dict[str, Any]) -> Any:
+def _extract(instance: dict[str, Any], payload: dict[str, Any], rule: dict[str, Any],
+             field: dict[str, Any]) -> Any:
     del payload
     source_type = _extraction_type(rule)
     config = _rule_config(rule)
@@ -389,7 +400,7 @@ def _extract(instance: dict[str, Any], payload: dict[str, Any], rule: dict[str, 
                     values.append(_LocatedValue(value, dict(item.get("evidence") or {})))
         return values
     if source_type == "HTML_TABLE_COLUMN":
-        return _table_values(instance, rule)
+        return _table_values(instance, rule, field)
     raise ValueError(f"不支持的 LIMS 字段提取方式：{source_type or '未配置'}")
 
 
@@ -400,7 +411,10 @@ def _write(payload: dict[str, Any], field: dict[str, Any], value: Any,
     if not parts:
         return
     if "[*]" in str(path):
-        set_payload_path(payload, str(path), value if isinstance(value, list) else [value])
+        values = value if isinstance(value, list) else [value]
+        if any(is_rich_value(item) for item in values) and str(path).count("[*]") != 1:
+            raise ValueError(f"结构化单元格字段只支持单层数组：{path}")
+        set_payload_path(payload, str(path), values)
         if str(path).count("[*]") == 1 and evidences:
             collection = payload.get(parts[0])
             if isinstance(collection, list):
@@ -448,13 +462,16 @@ def apply_configured_extraction(
         rule = by_field.get(field["fieldCode"])
         if not rule or not rule.get("enabled", True):
             continue
-        extracted = _extract(instance, payload, rule)
+        extracted = _extract(instance, payload, rule, field)
         values = extracted if isinstance(extracted, list) else [extracted]
         raw_values = [value.value if isinstance(value, _LocatedValue) else value for value in values]
         evidences = [value.evidence if isinstance(value, _LocatedValue) else None for value in values]
-        transformed = [_transform(_capture(value, str(_rule_config(rule).get("valuePattern") or ""), field.get("fieldCode", "")),
-                                  field, rule)
-                       for value in raw_values]
+        transformed = [
+            value if is_rich_value(value)
+            else _transform(_capture(value, str(_rule_config(rule).get("valuePattern") or ""), field.get("fieldCode", "")),
+                            field, rule)
+            for value in raw_values
+        ]
         target_path = str(field.get("legacyJsonPath") or field.get("fieldCode") or "")
         if field.get("cardinality") == "MANY" or "[*]" in target_path:
             if any(value not in (None, "") for value in transformed):

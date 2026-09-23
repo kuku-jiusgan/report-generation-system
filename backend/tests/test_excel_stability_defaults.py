@@ -47,15 +47,15 @@ def test_solution_stability_result_table_comes_from_excel() -> None:
     ]
     assert len(records[0]["injections"]) == 6
     assert records[0]["injections"][0] == {
-        "field_077": "0h", "field_078": 40.42, "field_079": "-",
-        "field_080": 37.27, "field_081": "-",
+        "field_077": "0h", "field_078": "40.42", "field_079": "-",
+        "field_080": "37.27", "field_081": "-",
     }
     assert records[0]["injections"][1] == {
-        "field_077": "4.0h", "field_078": 38.52, "field_079": 0.95,
-        "field_080": 35.72, "field_081": 0.96,
+        "field_077": "4.0h", "field_078": "38.52", "field_079": "0.95",
+        "field_080": "35.72", "field_081": "0.96",
     }
-    assert records[1]["injections"][0]["field_078"] == 37.82
-    assert records[2]["injections"][4]["field_081"] == 0.99
+    assert records[1]["injections"][0]["field_078"] == "37.82"
+    assert records[2]["injections"][4]["field_081"] == "0.99"
     assert not payload["_meta"]["warnings"]
 
 

@@ -37,18 +37,18 @@ def test_accuracy_result_table_comes_from_excel() -> None:
     ]
     assert len(records[0]["injections"]) == 9
     assert records[0]["injections"][0] == {
-        "field_061": 1, "field_062": 13.82, "field_064": 1.29,
-        "field_067": "LOQ加标", "field_068": 25.8, "field_069": 0,
-        "field_070": 30.1, "field_071": 85.7, "field_072": 84,
+        "field_061": "1", "field_062": "13.82", "field_064": "1.29",
+        "field_067": "LOQ加标", "field_068": "25.80", "field_069": "0",
+        "field_070": "30.10", "field_071": "85.7", "field_072": "84",
     }
     assert records[0]["injections"][2]["field_067"] == "LOQ加标"
-    assert records[0]["injections"][2]["field_070"] == 30.1
-    assert records[0]["injections"][2]["field_072"] == 84
+    assert records[0]["injections"][2]["field_070"] == "30.10"
+    assert records[0]["injections"][2]["field_072"] == "84"
     assert records[0]["injections"][3]["field_067"] == "100%加标"
-    assert records[1]["injections"][0]["field_071"] == 95.7
+    assert records[1]["injections"][0]["field_071"] == "95.7"
     assert records[0]["summary"] == {
-        "field_073": 80, "field_074": 4.8,
-        "field_075": "77.1～83", "field_096": None,
+        "field_073": "80", "field_074": "4.8",
+        "field_075": "（77.10，83.00）", "field_096": None,
     }
     assert not payload["_meta"]["warnings"]
 

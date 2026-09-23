@@ -284,7 +284,10 @@ async function saveField() {
 async function removeField() {
   if (!selected.value) return;
   try {
-    await ElMessageBox.confirm(`删除标准字段“${selected.value.label}”？该字段的提取规则也会删除。`, "删除标准字段", { type: "warning" });
+    await ElMessageBox.confirm(
+      `删除标准字段“${selected.value.label}”？该字段的提取规则及所有模板版本（含已发布和历史版本）中的字段映射都会删除。已发布的 Word 文件不会改变，重新生成历史报告时将不再填充该字段。`,
+      "删除标准字段", { type: "warning" },
+    );
     await adminApi.deleteStandardField(selected.value.fieldCode);
     selected.value = undefined; draft.value = undefined; rules.value = [];
     await loadFields();

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from fastapi import HTTPException
 from lxml import etree
 
 from backend.app.services.docx_export import (
@@ -86,7 +87,9 @@ def test_invalid_control_does_not_replace_existing_export(tmp_path: Path, conten
     assert output.read_bytes() == b"existing report"
 
 
-def test_generation_and_history_download_use_clean_exports(tmp_path: Path, monkeypatch) -> None:
+def test_word_export_uses_existing_working_file_and_history_download_is_clean(
+    tmp_path: Path, monkeypatch,
+) -> None:
     from backend.app import main
 
     source = tmp_path / "report-r1-working.docx"
@@ -95,12 +98,15 @@ def test_generation_and_history_download_use_clean_exports(tmp_path: Path, monke
     database = Mock()
     database.update_report.return_value = item
     database.create_version.return_value = {"id": "v1"}
+    render = Mock(side_effect=AssertionError("导出不应重新生成 Word"))
     monkeypatch.setattr(main, "database", database)
     monkeypatch.setattr(main, "settings", SimpleNamespace(reports_dir=tmp_path))
     monkeypatch.setattr(main, "required_owned_report", lambda *_: item)
-    monkeypatch.setattr(main, "render_report_word", lambda *_: source.name)
+    monkeypatch.setattr(main, "render_report_word", render)
     monkeypatch.setattr(main, "report_response", lambda value: value)
-    main.generate_report("r1", {"id": "u1"})
+    main.export_report_word("r1", {"id": "u1"})
+    render.assert_not_called()
+    database.create_version.assert_called_once_with("r1", {}, "导出 Word")
     output_name = database.update_generation.call_args.kwargs["output_name"]
     with zipfile.ZipFile(tmp_path / output_name) as archive:
         assert not etree.fromstring(archive.read(PARTS[0])).xpath(".//w:sdt", namespaces=NS)
@@ -113,6 +119,42 @@ def test_generation_and_history_download_use_clean_exports(tmp_path: Path, monke
     with zipfile.ZipFile(io.BytesIO(response.body)) as archive:
         assert not etree.fromstring(archive.read(PARTS[0])).xpath(".//w:sdt", namespaces=NS)
     assert source.read_bytes() == original
+
+
+def test_word_export_requires_existing_working_file(tmp_path: Path, monkeypatch) -> None:
+    from backend.app import main
+
+    item = {"id": "r1", "title": "报告", "resolved_data": {}}
+    database = Mock()
+    monkeypatch.setattr(main, "database", database)
+    monkeypatch.setattr(main, "settings", SimpleNamespace(reports_dir=tmp_path))
+    monkeypatch.setattr(main, "required_owned_report", lambda *_: item)
+
+    with pytest.raises(HTTPException) as caught:
+        main.export_report_word("r1", {"id": "u1"})
+
+    assert caught.value.status_code == 409
+    assert "请先重新生成报告" in str(caught.value.detail)
+    database.create_version.assert_not_called()
+
+
+def test_batch_word_export_does_not_regenerate_missing_working_file(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from backend.app import main
+
+    item = {"id": "r1", "title": "报告", "resolved_data": {}}
+    render = Mock(side_effect=AssertionError("导出不应重新生成 Word"))
+    monkeypatch.setattr(main, "settings", SimpleNamespace(reports_dir=tmp_path))
+    monkeypatch.setattr(main, "required_owned_report", lambda *_: item)
+    monkeypatch.setattr(main, "render_report_word", render)
+
+    with pytest.raises(HTTPException) as caught:
+        main.batch_export_reports({"report_ids": ["r1"]}, {"id": "u1"})
+
+    assert caught.value.status_code == 409
+    assert "请先重新生成报告" in str(caught.value.detail)
+    render.assert_not_called()
 
 
 def test_user_download_and_editor_both_hide_content_controls(tmp_path: Path) -> None:

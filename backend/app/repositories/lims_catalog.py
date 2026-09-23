@@ -1,8 +1,12 @@
 import json
+import logging
 from typing import Any
 
 from ..database_common import now_iso
 from .lims_instances import collection_storage
+
+
+logger = logging.getLogger(__name__)
 
 
 class LimsCatalogRepositoryMixin:
@@ -186,13 +190,39 @@ class LimsCatalogRepositoryMixin:
 
     def delete_lims_field(self, field_code: str) -> bool:
         with self.connect() as connection:
-            # 先清理引用该字段的映射记录，防止产生孤儿映射
+            field = connection.execute(
+                "SELECT field_code FROM lims_field_catalog WHERE field_code=%s FOR UPDATE", (field_code,),
+            ).fetchone()
+            if not field:
+                return False
+            versions = connection.execute(
+                "SELECT id,snapshot FROM admin_template_versions FOR UPDATE"
+            ).fetchall()
+            removed = 0
+            for version in versions:
+                try:
+                    snapshot = json.loads(version["snapshot"])
+                    mappings = snapshot["mappings"]
+                    if not isinstance(mappings, list) or not all(isinstance(item, dict) for item in mappings):
+                        raise ValueError("模板字段映射格式错误")
+                except (TypeError, KeyError, json.JSONDecodeError, ValueError) as error:
+                    raise ValueError(f"模板版本 {version['id']} 的字段映射无法解析，标准字段未删除") from error
+                remaining = [item for item in mappings if item.get("standardFieldCode") != field_code]
+                if len(remaining) != len(mappings):
+                    snapshot["mappings"] = remaining
+                    removed += len(mappings) - len(remaining)
+                    connection.execute(
+                        "UPDATE admin_template_versions SET snapshot=%s,updated_at=%s WHERE id=%s",
+                        (json.dumps(snapshot, ensure_ascii=False), now_iso(), version["id"]),
+                    )
+            # 当前设计工作区也必须同步清理，避免下一次保存草稿时恢复已删除的引用。
             connection.execute("DELETE FROM admin_mapping_rules WHERE standard_field_code=%s", (field_code,))
             connection.execute("DELETE FROM system_field_rules WHERE field_code=%s", (field_code,))
             if self._group_tables_exist(connection):
                 connection.execute("DELETE FROM system_field_group_fields WHERE field_code=%s", (field_code,))
             connection.execute("DELETE FROM system_field_catalog_fields WHERE field_code=%s", (field_code,))
             cursor = connection.execute("DELETE FROM lims_field_catalog WHERE field_code=%s", (field_code,))
+        logger.info("标准字段 %s 已删除，清理 %d 条模板版本映射", field_code, removed)
         return bool(cursor.rowcount)
 
     @staticmethod

@@ -450,10 +450,11 @@ def register_rule_catalog_routes(router: APIRouter, repository: RuleAdminReposit
 
     @router.delete("/standard-fields/{field_code:path}")
     def delete_standard_field(field_code: str) -> dict[str, bool]:
-        used = len(_template_references(repository, field_code))
-        if used:
-            raise HTTPException(409, f"该标准字段正被 {used} 个模板字段引用，请先停用或迁移引用")
-        if not repository.database.delete_lims_field(field_code):
+        try:
+            deleted = repository.database.delete_lims_field(field_code)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        if not deleted:
             raise HTTPException(404, "标准字段不存在")
         return {"deleted": True}
 

@@ -6,7 +6,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
 import {
-  applyLimsToReport, createVersion, extractPdf, generateReport, getBindings, getHistory, getTemplateSourceCatalog, getVersions,
+  applyLimsToReport, createVersion, exportReportWord, extractPdf, getBindings, getHistory, getTemplateSourceCatalog, getVersions,
   getReport, listReportGenerations, listReports, reportGenerationFileUrl, updateReport, uploadPdf,
   rebuildReport,
   type ChangeEvent, type ExtractedField, type FieldBinding, type ReportGeneration, type ReportTask, type ReportVersion,
@@ -335,10 +335,11 @@ async function exportWord() {
   if (!report.value) return
   busy.export = true
   try {
-    // Word 已人工编辑保存时 PUT 会 409；此时直接导出当前工作文件（含人工修改）
+    // 导出只读取当前工作文件；字段编辑先保存数据，Word 编辑先强制保存文档。
     if (editorMode.value === 'fields' && !report.value.word_edit_locked) await saveReport(false)
-    else report.value = await getReport(report.value.id)
-    report.value = await generateReport(report.value.id)
+    else if (editorMode.value === 'word') await saveOnlyOffice()
+    report.value = await getReport(report.value.id)
+    report.value = await exportReportWord(report.value.id)
     await refreshGenerationHistory()
     const exported = generationHistory.value.find((item) => item.report_id === report.value?.id && item.status === 'SUCCESS')
     if (exported) window.open(reportGenerationFileUrl(exported.id), '_blank')

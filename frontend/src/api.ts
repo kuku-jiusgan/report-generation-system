@@ -247,9 +247,9 @@ export async function updateReport(report: ReportTask) {
   ).data
 }
 
-export async function generateReport(id: string) {
+export async function exportReportWord(id: string) {
   try {
-    return (await http.post<ReportTask>(`/reports/${id}/generate`, undefined, {
+    return (await http.post<ReportTask>(`/reports/${id}/export-word`, undefined, {
       timeout: REPORT_GENERATION_TIMEOUT,
     })).data
   } catch (error) {

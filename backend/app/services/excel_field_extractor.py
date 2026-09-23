@@ -13,6 +13,12 @@ from .excel_standard_path import excel_target_path
 from .payload_paths import PayloadPathError, path_depth, set_payload_path
 
 
+def _read_value(reader: WorkbookValues, config: dict[str, Any], sheet: str,
+                row: int, column: int, required: bool | None = None) -> Any:
+    return reader.read(sheet, row, column,
+                       bool(config.get("required")) if required is None else required)
+
+
 def _cell(reader: WorkbookValues, config: dict[str, Any]) -> Any:
     return reader.read(str(config.get("sheet") or ""), int(config.get("row", 0)),
                        int(config.get("column", 0)), bool(config.get("required")))
@@ -54,8 +60,8 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
             row = row_start + repeat_index * int(config.get("rowStep", 0))
             start = int(config.get("startColumn", 1))
             count = _horizontal_count(reader, config, row, start)
-            values.extend(reader.read(str(config.get("sheet") or ""), row, start + offset,
-                                      bool(config.get("required")))
+            values.extend(_read_value(reader, config, str(config.get("sheet") or ""), row,
+                                      start + offset)
                           for offset in range(count))
             continue
         for row_index, row in enumerate(range(row_start, row_end + 1)):
@@ -63,28 +69,36 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
                 value = row_index + int(config.get("indexBase", 1))
             elif mode == "REPEAT_VALUE":
                 source = config.get("repeatValueSource") or {}
-                value = reader.read(str(source.get("sheet") or ""),
-                                    int(source.get("row", 0)) + repeat_index * int(source.get("rowStep", 0)),
-                                    int(source.get("column", 0)) + repeat_index * int(source.get("columnStep", 0)),
-                                    bool(config.get("required")))
+                value = _read_value(
+                    reader, config, str(source.get("sheet") or ""),
+                    int(source.get("row", 0)) + repeat_index * int(source.get("rowStep", 0)),
+                    int(source.get("column", 0)) + repeat_index * int(source.get("columnStep", 0)),
+                )
             elif mode == "CELL_PAIR":
                 columns = config.get("pairColumns") or []
                 if len(columns) != 2:
                     raise ExcelRuleError("双单元格 Excel 规则必须配置两个 pairColumns")
                 source_row = row + repeat_index * int(config.get("rowStep", 0))
-                pair = [reader.read(str(config.get("sheet") or ""), source_row, int(column),
-                                    bool(config.get("required"))) for column in columns]
-                value = (str(config.get("pairSeparator", "～")).join(str(item) for item in pair)
-                         if all(item not in (None, "") for item in pair) else None)
+                pair = [_read_value(reader, config, str(config.get("sheet") or ""), source_row,
+                                    int(column)) for column in columns]
+                if all(item not in (None, "") for item in pair):
+                    separator = str(config.get("pairSeparator") or "，")
+                    # 兼容已保存的旧默认配置，统一输出中文逗号区间。
+                    if separator == "～":
+                        separator = "，"
+                    value = f"（{separator.join(str(item) for item in pair)}）"
+                else:
+                    value = None
             else:
                 sheet = str(config.get("sheet") or "")
                 source_row = row + repeat_index * int(config.get("rowStep", 0)) + int(config.get("rowOffset", 0))
                 column = (int(config.get("startColumn", 1)) + repeat_index * int(config.get("columnStep", 0))
                           + int(config.get("columnOffset", 0)))
                 if mode == "MERGED_CELL":
-                    value = _merged_cell(reader, sheet, source_row, column, bool(config.get("required")))
+                    value = _merged_cell(reader, sheet, source_row, column,
+                                         bool(config.get("required")))
                 else:
-                    value = reader.read(sheet, source_row, column, bool(config.get("required")))
+                    value = _read_value(reader, config, sheet, source_row, column)
             repeat_value = int(config.get("broadcastRepeat", 1))
             if repeat_value < 1 or repeat_value > 1000:
                 raise ExcelRuleError("重复值展开次数无效")
@@ -331,7 +345,7 @@ def _apply_group_source_mappings(reader: WorkbookValues, payload: dict[str, Any]
                 if not indexes:
                     continue
                 records = []
-                for row in rows[1:]:
+                for row_number, row in enumerate(rows[1:], start=2):
                     if not any(value not in (None, "") for value in row):
                         continue
                     record = {}
@@ -347,7 +361,10 @@ def _apply_group_source_mappings(reader: WorkbookValues, payload: dict[str, Any]
                                 target = collection[0]
                             else:
                                 target = target.setdefault(part, {})
-                        target[raw_parts[-1].replace("[*]", "")] = row[index] if index < len(row) else None
+                        target[raw_parts[-1].replace("[*]", "")] = (
+                            reader.read(sheet_name, row_number, index + 1)
+                            if index < len(row) else None
+                        )
                     records.append(record)
                 if records:
                     existing = payload.get(payload_key)

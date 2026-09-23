@@ -22,6 +22,7 @@ from .docx_summary_rows import (
     clear_unmapped_summary_cells, fill_preserved_summary_rows, is_preserved_summary_row,
 )
 from .table_layout_rules import TableLayoutRules, repeat_bookmark_name
+from .docx_rich_blocks import set_mapped_control
 from .docx_table_repeat import fill_table_repeat
 
 
@@ -199,7 +200,7 @@ def _write_cell_values(cells: list[etree._Element], record: dict[str, Any], tabl
                  f"字段“{mapping.get('wordLabel') or mapping.get('fieldCode')}”取自 {repeat_path[0]}，"
                  f"与本表的数据集合 {source[0]} 不一致，已跳过填充。")
             continue
-        set_control_text(control, format_value(record_value(record, repeat_path[1]), mapping))
+        set_mapped_control(control, record_value(record, repeat_path[1]), mapping)
 
 
 def _write_row_values(rows: list[etree._Element], records: list[dict[str, Any]], table_no: str,
@@ -395,7 +396,7 @@ def _fill_level_controls(cells: list[etree._Element], group_record: dict[str, An
         value = (_level_value(path, group_record, detail_record, detail_key)
                  if _is_detail_path(path, detail_key)
                  else _fixed_level_value(path, group_record, detail_key, mapping, table_no, warn))
-        set_control_text(control, format_value(value, mapping))
+        set_mapped_control(control, value, mapping)
 
 
 def _fill_grouped_table(table: etree._Element, prototype: etree._Element, table_no: str,

@@ -389,7 +389,7 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
         row, columns = CURRENT_REPEATABILITY_INTERVAL_CELLS[field_code]
         config.update({"mode": "REPEAT_BLOCK", "sheet": "重复性跟中间精密度",
                        "rowStart": row, "rowEnd": row, "pairColumns": list(columns),
-                       "pairSeparator": "～", "rowStep": 33,
+                       "pairSeparator": "，", "rowStep": 33,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL_PAIR"})
     elif field_code in ACCURACY_DETAIL_COLUMNS:
@@ -408,7 +408,7 @@ def _rule_config(field_code: str, source_path: str) -> dict[str, Any]:
                        "maxRepeat": 15, "valueMode": "CELL"})
     elif field_code == "uncategorized.field_075":
         config.update({"mode": "REPEAT_BLOCK", "sheet": "准确度", "rowStart": 27, "rowEnd": 27,
-                       "pairColumns": [6, 11], "pairSeparator": "～", "rowStep": 28,
+                       "pairColumns": [6, 11], "pairSeparator": "，", "rowStep": 28,
                        "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
                        "maxRepeat": 15, "valueMode": "CELL_PAIR"})
     elif field_code == "uncategorized.field_076":

@@ -157,7 +157,7 @@ onBeforeUnmount(() => observer?.disconnect())
                   <el-dropdown-menu>
                     <el-dropdown-item v-if="canGenerate" :icon="Refresh" @click="emit('regenerate', row.report)">重新生成</el-dropdown-item>
                     <el-dropdown-item :icon="UploadFilled" @click="emit('replace', row.report)">更换数据源</el-dropdown-item>
-                    <el-dropdown-item v-if="canGenerate && canDownload" :icon="Download" @click="emit('downloadWord', row.report)">导出 Word</el-dropdown-item>
+                    <el-dropdown-item v-if="canDownload" :icon="Download" @click="emit('downloadWord', row.report)">导出 Word</el-dropdown-item>
                     <el-dropdown-item v-if="canDownload" :icon="View" @click="emit('downloadPdf', row.report)">导出 PDF</el-dropdown-item>
                     <el-dropdown-item :icon="Clock" @click="emit('audit', row.report)">查看 Audit Trail</el-dropdown-item>
                     <el-dropdown-item divided :icon="Delete" @click="emit('remove', row.report)">删除</el-dropdown-item>

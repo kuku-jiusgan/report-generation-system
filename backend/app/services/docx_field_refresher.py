@@ -277,7 +277,7 @@ def _merge_pagination_results(original: etree._Element,
             text.text = ""
 
 
-def _merge_refreshed_fields(original_path: Path, rendered_path: Path) -> None:
+def _merge_refreshed_fields_legacy(original_path: Path, rendered_path: Path) -> None:
     original_parts = _read_parts(original_path)
     rendered_parts = _read_parts(rendered_path)
     rendered_results: dict[str, deque[str]] = defaultdict(deque)
@@ -301,6 +301,70 @@ def _merge_refreshed_fields(original_path: Path, rendered_path: Path) -> None:
             original_root, xml_declaration=True, encoding="UTF-8", standalone=True,
         ))
     write_docx_parts_atomic(original_parts, original_path)
+
+
+def _copy_toc_format(original: etree._Element, rendered: etree._Element) -> None:
+    original_links = _toc_links(original)
+    rendered_links = _toc_links(rendered)
+    original_by_anchor = {str(link.get(f"{W}anchor")): link for link in original_links}
+    for rendered_link in rendered_links:
+        anchor = str(rendered_link.get(f"{W}anchor") or "")
+        source = original_by_anchor.get(anchor)
+        if source is None:
+            continue
+        source_paragraph = source.xpath("ancestor::w:p[1]", namespaces=NS)
+        target_paragraph = rendered_link.xpath("ancestor::w:p[1]", namespaces=NS)
+        if source_paragraph and target_paragraph:
+            source_properties = source_paragraph[0].find(f"{W}pPr")
+            target_properties = target_paragraph[0].find(f"{W}pPr")
+            if source_properties is not None:
+                if target_properties is None:
+                    target_paragraph[0].insert(0, copy.deepcopy(source_properties))
+                else:
+                    target_paragraph[0].replace(target_properties, copy.deepcopy(source_properties))
+        source_runs = source.xpath(".//w:r/w:rPr", namespaces=NS)
+        target_runs = rendered_link.xpath(".//w:r/w:rPr", namespaces=NS)
+        for source_run, target_run in zip(source_runs, target_runs):
+            target_run.getparent().replace(target_run, copy.deepcopy(source_run))
+
+
+def _copy_content_controls(original: etree._Element, rendered: etree._Element) -> None:
+    controls = {
+        str(node.xpath("string(./w:sdtPr/w:tag/@w:val)", namespaces=NS)): node
+        for node in original.xpath(".//w:sdt", namespaces=NS)
+        if node.xpath("string(./w:sdtPr/w:tag/@w:val)", namespaces=NS)
+    }
+    for node in rendered.xpath(".//w:sdt", namespaces=NS):
+        tag = str(node.xpath("string(./w:sdtPr/w:tag/@w:val)", namespaces=NS))
+        if tag in controls:
+            node.getparent().replace(node, copy.deepcopy(controls[tag]))
+    body = rendered.find(f"{W}body")
+    if body is not None:
+        for tag, node in controls.items():
+            if not rendered.xpath(".//w:sdtPr/w:tag[@w:val=$tag]", namespaces=NS, tag=tag):
+                body.insert(0, copy.deepcopy(node))
+
+
+def _merge_refreshed_fields(original_path: Path, rendered_path: Path) -> None:
+    original_parts = _read_parts(original_path)
+    rendered_parts = _read_parts(rendered_path)
+    original_root = etree.fromstring(original_parts["word/document.xml"][1])
+    rendered_root = etree.fromstring(rendered_parts["word/document.xml"][1])
+    rendered_links = _toc_links(rendered_root)
+    if not rendered_links or not any(
+            any(_pagination_key(_instruction_of(field)).startswith("PAGEREF ")
+                for field in _complex_fields(link))
+            for link in rendered_links
+    ):
+        _merge_refreshed_fields_legacy(original_path, rendered_path)
+        return
+    _copy_content_controls(original_root, rendered_root)
+    _copy_toc_format(original_root, rendered_root)
+    rendered_parts["word/document.xml"] = (
+        rendered_parts["word/document.xml"][0],
+        etree.tostring(rendered_root, xml_declaration=True, encoding="UTF-8", standalone=True),
+    )
+    write_docx_parts_atomic(rendered_parts, original_path)
 
 
 def refresh_docx_fields(document_path: Path, executable: str = "libreoffice",

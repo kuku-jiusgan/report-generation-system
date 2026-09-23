@@ -16,6 +16,7 @@ from .docx_images import embed_image_controls
 from .docx_language import normalize_part_languages, write_docx_parts_atomic
 from .docx_protocol_raw import copy_protocol_raw_blocks
 from .docx_repeat_rows import Warn, fill_repeat_rows
+from .docx_rich_blocks import is_rich_value, set_mapped_control
 from .table_layout_rules import TableLayoutRules
 
 
@@ -44,11 +45,13 @@ def _warning_sink(report_data: dict[str, Any] | None) -> Warn:
 def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[str, Any]],
                           payload: dict[str, Any], report_data: dict[str, Any],
                           computed: dict[str, Any]) -> None:
-    values: dict[str, str] = {}
+    values: dict[str, Any] = {}
+    by_tag: dict[str, dict[str, Any]] = {}
     for mapping in mappings:
         tag = mapping.get("controlTag", "")
         if not tag or not mapping.get("enabled", True) or mapping.get("repeatType") == "ROW":
             continue
+        by_tag[tag] = mapping
         value = (
             computed.get(str(mapping.get("fieldCode")))
             if is_formula_calculation(mapping)
@@ -56,9 +59,12 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
         )
         if isinstance(value, list) and len(value) == 1:
             value = value[0]
+        if is_rich_value(value) or (isinstance(value, list) and any(is_rich_value(item) for item in value)):
+            values[tag] = value
+            continue
         if not isinstance(value, (dict, list)) or not value:
             formatted = format_value(value, mapping)
-            if value is not None or formatted:
+            if value is not None or formatted or mapping.get("dataType") == "image":
                 values[tag] = formatted
     # 控件写回报告固定字段的对应关系来自映射规则的“报告字段绑定”，
     # 不再依赖后端常量表，设计器里改了就直接生效。
@@ -66,11 +72,31 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
         tag, binding = mapping.get("controlTag", ""), str(mapping.get("reportBindingCode") or "")
         if tag and binding and report_data.get(binding) not in (None, ""):
             values[tag] = str(report_data[binding])
+    image_mappings = {
+        str(item.get("controlTag")): item for item in mappings
+        if item.get("dataType") == "image" and item.get("controlTag")
+    }
     for root in roots.values():
         for control in root.xpath(".//w:sdt", namespaces=NS):
             tag = tag_of(control)
             if tag in values:
-                set_control_text(control, values[tag])
+                if tag in image_mappings and isinstance(values[tag], str) and not values[tag].startswith(("http://", "https://", "data:image/")):
+                    _clear_image_placeholder(control)
+                if is_rich_value(values[tag]) or (isinstance(values[tag], list) and any(is_rich_value(item) for item in values[tag])):
+                    set_mapped_control(control, values[tag], by_tag[tag])
+                else:
+                    set_control_text(control, values[tag])
+
+
+def _clear_image_placeholder(control: etree._Element) -> None:
+    """图片字段为空时移除模板图片，让空值规则（如 ``-``）真正可见。"""
+    content = control.find(f"{{{W_NS}}}sdtContent")
+    if content is None:
+        return
+    for node in content.xpath(".//w:drawing | .//w:pict | .//w:object", namespaces=NS):
+        parent = node.getparent()
+        if parent is not None:
+            parent.remove(node)
 
 
 

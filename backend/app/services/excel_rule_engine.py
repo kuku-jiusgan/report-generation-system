@@ -1,4 +1,6 @@
 import hashlib
+import re
+from numbers import Real
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -42,11 +44,55 @@ def _decimal_places(number_format: str) -> int | None:
 def excel_display_value(value: Any, number_format: str) -> Any:
     if not isinstance(value, float):
         return value
+    if not number_format or number_format == "General":
+        return float(format(value, ".11g"))
     places = _decimal_places(number_format)
     if places is None:
         return value
     rounded = round(value, places)
     return int(rounded) if places == 0 else rounded
+
+
+def excel_display_text(value: Any, number_format: str) -> Any:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return value
+    if not number_format or number_format == "General":
+        return format(value, ".11g") if isinstance(value, float) else str(value)
+    sections = number_format.split(";")
+    section_index = 0 if value > 0 else 2 if value == 0 and len(sections) > 2 else 1
+    section = sections[min(section_index, len(sections) - 1)]
+    negative = value < 0
+    magnitude = abs(value)
+    percent = "%" in section
+    if percent:
+        magnitude *= 100
+    match = re.search(r"[0#]+(?:[.,][0#]+)?", section)
+    if not match:
+        return _clean_excel_literals(section)
+    pattern = match.group(0)
+    integer_pattern, _, decimal_pattern = pattern.partition(".")
+    places = len(decimal_pattern)
+    required_places = decimal_pattern.count("0")
+    rendered = f"{magnitude:,.{places}f}" if "," in integer_pattern else f"{magnitude:.{places}f}"
+    integer_part, _, decimals = rendered.partition(".")
+    if places and required_places < places:
+        decimals = decimals.rstrip("0")
+        decimals = decimals.ljust(required_places, "0")
+    result = integer_part + (("." + decimals) if decimals else "")
+    prefix = _clean_excel_literals(section[:match.start()])
+    suffix = _clean_excel_literals(section[match.end():])
+    result = prefix + result + suffix
+    if negative and len(sections) == 1:
+        result = "-" + result
+    return result
+
+
+def _clean_excel_literals(value: str) -> str:
+    value = re.sub(r"\[[^]]+\]", "", value)
+    value = re.sub(r"_(.)", "", value)
+    value = re.sub(r"\*(.)", "", value)
+    value = re.sub(r"\\(.)", r"\1", value)
+    return value.replace('"', "")
 
 
 class WorkbookValues:
@@ -62,7 +108,8 @@ class WorkbookValues:
             self.warnings.append(f"缺少可选工作表：{sheet}")
             return None
         formula, cached = self.formulas[sheet].cell(row, column), self.values[sheet].cell(row, column)
-        value = excel_display_value(_value(cached.value), formula.number_format)
+        raw_value = _value(cached.value)
+        value = excel_display_text(raw_value, formula.number_format)
         invalid = cached.data_type == TYPE_ERROR or (isinstance(value, str) and value.startswith("#"))
         if invalid or (formula.data_type == "f" and value in (None, "")):
             message = f"{sheet}!{_column(column)}{row} 的公式缓存无有效结果"

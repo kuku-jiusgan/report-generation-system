@@ -10,6 +10,8 @@
 
 from typing import Any
 
+from .rich_blocks import is_rich_value
+
 
 class PayloadPathError(ValueError):
     pass
@@ -123,7 +125,9 @@ def _assign(collection: list[dict[str, Any]], tail: list[tuple[str, bool]], valu
                 nested = {}
                 target[key] = nested
             target = nested
-        if isinstance(item, dict):
+        if is_rich_value(item):
+            target[tail[-1][0]] = item
+        elif isinstance(item, dict):
             target.update(item)
         else:
             target[tail[-1][0]] = item

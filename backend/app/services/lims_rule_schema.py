@@ -36,6 +36,10 @@ COMMON_TABLE_GROUPS = [
         _field("headerRows", "表头行数", "integer", min=0),
         _field("valuePattern", "取值正则", validation="regex"),
     ]),
+    _group(1, [_field("valueFormat", "单元格内容", "select", options=[
+        {"value": "TEXT", "label": "纯文本"},
+        {"value": "RICH_BLOCKS", "label": "保留段落和内嵌表格"},
+    ])], when={"key": "recordMode", "value": "ROWS"}),
     _group(3, [
         _field("dataStartRow", "数据起始行", "integer", min=0),
         _field("rowStride", "行步长", "integer", min=1),
@@ -112,7 +116,8 @@ EXTRACTION_TYPES = [
     },
     {
         "value": "HTML_TABLE_COLUMN", "label": "HTML 表格",
-        "defaultConfig": {"extractionType": "HTML_TABLE_COLUMN", "recordMode": "ROWS", "headerRows": 1},
+        "defaultConfig": {"extractionType": "HTML_TABLE_COLUMN", "recordMode": "ROWS", "headerRows": 1,
+                          "valueFormat": "TEXT"},
         "groups": COMMON_TABLE_GROUPS,
     },
 ]
@@ -157,6 +162,12 @@ def validate_lims_rule_config(config: dict[str, Any], transform: str) -> dict[st
         record_mode = str(normalized.get("recordMode") or "ROWS").upper()
         if record_mode not in {item["value"] for item in RECORD_MODES}:
             raise ValueError("HTML 表格记录方向只能是 ROWS、COLUMNS 或 MATRIX")
+        value_format = str(normalized.get("valueFormat") or "TEXT").upper()
+        if value_format not in {"TEXT", "RICH_BLOCKS"}:
+            raise ValueError("LIMS 单元格内容格式无效")
+        if value_format == "RICH_BLOCKS" and (record_mode != "ROWS" or transform.upper() not in {"TRIM", "REGEX_REPLACE"}
+                                             or normalized.get("valuePattern") or normalized.get("valueTemplate")):
+            raise ValueError("保留单元格段落和表格只支持按数据行提取、文本转换，且不能配置取值正则或取值模板")
         validation_context = {**normalized, "recordMode": record_mode}
         source_path = str(normalized.get("sourcePath") or "").strip()
         if record_mode == "ROWS" and not source_path and normalized.get("sourceColumnIndex") in (None, ""):

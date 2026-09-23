@@ -105,6 +105,25 @@ def test_document_code_from_header_table_uses_field_rule(tmp_path):
                         'quote': 'ZBYY/MV-R XM2026234-02'}
 
 
+def test_document_version_from_header_table_uses_field_rule(tmp_path):
+    document = Document()
+    document.add_paragraph('正文版本号：99')
+    table = document.sections[0].header.add_table(rows=2, cols=4, width=1)
+    table.cell(0, 2).text = '文件编号'
+    table.cell(0, 3).text = 'P-2026'
+    table.cell(1, 2).text = '版 本 号'
+    table.cell(1, 3).text = '01'
+    path = tmp_path / '页眉版本方案.docx'
+    document.save(path)
+
+    result = extract(path, fields=[field('document.version', '$.document.version', 'document')],
+                     rules=[rule('document.version', 'HEADER_TABLE_CELL', labelPattern=r'^版\s*本\s*号$')])
+
+    assert result['document']['version'] == '01'
+    assert result['_meta']['fields']['document.version']['source']['locations'] == [
+        {'section': '页眉', 'table': 1, 'row': 2, 'column': 4, 'quote': '01'}]
+
+
 def test_header_title_is_selected_and_replaced_by_field_rule(tmp_path):
     document = Document()
     table = document.sections[0].header.add_table(rows=3, cols=4, width=1)

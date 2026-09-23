@@ -39,9 +39,9 @@ def test_extracts_detection_limit_result_columns() -> None:
 
     assert "field_007" not in payload.get("custom", {})
     assert payload["jiancexian"] == [
-        {"name": "杂质D", "field2": 34.02, "field3": 27.43, "field4": 30.65,
-         "field5": 1.28, "field6": 1.3, "field7": 5},
-        {"name": "杂质A2", "field2": 34.02, "field3": 27.43, "field4": 30.65,
+        {"name": "杂质D", "field2": "34.02", "field3": "27.43", "field4": "30.65",
+         "field5": "1.28", "field6": "1.3", "field7": "5"},
+        {"name": "杂质A2", "field2": "34.02", "field3": "27.43", "field4": "30.65",
          "field5": None, "field6": None, "field7": None},
     ]
 
@@ -107,10 +107,10 @@ def test_system_suitability_keeps_one_outer_record_per_impurity() -> None:
         payload = extract_excel_fields(path, fields, rules)
 
     records = payload["systemSuitability"]
-    assert [record["impurityName"] for record in records] == ["测试1", "测试2", "测试3", 22222, "liwei"]
+    assert [record["impurityName"] for record in records] == ["测试1", "测试2", "测试3", "22222", "liwei"]
     assert len(records) == 5
     assert all(len(record["injections"]) == 6 for record in records)
-    assert all(record["summary"] == {"retentionTimeRsd": 0.1, "peakAreaRsd": 1.4}
+    assert all(record["summary"] == {"retentionTimeRsd": "0.1", "peakAreaRsd": "1.4"}
                for record in records)
 
 
@@ -139,9 +139,9 @@ def test_extracts_quantitation_limit_result_columns() -> None:
 
     assert "field_014" not in payload.get("custom", {})
     assert payload["loq"][:2] == [
-        {"sequence": 1, "field2": 58.44, "peakArea": 15766, "field4": 2.1,
+        {"sequence": "1", "field2": "58.44", "peakArea": "15766", "field4": "2.1",
          "field5": None, "field6": None, "field7": None},
-        {"sequence": 2, "field2": 60.69, "peakArea": 16006, "field4": None,
+        {"sequence": "2", "field2": "60.69", "peakArea": "16006", "field4": None,
          "field5": None, "field6": None, "field7": None},
     ]
     assert len(payload["loq"]) == 12
@@ -157,7 +157,7 @@ def test_grouped_excel_rule_uses_field_standard_path_when_rule_is_stale() -> Non
 
     payload = extract_excel_fields(WORKBOOK, fields, rules)
 
-    assert payload["dingliangxianjieguo"][0]["injections"][0]["field_014"] == 1
+    assert payload["dingliangxianjieguo"][0]["injections"][0]["field_014"] == "1"
     assert "" not in payload
 
 
@@ -196,8 +196,8 @@ def test_grouped_excel_seed_uses_group_code_as_collection_name() -> None:
 
     assert "lod" not in payload
     assert payload["jiancexian"] == [
-        {"name": "杂质A", "mingxi": [{"signal": 12.3}]},
-        {"name": "杂质B", "mingxi": [{"signal": 45.6}]},
+        {"name": "杂质A", "mingxi": [{"signal": "12.3"}]},
+        {"name": "杂质B", "mingxi": [{"signal": "45.6"}]},
     ]
 
 
@@ -241,8 +241,8 @@ def test_quantitation_limit_rules_follow_dynamic_single_impurity_layout() -> Non
         payload = extract_excel_fields(path, fields, rules)
 
     assert payload["loq"][0] == {
-        "sequence": 1, "field2": 58.44, "peakArea": 15766, "field4": 2.0583,
-        "field5": 2.57, "field6": 2.6, "field7": 10.4,
+        "sequence": "1", "field2": "58.44", "peakArea": "15766", "field4": "2.0583",
+        "field5": "2.57", "field6": "2.6", "field7": "10.4",
     }
     assert len(payload["loq"]) == 6
 
@@ -295,14 +295,14 @@ def test_extracts_horizontal_linearity_results_and_statistics() -> None:
 
     assert "field_021" not in payload.get("custom", {})
     assert payload["linearity"][:2] == [
-        {"solutionName": "C1", "field2": 2.57, "peakArea": 14889,
+        {"solutionName": "C1", "field2": "2.57", "peakArea": "14889",
          "regressionEquation": None,
          "correlationCoefficient": None,
-         "interceptRatio": None, "predictedPeakArea": 14944},
-        {"solutionName": "C2", "field2": 12.84, "peakArea": 78112,
+         "interceptRatio": None, "predictedPeakArea": "14944"},
+        {"solutionName": "C2", "field2": "12.84", "peakArea": "78112",
          "regressionEquation": None,
          "correlationCoefficient": None,
-         "interceptRatio": None, "predictedPeakArea": 76208},
+         "interceptRatio": None, "predictedPeakArea": "76208"},
     ]
     assert len(payload["linearity"]) == 10
 
@@ -339,8 +339,10 @@ def test_horizontal_linearity_rules_read_all_configured_nonblank_columns() -> No
         payload = extract_excel_fields(path, fields, rules)
 
     assert [record["solutionName"] for record in payload["linearity"]] == [f"C{index}" for index in range(1, 8)]
-    assert [record["field2"] for record in payload["linearity"]] == [index * 2.5 for index in range(1, 8)]
-    assert [record["peakArea"] for record in payload["linearity"]] == [index * 100 for index in range(1, 8)]
+    assert [record["field2"] for record in payload["linearity"]] == [
+        "2.5", "5", "7.5", "10", "12.5", "15", "17.5",
+    ]
+    assert [record["peakArea"] for record in payload["linearity"]] == [str(index * 100) for index in range(1, 8)]
 
 
 def test_extracts_residual_charts_as_embedded_png_values() -> None:
@@ -380,7 +382,7 @@ def test_extracts_current_linearity_group_fields_from_excel() -> None:
     payload = extract_excel_fields(WORKBOOK, fields, rules)
 
     assert [record["field_047"] for record in payload["xianxingjieguo"]] == ["杂质D", "杂质A2"]
-    assert payload["xianxingjieguo"][0]["injections"][0]["field_048"] == -55
+    assert payload["xianxingjieguo"][0]["injections"][0]["field_048"] == "-55"
     summary = payload["xianxingjieguo"][0]["summary"]
     assert summary["field_024"] is None
     assert summary["field_025"] is None
@@ -427,9 +429,9 @@ def test_reads_linearity_summary_fields_from_configured_block_cells() -> None:
         payload = extract_excel_fields(workbook_path, fields, rules)
 
     assert [record["summary"] for record in payload["xianxingjieguo"]] == [
-        {"field_024": "y = 1.0000x + 2.0000", "field_025": 0.91, "field_026": 1.1},
-        {"field_024": "y = 3.0000x - 4.0000", "field_025": 0.92, "field_026": 2.2},
-        {"field_024": "y = 5.0000x + 6.0000", "field_025": 0.93, "field_026": 3.3},
+        {"field_024": "y = 1.0000x + 2.0000", "field_025": "0.91", "field_026": "1.1"},
+        {"field_024": "y = 3.0000x - 4.0000", "field_025": "0.92", "field_026": "2.2"},
+        {"field_024": "y = 5.0000x + 6.0000", "field_025": "0.93", "field_026": "3.3"},
     ]
 
 
@@ -441,19 +443,19 @@ def test_extracts_repeatability_detail_and_summary_fields() -> None:
              for index, code in enumerate(REPEATABILITY_CODES, 1)]
     payload = extract_excel_fields(WORKBOOK, fields, rules)
 
-    assert payload["custom"]["field_030"][:6] == [1, 2, 3, 4, 5, 6]
-    assert payload["custom"]["field_031"][:6] == [20.02, 20.34, 20.17, 20.13, 20.16, 20.31]
-    assert payload["custom"]["field_032"][:6] == [8.211, 8.212, 8.208, 8.207, 8.209, 8.21]
-    assert payload["custom"]["field_033"][:6] == [156531, 160279, 154371, 159010, 161875, 160824]
-    assert payload["custom"]["field_034"][:6] == [26.3, 26.93, 25.94, 26.72, 27.2, 27.02]
-    assert payload["custom"]["field_035"][:6] == [26.3, 26.5, 25.7, 26.5, 27, 26.6]
-    assert payload["custom"]["field_036"] == [0.1, 0.1]
-    assert payload["custom"]["field_037"] == [25.985, None]
-    assert payload["custom"]["field_038"] == [26.882, None]
-    assert payload["custom"]["field_039"] == [1.06115360384027, None]
-    assert payload["custom"]["field_040"] == [4.1694437805321, None]
-    assert payload["custom"]["field_041"] == [103.939, None]
-    assert payload["custom"]["field_042"] == [107.527, None]
+    assert payload["custom"]["field_030"][:6] == ["1", "2", "3", "4", "5", "6"]
+    assert payload["custom"]["field_031"][:6] == ["20.02", "20.34", "20.17", "20.13", "20.16", "20.31"]
+    assert payload["custom"]["field_032"][:6] == ["8.211", "8.212", "8.208", "8.207", "8.209", "8.210"]
+    assert payload["custom"]["field_033"][:6] == ["156531", "160279", "154371", "159010", "161875", "160824"]
+    assert payload["custom"]["field_034"][:6] == ["26.30", "26.93", "25.94", "26.72", "27.20", "27.02"]
+    assert payload["custom"]["field_035"][:6] == ["26.3", "26.5", "25.7", "26.5", "27.0", "26.6"]
+    assert payload["custom"]["field_036"] == ["0.1", "0.1"]
+    assert payload["custom"]["field_037"] == ["25.985", None]
+    assert payload["custom"]["field_038"] == ["26.882", None]
+    assert payload["custom"]["field_039"] == ["1.0611536038", None]
+    assert payload["custom"]["field_040"] == ["4.1694437805", None]
+    assert payload["custom"]["field_041"] == ["103.939", None]
+    assert payload["custom"]["field_042"] == ["107.527", None]
 
 
 def test_extracts_current_repeatability_group_fields_from_excel() -> None:
@@ -474,12 +476,12 @@ def test_extracts_current_repeatability_group_fields_from_excel() -> None:
     records = payload["chongfuxingjieguo"]
     assert [record["field_055"] for record in records] == ["杂质D", "杂质A2"]
     assert records[0]["injections"][0] == {
-        "field_049": 1, "field_050": 20.02, "field_051": 8.211,
-        "field_052": 156531, "field_053": 26.3, "field_054": 26.3,
+        "field_049": "1", "field_050": "20.02", "field_051": "8.211",
+        "field_052": "156531", "field_053": "26.30", "field_054": "26.3",
     }
     assert records[0]["summary"] == {
-        "field_056": 0.1, "field_057": 1.7,
-        "field_058": "25.985～26.882", "field_059": "103.939～107.527",
+        "field_056": "0.1", "field_057": "1.7",
+        "field_058": "（25.985，26.882）", "field_059": "（103.939，107.527）",
     }
 
 
