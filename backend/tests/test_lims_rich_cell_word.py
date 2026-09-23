@@ -71,6 +71,33 @@ def test_rich_mode_preserves_mixed_cells_and_default_is_still_text() -> None:
     assert _payload("TEXT")["solutions"][0]["preparation"] == "量取溶液。"
 
 
+def test_rich_mode_preserves_lims_subscript_in_extraction_and_word(tmp_path: Path) -> None:
+    source = {"instanceId": "experiment-1", "richTexts": [{
+        "id": "rich-1", "sectionPath": ["溶液配制"],
+        "html": "<table><tr><th>验证项目</th><th>溶液名称</th><th>配制方法</th></tr>"
+                "<tr><td>样品检测</td><td>C<sub>1</sub></td>"
+                "<td>配制 C<sub>1</sub> 溶液。</td></tr></table>",
+    }]}
+    payload = apply_configured_extraction(source, {}, [_field()], [_rule()])
+    preparation = payload["solutions"][0]["preparation"]
+    assert preparation["blocks"][0]["text"] == "配制 C1 溶液。"
+    assert preparation["blocks"][0]["runs"] == [
+        {"text": "配制 C"},
+        {"text": "1", "subscript": True},
+        {"text": " 溶液。"},
+    ]
+
+    template, output = tmp_path / "template.docx", tmp_path / "report.docx"
+    _template(template)
+    build_mapped_docx(template, output, [_mapping()], payload,
+                      {"source_payloads": {"LIMS": payload}, "field_sources": {
+                          "method.preparation": {"type": "LIMS"},
+                      }})
+    with zipfile.ZipFile(output) as archive:
+        root = etree.fromstring(archive.read("word/document.xml"))
+    assert root.xpath('.//w:vertAlign/@w:val', namespaces=NS) == ["subscript"]
+
+
 def test_rich_values_survive_standard_payload_path_write() -> None:
     extracted = _payload()["solutions"]
     resolved: dict = {}

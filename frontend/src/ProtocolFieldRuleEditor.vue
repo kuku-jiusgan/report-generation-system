@@ -42,6 +42,11 @@ const error = ref('')
 const previewError = ref('')
 const documentId = ref('')
 const result = ref<ProtocolPreview>()
+function displayValue(value: unknown): string {
+  if (typeof value === 'string') return value.startsWith('data:image/') ? '[图片]' : value
+  return JSON.stringify(value, (_, item) =>
+    typeof item === 'string' && item.startsWith('data:image/') ? '[图片]' : item, 2)
+}
 let requestVersion = 0
 const mode = computed(() => metadata.value?.modes.find(item => item.value === config.value.mode))
 const transformGroups = computed(() => metadata.value?.transformGroups.filter(group =>
@@ -122,11 +127,11 @@ onBeforeUnmount(() => emit('mapping-dirty', false))
         <el-button :loading="previewing" :disabled="!config.mode || !documentId" @click="preview">试提取并核对原文</el-button>
         <el-alert v-if="previewError" :title="previewError" type="error" :closable="false" show-icon role="alert" />
         <div v-if="result" aria-live="polite">
-          <details v-if="result.groups && Object.keys(result.groups).length" open><summary>查看编组结构与项目对应关系</summary><pre class="preview-value">{{ JSON.stringify(result.groups, null, 2) }}</pre></details>
+          <details v-if="result.groups && Object.keys(result.groups).length" open><summary>查看编组结构与项目对应关系</summary><pre class="preview-value">{{ displayValue(result.groups) }}</pre></details>
           <div v-for="(field, code) in result.fields" :key="code">
             <el-alert v-if="field.status === 'ERROR'" :title="field.message" :type="config.required === false ? 'warning' : 'error'" :closable="false" show-icon />
             <template v-else>
-              <strong>提取成功</strong><pre class="preview-value">{{ typeof field.value === 'string' ? field.value : JSON.stringify(field.value, null, 2) }}</pre>
+              <strong>提取成功</strong><pre class="preview-value">{{ displayValue(field.value) }}</pre>
               <details><summary>查看原文位置</summary><div v-for="(location, index) in field.source.locations" :key="index" class="location"><b>{{ location.section }}</b><span v-if="location.paragraph"> · 段落 {{ location.paragraph }}</span><span v-if="location.table"> · 表格 {{ location.table }}，行 {{ location.row }}，列 {{ location.column }}</span><p v-if="location.parentValue">所属记录：{{ location.parentValue }}</p><p>{{ location.quote }}</p></div></details>
             </template>
           </div>

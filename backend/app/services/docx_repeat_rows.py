@@ -159,12 +159,14 @@ def _clone_rows(prototype: etree._Element, parent: etree._Element, insert_at: in
                 empty_mappings: list[dict[str, Any]] | None = None) -> list[etree._Element]:
     if not records:
         empty_values = {
-            str(mapping.get("controlTag")): format_value(None, mapping)
+            str(mapping.get("controlTag")): mapping
             for mapping in (empty_mappings or [])
             if mapping.get("controlTag")
         }
         for control in prototype.xpath(".//w:sdt", namespaces=NS):
-            set_control_text(control, empty_values.get(tag_of(control), ""))
+            mapping = empty_values.get(tag_of(control))
+            set_control_text(control, format_value(None, mapping) if mapping else "",
+                             image=bool(mapping and mapping.get("dataType") == "image"))
         return []
     rows = [prototype]
     for offset in range(1, len(records)):
@@ -190,7 +192,7 @@ def _write_cell_values(cells: list[etree._Element], record: dict[str, Any], tabl
         if control is None:
             continue
         if is_formula_calculation(mapping):
-            set_control_text(control, format_value(row_values.get(str(mapping.get("fieldCode"))), mapping))
+            set_mapped_control(control, row_values.get(str(mapping.get("fieldCode"))), mapping)
             continue
         repeat_path = repeat_source(mapping_source_path(mapping))
         if not repeat_path:
@@ -231,7 +233,7 @@ def _apply_vertical_merge(rows: list[etree._Element],
             if cell is not None and value not in (None, "") and value == previous and previous_cell is not None:
                 _set_vertical_merge(previous_cell, True)
                 _set_vertical_merge(cell, False)
-                set_control_text(control, "")
+                set_control_text(control, "", image=mapping.get("dataType") == "image")
             else:
                 previous_cell = cell
             previous = value
@@ -378,7 +380,7 @@ def _fill_level_controls(cells: list[etree._Element], group_record: dict[str, An
         if control is None:
             continue
         if is_formula_calculation(mapping):
-            set_control_text(control, format_value(row_values.get(str(mapping.get("fieldCode"))), mapping))
+            set_mapped_control(control, row_values.get(str(mapping.get("fieldCode"))), mapping)
             continue
         path = repeat_source(mapping_source_path(mapping))
         if not path:

@@ -17,6 +17,30 @@ def _paragraph(text: str) -> etree._Element:
     return paragraph
 
 
+def _run_text(value: dict[str, Any]) -> etree._Element:
+    run = etree.Element(W + "r")
+    if value.get("subscript") or value.get("superscript"):
+        properties = etree.SubElement(run, W + "rPr")
+        vertical = "subscript" if value.get("subscript") else "superscript"
+        etree.SubElement(properties, W + "vertAlign", {W + "val": vertical})
+    node = etree.SubElement(run, W + "t")
+    node.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+    node.text = str(value.get("text") or "")
+    return run
+
+
+def _rich_paragraph(block: dict[str, Any]) -> etree._Element:
+    runs = block.get("runs")
+    if not isinstance(runs, list):
+        return _paragraph(block["text"])
+    paragraph = etree.Element(W + "p")
+    for run in runs:
+        if not isinstance(run, dict) or not isinstance(run.get("text"), str):
+            raise ValueError("结构化字段存在无效的行内文本")
+        paragraph.append(_run_text(run))
+    return paragraph
+
+
 def _cell(value: dict[str, Any], width: int, merge: str = "") -> etree._Element:
     cell = etree.Element(W + "tc")
     properties = etree.SubElement(cell, W + "tcPr")
@@ -28,7 +52,10 @@ def _cell(value: dict[str, Any], width: int, merge: str = "") -> etree._Element:
         etree.SubElement(properties, W + "gridSpan").set(W + "val", str(span))
     if merge:
         etree.SubElement(properties, W + "vMerge").set(W + "val", merge)
-    cell.append(_paragraph(value.get("text", "") if merge != "continue" else ""))
+    if merge == "continue" or not value.get("runs"):
+        cell.append(_paragraph(value.get("text", "") if merge != "continue" else ""))
+    else:
+        cell.append(_rich_paragraph(value))
     return cell
 
 
@@ -97,7 +124,7 @@ def set_control_rich_blocks(control: etree._Element, values: list[dict[str, Any]
             raise ValueError("结构化字段缺少内容块")
         for block in blocks:
             if block.get("type") == "paragraph" and isinstance(block.get("text"), str):
-                nodes.append(_paragraph(block["text"]))
+                nodes.append(_rich_paragraph(block))
             elif block.get("type") == "table" and isinstance(block.get("rows"), list):
                 nodes.append(_table(block["rows"]))
             else:
@@ -116,4 +143,4 @@ def set_mapped_control(control: etree._Element, value: Any, mapping: dict[str, A
     elif isinstance(value, list) and value and any(is_rich_value(item) for item in value):
         set_control_rich_blocks(control, value)
     else:
-        set_control_text(control, format_value(value, mapping))
+        set_control_text(control, format_value(value, mapping), image=mapping.get("dataType") == "image")

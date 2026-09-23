@@ -177,11 +177,18 @@ def _rows(blocks: list[dict], config: dict, field: dict, groups: list[dict], cac
     column = _column(block, header, column_config['columnPattern'])
     values, locations = [], []
     for number, row in rows:
-        value = row[column]
+        if field['dataType'] == 'image':
+            if block.get('image_error'):
+                raise ValueError(f"方案表格 {block['table']}：{block['image_error']}")
+            images = block['images'][number - 1][column]
+            value = _unique(images, f'方案表格第 {number} 行、第 {column + 1} 列图片')
+        else:
+            value = row[column]
         if not value.strip():
             raise ProtocolMatchError(f'方案表格第 {number} 行、第 {column + 1} 列为空')
         values.append(value)
-        locations.append(_quote(block, row=number, column=column + 1, quote=value))
+        locations.append(_quote(block, row=number, column=column + 1,
+                                quote='[图片]' if field['dataType'] == 'image' else value))
     if expansion:
         parent_config = next(item for item in mapping['columnMappings']
                              if item['fieldCode'] == expansion['parentFieldCode'])
@@ -199,7 +206,9 @@ def extract_protocol(path: Path | None, document_id: str, fields: list[dict], ru
     if path is not None and selected:
         validate_protocol_document(path, max_bytes)
         header_mode = 'HEADER_TABLE_CELL'
-        blocks = (read_protocol_structure(path)
+        image_codes = {field['fieldCode'] for field in fields if field['dataType'] == 'image'}
+        blocks = (read_protocol_structure(path, include_images=any(
+                      rule['fieldCode'] in image_codes for rule in selected))
                   if any(rule['config']['mode'] != header_mode for rule in selected) else [])
         headers = (read_protocol_header_structure(path)
                    if any(rule['config']['mode'] == header_mode for rule in selected) else [])

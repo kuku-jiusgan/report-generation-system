@@ -22,8 +22,12 @@ def tag_of(control: etree._Element) -> str:
     return str(values[0]) if values else ""
 
 
-def set_control_text(control: etree._Element, value: Any) -> None:
+def set_control_text(control: etree._Element, value: Any, *, image: bool = False) -> None:
     content = control.find(W + "sdtContent")
+    text = "-" if image and value in (None, "") else "" if value is None else str(value)
+    if image and content is not None and not text.startswith(("http://", "https://", "data:image/")):
+        for node in content.xpath(".//w:drawing | .//w:pict | .//w:object", namespaces=NS):
+            node.getparent().remove(node)
     texts = control.xpath("./w:sdtContent//w:t", namespaces=NS)
     if not texts:
         if content is None:
@@ -31,7 +35,6 @@ def set_control_text(control: etree._Element, value: Any) -> None:
         paragraph = etree.SubElement(content, W + "p")
         run = etree.SubElement(paragraph, W + "r")
         texts = [etree.SubElement(run, W + "t")]
-    text = "" if value is None else str(value)
     texts[0].text = text.split("\n")[0]
     for line_break in content.xpath(".//w:br | .//w:cr", namespaces=NS) if content is not None else []:
         line_break.getparent().remove(line_break)

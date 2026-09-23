@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from lxml import etree
 
+from .docx_field_values import format_value, set_control_text
 from .docx_table_cells import (
     NS, cell_width, grid_after, grid_span, set_cell_text, set_cell_width, set_grid_span,
     stretch_merged_row, sync_table_grid,
@@ -46,6 +47,8 @@ def with_image_control_tags(layout: dict[str, Any],
         if mapping is not None:
             entry["controlTag"] = mapping["controlTag"]
             entry["dataType"] = "image"
+            entry["fillRule"] = mapping.get("fillRule", "")
+            entry["standardFieldFillRule"] = mapping.get("standardFieldFillRule", "")
     return result
 
 
@@ -94,7 +97,7 @@ def _fill_scalar_cells(rows: list[etree._Element], layout: dict[str, Any],
                     ".//w:sdt[w:sdtPr/w:tag/@w:val=$tag]", namespaces=NS, tag=control_tag,
                 )
                 if controls:
-                    set_cell_text(controls[0], value)
+                    set_control_text(controls[0], format_value(value, entry), image=True)
                 # 图片字段只能交给图片内容控件处理，不能把 Data URL 降级成普通文字。
                 continue
             set_cell_text(cells[column_index], value)

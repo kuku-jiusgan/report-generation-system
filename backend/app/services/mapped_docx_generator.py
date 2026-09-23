@@ -80,23 +80,10 @@ def _fill_direct_controls(roots: dict[str, etree._Element], mappings: list[dict[
         for control in root.xpath(".//w:sdt", namespaces=NS):
             tag = tag_of(control)
             if tag in values:
-                if tag in image_mappings and isinstance(values[tag], str) and not values[tag].startswith(("http://", "https://", "data:image/")):
-                    _clear_image_placeholder(control)
                 if is_rich_value(values[tag]) or (isinstance(values[tag], list) and any(is_rich_value(item) for item in values[tag])):
                     set_mapped_control(control, values[tag], by_tag[tag])
                 else:
-                    set_control_text(control, values[tag])
-
-
-def _clear_image_placeholder(control: etree._Element) -> None:
-    """图片字段为空时移除模板图片，让空值规则（如 ``-``）真正可见。"""
-    content = control.find(f"{{{W_NS}}}sdtContent")
-    if content is None:
-        return
-    for node in content.xpath(".//w:drawing | .//w:pict | .//w:object", namespaces=NS):
-        parent = node.getparent()
-        if parent is not None:
-            parent.remove(node)
+                    set_control_text(control, values[tag], image=tag in image_mappings)
 
 
 

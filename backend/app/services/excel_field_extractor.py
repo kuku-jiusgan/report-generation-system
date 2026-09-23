@@ -1,5 +1,6 @@
 import hashlib
 import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,62 @@ def _repeat_count(reader: WorkbookValues, config: dict[str, Any]) -> int:
 
 
 def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
+    regions = config.get("regions")
+    if regions is not None:
+        if not isinstance(regions, list) or not regions:
+            raise ExcelRuleError("多区域 Excel 规则必须至少配置一个区域")
+        count = _repeat_count(reader, config)
+        values: list[Any] = []
+        for repeat_index in range(count):
+            for region in regions:
+                if not isinstance(region, dict):
+                    raise ExcelRuleError("多区域 Excel 规则中的区域配置无效")
+                if "repeatCount" in region or "repeatCountSource" in region or "regions" in region:
+                    raise ExcelRuleError("多区域的重复次数只能在规则顶层配置")
+                region_config = {**config, **region}
+                region_config.pop("regions", None)
+                values.extend(_repeat_values_for_indices(reader, region_config, [repeat_index]))
+        return values
+
+    return _repeat_values_for_indices(reader, config)
+
+
+def _display_value(value: Any, config: dict[str, Any]) -> Any:
+    if value in (None, "") or "displayDecimals" not in config:
+        return value
+    try:
+        places = int(config["displayDecimals"])
+        if places < 0 or places > 10:
+            raise ValueError("精度超出范围")
+        rounded = Decimal(str(value)).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ExcelRuleError(f"Excel 数值格式配置或缓存无效：{value}") from error
+    return f"{rounded:.{places}f}"
+
+
+def _source_value(reader: WorkbookValues, config: dict[str, Any], source: dict[str, Any],
+                  repeat_index: int) -> Any:
+    if "literal" in source:
+        if set(source) != {"literal"} or not isinstance(source["literal"], str) or not source["literal"]:
+            raise ExcelRuleError("固定文字来源只能配置非空 literal，不得同时配置单元格")
+        return source["literal"]
+    sheet_source = source.get("sheetSource")
+    sheet = str(source.get("sheet") or "")
+    if sheet_source is not None:
+        if not isinstance(sheet_source, dict):
+            raise ExcelRuleError("动态工作表来源必须是单元格地址")
+        sheet = str(reader.read(
+            str(sheet_source.get("sheet") or ""),
+            int(sheet_source.get("row", 0)) + repeat_index * int(sheet_source.get("rowStep", 0)),
+            int(sheet_source.get("column", 0)), True,
+        ) or "")
+    return reader.read(sheet, int(source.get("row", 0)) + repeat_index * int(source.get("rowStep", 0)),
+                       int(source.get("column", 0)) + repeat_index * int(source.get("columnStep", 0)),
+                       bool(config.get("required")))
+
+
+def _repeat_values_for_indices(reader: WorkbookValues, config: dict[str, Any],
+                               repeat_indices: list[int] | None = None) -> list[Any]:
     count = _repeat_count(reader, config)
     row_start, row_end = int(config.get("rowStart", 1)), int(config.get("rowEnd", 1))
     if "rowStartOffsetFromRepeatCount" in config:
@@ -52,7 +109,7 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
     if row_end < row_start or row_end - row_start > 1000:
         raise ExcelRuleError("Excel 数据行范围无效")
     values: list[Any] = []
-    for repeat_index in range(count):
+    for repeat_index in repeat_indices if repeat_indices is not None else range(count):
         mode = str(config.get("valueMode") or "CELL")
         if mode.startswith("LINEAR_"):
             raise ExcelRuleError("线性汇总字段必须直接读取 Excel 单元格，不能使用回归计算模式")
@@ -69,18 +126,22 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
                 value = row_index + int(config.get("indexBase", 1))
             elif mode == "REPEAT_VALUE":
                 source = config.get("repeatValueSource") or {}
-                value = _read_value(
-                    reader, config, str(source.get("sheet") or ""),
-                    int(source.get("row", 0)) + repeat_index * int(source.get("rowStep", 0)),
-                    int(source.get("column", 0)) + repeat_index * int(source.get("columnStep", 0)),
-                )
+                value = _source_value(reader, config, source, repeat_index)
+            elif mode == "JOIN_CELLS":
+                sources = config.get("valueSources")
+                if not isinstance(sources, list) or not sources or any(not isinstance(item, dict) for item in sources):
+                    raise ExcelRuleError("拼接单元格规则必须配置非空的 valueSources")
+                parts = [_source_value(reader, config, item, repeat_index) for item in sources]
+                if any(part in (None, "") for part in parts):
+                    raise ExcelRuleError("拼接单元格来源缺少必填值")
+                value = str(config.get("joinSeparator", "")).join(str(part) for part in parts)
             elif mode == "CELL_PAIR":
                 columns = config.get("pairColumns") or []
                 if len(columns) != 2:
                     raise ExcelRuleError("双单元格 Excel 规则必须配置两个 pairColumns")
                 source_row = row + repeat_index * int(config.get("rowStep", 0))
-                pair = [_read_value(reader, config, str(config.get("sheet") or ""), source_row,
-                                    int(column)) for column in columns]
+                pair = [_display_value(_read_value(reader, config, str(config.get("sheet") or ""),
+                                                   source_row, int(column)), config) for column in columns]
                 if all(item not in (None, "") for item in pair):
                     separator = str(config.get("pairSeparator") or "，")
                     # 兼容已保存的旧默认配置，统一输出中文逗号区间。
@@ -99,6 +160,8 @@ def _repeat_values(reader: WorkbookValues, config: dict[str, Any]) -> list[Any]:
                                          bool(config.get("required")))
                 else:
                     value = _read_value(reader, config, sheet, source_row, column)
+            if mode not in ("CELL_PAIR", "JOIN_CELLS"):
+                value = _display_value(value, config)
             repeat_value = int(config.get("broadcastRepeat", 1))
             if repeat_value < 1 or repeat_value > 1000:
                 raise ExcelRuleError("重复值展开次数无效")
@@ -269,6 +332,8 @@ def extract_excel_fields(path: Path, fields: list[dict[str, Any]], rules: list[d
                 else:
                     value = _cell(reader, config) if config.get("mode") == "FIXED_CELL" else _repeat_values(reader, config)
             except (ExcelRuleError, ExcelChartError, KeyError, TypeError, ValueError) as error:
+                if config.get("required"):
+                    raise ExcelRuleError(f"字段 {field_code} 提取失败：{error}") from error
                 reader.warnings.append(f"字段 {field_code} 提取失败：{error}")
                 continue
             value = _normalize_cardinality(value, field, field_code, reader.warnings)

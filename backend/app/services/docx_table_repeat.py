@@ -9,6 +9,8 @@ from .docx_field_values import (
     format_value, mapping_source_path, record_value, repeat_source, set_control_text, tag_of,
 )
 from .docx_matrix import fill_matrix_table, with_image_control_tags
+from .docx_rich_blocks import set_mapped_control
+from .docx_segment_table import fill_segment_heading, fill_segment_table
 from .table_layout_rules import TableLayoutRules, repeat_bookmark_name
 
 
@@ -51,7 +53,7 @@ def _fill_group_heading(heading: etree._Element, mapping: dict[str, Any],
         "self::w:sdt[w:sdtPr/w:tag/@w:val=$tag] | .//w:sdt[w:sdtPr/w:tag/@w:val=$tag]",
         namespaces=NS, tag=str(mapping["controlTag"]),
     ):
-        set_control_text(control, value)
+        set_control_text(control, value, image=mapping.get("dataType") == "image")
 
 
 def _clone_repeat_blocks(prototype: etree._Element, heading: etree._Element | None,
@@ -191,7 +193,7 @@ def _fill_bound_scalars(table: etree._Element, grouped_records: list[dict[str, A
                  f"固定字段“{mapping.get('wordLabel') or mapping.get('fieldCode')}”在同一分组中取得多个不同值，"
                  "无法确定应写入哪一个。")
             continue
-        set_control_text(controls[tag], format_value(resolved[0], mapping))
+        set_mapped_control(controls[tag], resolved[0], mapping)
 
 
 def _fill_matrix(table: etree._Element, grouped_records: list[dict[str, Any]],
@@ -240,14 +242,34 @@ def fill_table_repeat(document: etree._Element, table_no: str, group: list[dict[
         return
     prototype = table_nodes[0]
     heading_config = _adjacent_group_heading(prototype, group, source, group_key)
+    inner_mode = str(rule.get("innerMode") or "ROW_REPEAT")
+    matrix_layout = layout.matrix_layout(table_no)
+    if inner_mode == "SEGMENT_REPEAT":
+        if not matrix_layout:
+            raise ValueError(f"{table_no} 缺少行片段表格配置")
+        heading = prototype.getprevious() if matrix_layout.get("headingField") else None
+        if matrix_layout.get("headingField") and (heading is None or heading.tag != f"{{{W_NS}}}p"):
+            raise ValueError(f"{table_no} 原型表前缺少可填写的标题段落")
+        tables, headings = _clone_repeat_blocks(prototype, heading, len(record_groups))
+        for index, (table, grouped_records) in enumerate(zip(tables, record_groups)):
+            if len(grouped_records) != 1:
+                raise ValueError(f"{table_no} 整表分组键 {group_key} 未唯一标识记录")
+            for unavailable in matrix_layout.get("unavailableFields") or []:
+                if record_value(grouped_records[0], str(unavailable["field"])) in (None, ""):
+                    warn("SEGMENT_FIELD_UNAVAILABLE", table_no,
+                         f"{record_value(grouped_records[0], group_key)}："
+                         f"{unavailable.get('label') or unavailable['field']}缺少来源；"
+                         f"{unavailable.get('source') or '请配置真实数据来源'}。")
+            if heading is not None:
+                fill_segment_heading(headings[index], grouped_records[0], matrix_layout)
+            fill_segment_table(table, grouped_records[0], matrix_layout)
+        return
     tables, headings = _clone_repeat_blocks(
         prototype, heading_config[0] if heading_config else None, len(record_groups),
     )
     if heading_config:
         for heading, grouped_records in zip(headings, record_groups):
             _fill_group_heading(heading, heading_config[1], grouped_records[0], group_key)
-    inner_mode = str(rule.get("innerMode") or "ROW_REPEAT")
-    matrix_layout = layout.matrix_layout(table_no)
     for table, grouped_records in zip(tables, record_groups):
         if inner_mode == "MATRIX":
             if not matrix_layout:

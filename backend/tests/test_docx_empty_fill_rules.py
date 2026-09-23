@@ -139,6 +139,7 @@ def test_empty_image_field_without_extraction_value_removes_template_picture(tmp
 
     with zipfile.ZipFile(output) as archive:
         document = etree.fromstring(archive.read("word/document.xml"))
+    assert document.xpath(".//w:sdt//w:t/text()", namespaces=NS) == ["-"]
     assert not document.xpath(".//w:sdt//w:drawing", namespaces=NS)
 
 

@@ -63,8 +63,10 @@ def validate_protocol_rule(field: dict, config: dict, groups: list[dict], transf
         raise ValueError('请选择有效的方案提取方式')
     if not isinstance(config.get('required', True), bool):
         raise ValueError('方案规则的必需标记必须是布尔值')
-    if field.get('dataType') not in {'string', 'richText', 'decimal', 'date', 'boolean'}:
+    if field.get('dataType') not in {'string', 'richText', 'decimal', 'date', 'boolean', 'image'}:
         raise ValueError('方案提取不支持当前字段的数据类型')
+    if field.get('dataType') == 'image' and (mode != 'TABLE_ROWS' or transform != 'TRIM'):
+        raise ValueError('方案图片字段必须使用表格明细提取方式及 TRIM 转换')
     if mode == 'TABLE_ROWS':
         group = next((item for item in groups if item['groupCode'] == config.get('groupCode')
                       and item.get('enabled', True)), None)

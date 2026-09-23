@@ -7,6 +7,8 @@ from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from .protocol_cell_images import cell_images
+
 
 def _blocks(parent):
     for child in parent:
@@ -34,7 +36,7 @@ def _heading_level(paragraph: Paragraph) -> int | None:
     return None
 
 
-def read_protocol_structure(path: Path) -> list[dict[str, Any]]:
+def read_protocol_structure(path: Path, include_images: bool = False) -> list[dict[str, Any]]:
     document = Document(path)
     blocks = []
     headings: list[tuple[int, str]] = []
@@ -61,9 +63,15 @@ def read_protocol_structure(path: Path) -> list[dict[str, Any]]:
                 blocks.append({'kind': 'table', 'table': table_number, 'error': str(error),
                                'section': ' / '.join(title for _, title in headings)})
                 continue
-            blocks.append({'kind': 'table', 'rows': rows, 'table': table_number,
-                           'text': '\n'.join('\t'.join(row) for row in rows),
-                           'section': ' / '.join(title for _, title in headings)})
+            block = {'kind': 'table', 'rows': rows, 'table': table_number,
+                     'text': '\n'.join('\t'.join(row) for row in rows),
+                     'section': ' / '.join(title for _, title in headings)}
+            if include_images:
+                try:
+                    block['images'] = [[cell_images(cell, document.part) for cell in row.cells] for row in table.rows]
+                except ValueError as error:
+                    block['image_error'] = str(error)
+            blocks.append(block)
     return blocks
 
 

@@ -102,6 +102,19 @@ def test_linearity_matrix_fills_detail_and_statistic_rows() -> None:
     assert _cell_text_outside_controls(document, 8, 1) == ""
 
 
+def test_missing_matrix_image_removes_template_picture() -> None:
+    document = _matrix_document()
+    control = document.xpath(
+        ".//w:sdt[w:sdtPr/w:tag/@w:val='repeat.t20.residualChart']", namespaces=NS,
+    )[0]
+    etree.SubElement(control.find(".//" + W + "r"), W + "drawing")
+
+    _fill_matrix_table(document, "T20", [{"solutionName": "C1"}], LINEARITY_LAYOUT)
+
+    assert _control_text(document, 8, 1, "repeat.t20.residualChart") == "-"
+    assert not control.xpath(".//w:drawing", namespaces=NS)
+
+
 def test_linearity_matrix_clones_one_table_per_five_points() -> None:
     document = _matrix_document()
     records = [{"solutionName": f"C{index % 5 + 1}"} for index in range(10)]

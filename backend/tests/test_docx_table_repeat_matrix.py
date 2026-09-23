@@ -1,5 +1,6 @@
 """整表复制中的嵌套矩阵必须遵循标准编组路径与 Word 控件绑定。"""
 
+import pytest
 from lxml import etree
 
 from backend.app.services.docx_repeat_rows import fill_repeat_rows
@@ -207,6 +208,38 @@ def test_table_repeat_rows_use_only_prototype_bindings_as_detail_level() -> None
     assert _text(tables[0], 2, 1) == "y=2x+1"
     assert [_text(tables[1], index, 1) for index in (0, 1)] == ["B-C1", "B-C2"]
     assert _text(tables[1], 2, 1) == "-"
+    assert warnings == []
+
+
+@pytest.mark.parametrize("mode", ["MATRIX", "ROW_REPEAT"])
+def test_missing_repeated_image_clears_template_picture(mode: str) -> None:
+    document = _document()
+    control = document.xpath(
+        ".//w:sdt[w:sdtPr/w:tag/@w:val='summary.regression']", namespaces=NS,
+    )[0]
+    etree.SubElement(control.find(".//" + W + "r"), W + "drawing")
+    mappings = _mappings()
+    chart = next(item for item in mappings if item["controlTag"] == "summary.regression")
+    chart.update({"sourcePath": "$.results[*].summary.field_084", "dataType": "image",
+                  "fillRule": "PRESERVE_STYLE;EMPTY_AS_DASH"})
+    rule = _rule() if mode == "MATRIX" else _row_repeat_rule()
+    payload = {"results": [
+        {"field_047": "A", "injections": [{"field_021": "A-1"}],
+         "summary": {"field_084": "data:image/png;base64,aGVsbG8="}},
+        {"field_047": "B", "injections": [{"field_021": "B-1"}], "summary": {}},
+    ]}
+    warnings: list[tuple[str, str, str]] = []
+
+    fill_repeat_rows(document, mappings, payload, {}, {}, rule,
+                     lambda *items: warnings.append(items))
+
+    tables = document.xpath("./w:body/w:tbl", namespaces=NS)
+    assert len(tables) == 2
+    assert tables[0].xpath(".//w:sdt[w:sdtPr/w:tag/@w:val='summary.regression']//w:drawing", namespaces=NS)
+    assert not tables[1].xpath(".//w:sdt[w:sdtPr/w:tag/@w:val='summary.regression']//w:drawing", namespaces=NS)
+    assert tables[1].xpath(
+        ".//w:sdt[w:sdtPr/w:tag/@w:val='summary.regression']//w:t/text()", namespaces=NS,
+    ) == ["-"]
     assert warnings == []
 
 

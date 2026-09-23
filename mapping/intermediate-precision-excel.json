@@ -1,0 +1,112 @@
+{
+  "groupCode": "custom_1790146843404",
+  "tableNo": "T26",
+  "tableHeader": "人员/日期",
+  "conclusionField": "uncategorized.field_144",
+  "detailControls": [
+    {"row": 2, "column": 2, "fieldCode": "intermediatePrecision.sequence"},
+    {"row": 2, "column": 3, "fieldCode": "intermediatePrecision.weighing"},
+    {"row": 2, "column": 4, "fieldCode": "intermediatePrecision.retentionTime"},
+    {"row": 2, "column": 5, "fieldCode": "intermediatePrecision.peakArea"},
+    {"row": 2, "column": 6, "fieldCode": "intermediatePrecision.concentration"}
+  ],
+  "uniqueControls": [
+    {"row": 3, "column": 1, "tag": "cc.report.s7_6.中间精密度_加标供试品试验结果表.人员_技术员A汇总",
+     "fieldCode": "uncategorized.field_128"}
+  ],
+  "defaults": {
+    "mode": "REPEAT_BLOCK",
+    "sheet": "重复性跟中间精密度",
+    "rowStep": 33,
+    "repeatCountSource": {"sheet": "首页", "row": 8, "column": 2},
+    "maxRepeat": 15,
+    "required": true,
+    "valueMode": "CELL"
+  },
+  "fields": [
+    {"code": "intermediatePrecision.impurityName", "label": "杂质名称", "level": "", "config": {
+      "rowStart": 2, "rowEnd": 2, "startColumn": 1
+    }},
+    {"code": "uncategorized.field_128", "level": "", "config": {
+      "rowStart": 1, "rowEnd": 1, "valueMode": "JOIN_CELLS", "joinSeparator": "\n",
+      "valueSources": [
+        {"literal": "技术员A"},
+        {"sheet": "对照品配制", "row": 9, "column": 1}
+      ]
+    }},
+    {"code": "uncategorized.field_145", "level": "", "config": {
+      "rowStart": 1, "rowEnd": 1, "valueMode": "JOIN_CELLS", "joinSeparator": "\n",
+      "valueSources": [
+        {"literal": "技术员B"},
+        {"sheet": "对照品配制", "row": 16, "column": 1}
+      ]
+    }},
+    {"code": "intermediatePrecision.sequence", "label": "No.", "level": "injections", "config": {
+      "regions": [{"rowStart": 3, "rowEnd": 8}, {"rowStart": 18, "rowEnd": 23}], "startColumn": 4
+    }},
+    {"code": "intermediatePrecision.weighing", "label": "称样量（mg）", "level": "injections", "config": {
+      "regions": [{"rowStart": 3, "rowEnd": 8}, {"rowStart": 18, "rowEnd": 23}], "startColumn": 5
+    }},
+    {"code": "intermediatePrecision.retentionTime", "label": "保留时间（min）", "level": "injections", "config": {
+      "regions": [{"rowStart": 3, "rowEnd": 8}, {"rowStart": 18, "rowEnd": 23}], "startColumn": 6
+    }},
+    {"code": "intermediatePrecision.peakArea", "label": "峰面积", "level": "injections", "config": {
+      "regions": [{"rowStart": 3, "rowEnd": 8}, {"rowStart": 18, "rowEnd": 23}], "startColumn": 7
+    }},
+    {"code": "intermediatePrecision.concentration", "label": "测得浓度（ng/ml）", "level": "injections", "config": {
+      "regions": [{"rowStart": 3, "rowEnd": 8}, {"rowStart": 18, "rowEnd": 23}], "startColumn": 8
+    }},
+    {"code": "uncategorized.field_134", "level": "injections", "config": {
+      "regions": [{"rowStart": 3, "rowEnd": 8}, {"rowStart": 18, "rowEnd": 23}], "startColumn": 9
+    }},
+    {"code": "intermediatePrecision.aRetentionRsd", "label": "技术员A-保留时间RSD（n=6，%）", "level": "", "config": {
+      "rowStart": 9, "rowEnd": 9, "startColumn": 6
+    }},
+    {"code": "intermediatePrecision.aContentRsd", "label": "技术员A-含量RSD（n=6，%）", "level": "", "config": {
+      "rowStart": 9, "rowEnd": 9, "startColumn": 9
+    }},
+    {"code": "uncategorized.field_137", "level": "", "config": {
+      "rowStart": 24, "rowEnd": 24, "startColumn": 6
+    }},
+    {"code": "uncategorized.field_138", "level": "", "config": {
+      "rowStart": 24, "rowEnd": 24, "startColumn": 9
+    }},
+    {"code": "uncategorized.field_139", "level": "", "config": {
+      "rowStart": 26, "rowEnd": 26, "valueMode": "CELL_PAIR", "pairColumns": [6, 9], "displayDecimals": 1
+    }},
+    {"code": "uncategorized.field_140", "level": "", "config": {
+      "rowStart": 27, "rowEnd": 27, "valueMode": "CELL_PAIR", "pairColumns": [6, 9], "displayDecimals": 0
+    }},
+    {"code": "uncategorized.field_141", "level": "", "config": {
+      "rowStart": 30, "rowEnd": 30, "startColumn": 10, "displayDecimals": 1
+    }},
+    {"code": "uncategorized.field_142", "level": "", "config": {
+      "rowStart": 32, "rowEnd": 32, "valueMode": "CELL_PAIR", "pairColumns": [6, 9], "displayDecimals": 1
+    }},
+    {"code": "uncategorized.field_143", "level": "", "config": {
+      "rowStart": 33, "rowEnd": 33, "valueMode": "CELL_PAIR", "pairColumns": [6, 9], "displayDecimals": 0
+    }}
+  ],
+  "tableLayout": {
+    "detailPath": "injections",
+    "unavailableFields": [{"field": "field_144", "label": "结论", "source": "需另行绑定真实结论来源"}],
+    "headingField": "impurityName",
+    "headingFormat": "{value}-中间精密度-加标供试品试验结果表",
+    "segments": [
+      {"row": 2, "start": 0, "count": 6, "groupCells": {"0": "field_128"},
+       "detailCells": {"1": "sequence", "2": "weighing", "3": "retentionTime", "4": "peakArea", "5": "concentration", "6": "field_134"}},
+      {"row": 4, "start": 6, "count": 6, "groupCells": {"0": "field_145"},
+       "detailCells": {"1": "sequence", "2": "weighing", "3": "retentionTime", "4": "peakArea", "5": "concentration", "6": "field_134"}}
+    ],
+    "summaryRows": [
+      {"row": 3, "cells": {"0": "field_128", "3": "aRetentionRsd", "5": "aContentRsd"}},
+      {"row": 5, "cells": {"0": "field_145", "3": "field_137", "5": "field_138"}},
+      {"row": 6, "cells": {"0": "field_145", "2": "field_139"}},
+      {"row": 7, "cells": {"0": "field_145", "2": "field_140"}},
+      {"row": 8, "cells": {"1": "field_141"}},
+      {"row": 9, "cells": {"1": "field_142"}},
+      {"row": 10, "cells": {"1": "field_143"}},
+      {"row": 11, "optional": true, "cells": {"1": "field_144"}}
+    ]
+  }
+}
