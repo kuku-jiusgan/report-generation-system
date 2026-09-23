@@ -198,7 +198,9 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
                     required_codes.add(dependency)
                     pending_codes.append(dependency)
     system_fields = [field for field in all_fields if field["fieldCode"] in required_codes]
-    render_payload = standard_context_payload(data, payload)
+    render_payload = standard_context_payload(
+        data, payload, fields=system_fields, rules=all_rules,
+    )
     resolve_system_fields(system_fields, all_rules, render_payload, data)
     output_path = settings.reports_dir / output_name
     candidate_path = output_path.with_name(f".{output_path.stem}-{uuid.uuid4().hex[:8]}.docx")
@@ -352,7 +354,9 @@ def create_report(request: CreateReportRequest,
         # 在报告和首条生成历史入库前解析系统字段，确保后台详情反映本次提取结果。
         fields = database.list_lims_fields()
         rules = database.list_system_field_rules()
-        resolve_system_fields(fields, rules, standard_context_payload(data), data)
+        resolve_system_fields(
+            fields, rules, standard_context_payload(data, fields=fields, rules=rules), data,
+        )
         if not data["project_name"] and data["sample"]:
             data["project_name"] = f"{data['sample']}分析报告"
         report_id = uuid.uuid4().hex

@@ -72,12 +72,15 @@ def standard_group_values(report_data: dict[str, Any], fallback: dict[str, Any] 
 
 def standard_context_payload(
     report_data: dict[str, Any], active_payload: dict[str, Any] | None = None,
+    *, fields: list[dict[str, Any]] | None = None, rules: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """构造渲染/AI 临时视图；每个编组按字段溯源选择唯一来源。"""
+    """构造渲染/AI 临时视图；标准编组按字段目录和字段级来源选择命名空间。"""
     from copy import deepcopy
     payloads = report_data.get("source_payloads", {})
     if not isinstance(payloads, dict):
         raise ValueError("报告数据源载荷格式无效")
+    if (fields is None) != (rules is None):
+        raise ValueError("构造标准载荷时字段目录和字段规则必须同时提供")
     fallback = active_payload
     if fallback is None:
         legacy_source = str(report_data.get("active_source_type") or "").upper()
@@ -92,6 +95,21 @@ def standard_context_payload(
         str(code) for source in source_payloads if isinstance(source, dict)
         for code in source if code != "_meta"
     }
-    view = deepcopy({code: value for code, value in standard_group_values(report_data, fallback, codes).items()
-                     if value is not None and code != '_meta'})
+    catalog_group_codes = {
+        str(field.get("collectionCode") or "")
+        for field in fields or [] if field.get("collectionCode")
+    }
+    group_codes = codes & catalog_group_codes
+    legacy_codes = codes - group_codes
+    view = deepcopy({
+        code: value
+        for code, value in standard_group_values(report_data, fallback, legacy_codes).items()
+        if value is not None and code != "_meta"
+    })
+    if fields is not None and rules is not None:
+        # 标准编组归属只能读取字段目录的 collectionCode；字段编码可能是
+        # uncategorized.field_*，不能用字段编码前缀猜测所属编组。
+        from .system_field_resolver import resolve_group_source_values
+        selected = resolve_group_source_values(fields, rules, report_data, {}, group_codes)
+        view.update(deepcopy({code: value for code, value in selected.items() if value is not None}))
     return view

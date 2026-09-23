@@ -67,6 +67,31 @@ def read_protocol_structure(path: Path) -> list[dict[str, Any]]:
     return blocks
 
 
+def read_protocol_header_structure(path: Path) -> list[dict[str, Any]]:
+    """读取方案已有页眉；字段定位条件由提取规则负责。"""
+    document = Document(path)
+    blocks = []
+    seen_parts = set()
+    table_number = 0
+    for section in document.sections:
+        for header in (section.header, section.first_page_header, section.even_page_header):
+            part_name = str(header.part.partname)
+            if part_name in seen_parts:
+                continue
+            seen_parts.add(part_name)
+            for table in header.tables:
+                table_number += 1
+                try:
+                    rows = _table_rows(table, table_number)
+                except ValueError as error:
+                    blocks.append({'kind': 'table', 'table': table_number, 'headerPart': part_name,
+                                   'error': str(error), 'section': '页眉'})
+                    continue
+                blocks.append({'kind': 'table', 'rows': rows, 'table': table_number,
+                               'headerPart': part_name, 'section': '页眉'})
+    return blocks
+
+
 def _table_rows(table: Table, table_number: int) -> list[list[str]]:
     rows = []
     width = len(table.columns)

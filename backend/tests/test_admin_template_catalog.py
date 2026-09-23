@@ -1,5 +1,6 @@
 import asyncio
 import os
+import zipfile
 from pathlib import Path
 
 import jwt
@@ -228,10 +229,25 @@ def test_publish_freezes_artifact_without_creating_a_draft(tmp_path: Path, monke
     repository.seed()
     router = create_admin_router(repository, settings, AuthManager(database, settings))
 
+    save_events: list[str] = []
+
+    def request_save(*_args) -> bool:
+        save_events.append("requested")
+        return True
+
+    def finish_save(path: Path, _before: int) -> None:
+        with zipfile.ZipFile(path, "a") as archive:
+            archive.writestr("onlyoffice-saved.txt", b"saved before publish")
+        save_events.append("completed")
+
     def compile_copy(source: Path, output: Path, *_args) -> dict:
+        assert save_events == ["requested", "completed"]
+        save_events.append("compiled")
         output.write_bytes(source.read_bytes())
         return {"valid": True, "errors": [], "warnings": []}
 
+    monkeypatch.setattr("backend.app.admin_api.request_onlyoffice_force_save", request_save)
+    monkeypatch.setattr("backend.app.admin_api.wait_for_file_update", finish_save)
     monkeypatch.setattr("backend.app.admin_routes.publishing.compile_template", compile_copy)
     publish = next(route.endpoint for route in router.routes if route.path == "/api/v1/admin/publish")
     callback = next(
@@ -256,6 +272,8 @@ def test_publish_freezes_artifact_without_creating_a_draft(tmp_path: Path, monke
     assert workspace["versionStatus"] == "PUBLISHED"
     assert workspace["versionId"] == published["id"]
     assert Path(workspace["templateFile"]) == artifact
+    with zipfile.ZipFile(artifact) as archive:
+        assert archive.read("onlyoffice-saved.txt") == b"saved before publish"
     assert len(repository.list_template_versions(published["templateId"])) == 1
 
     with pytest.raises(HTTPException, match="已发布或历史模板版本不可进入设计器") as activate_error:
@@ -281,3 +299,44 @@ def test_publish_freezes_artifact_without_creating_a_draft(tmp_path: Path, monke
     })))
     assert result == {"error": 1}
     assert artifact.read_bytes() == frozen_bytes
+
+
+@pytest.mark.parametrize("route_path", ["/api/v1/admin/validate", "/api/v1/admin/publish"])
+def test_template_processing_stops_when_save_callback_times_out(
+    tmp_path: Path, monkeypatch, route_path: str,
+) -> None:
+    initial_template = tmp_path / "templates" / "report-template.docx"
+    initial_template.parent.mkdir(parents=True)
+    initial_template.write_bytes((PROJECT_ROOT / "templates" / "report-template.docx").read_bytes())
+    settings = Settings(
+        data_dir=tmp_path / "data", template_path=initial_template,
+        onlyoffice_url="http://127.0.0.1:8088", onlyoffice_jwt_secret="test-secret",
+        public_base_url="http://127.0.0.1:8010",
+    )
+    settings.ensure_directories()
+    database = Database(settings)
+    database.initialize()
+    repository = RuleAdminRepository(database, PROJECT_ROOT / "mapping" / "template-mapping.json")
+    repository.seed()
+    router = create_admin_router(repository, settings, AuthManager(database, settings))
+    compile_called = False
+
+    def timeout(*_args) -> None:
+        raise TimeoutError("callback timeout")
+
+    def unexpected_compile(*_args) -> dict:
+        nonlocal compile_called
+        compile_called = True
+        return {"valid": True, "errors": [], "warnings": []}
+
+    monkeypatch.setattr("backend.app.admin_api.request_onlyoffice_force_save", lambda *_args: True)
+    monkeypatch.setattr("backend.app.admin_api.wait_for_file_update", timeout)
+    monkeypatch.setattr("backend.app.admin_routes.publishing.compile_template", unexpected_compile)
+    endpoint = next(route.endpoint for route in router.routes if route.path == route_path)
+
+    with pytest.raises(HTTPException, match="模板保存回调超时") as error:
+        endpoint({"note": "不应发布"}) if route_path.endswith("publish") else endpoint()
+
+    assert error.value.status_code == 504
+    assert compile_called is False
+    assert repository.active_workspace()["versionStatus"] == "DRAFT"

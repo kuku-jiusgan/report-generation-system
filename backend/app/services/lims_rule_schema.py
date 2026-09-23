@@ -2,6 +2,12 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from .result_transform_schema import (
+    RESULT_TRANSFORM_GROUPS,
+    RESULT_TRANSFORMS,
+    validate_result_transform,
+)
+
 
 UNIT_TYPES = ["Sample", "Standard", "Equipment", "Chromatogram", "Reagent", "Weighing"]
 RECORD_MODES = [
@@ -9,14 +15,7 @@ RECORD_MODES = [
     {"value": "COLUMNS", "label": "按数据列"},
     {"value": "MATRIX", "label": "矩阵单元格"},
 ]
-LIMS_TRANSFORMS = [
-    {"value": "TRIM", "label": "去除首尾空白"},
-    {"value": "NUMBER", "label": "转换为数值"},
-    {"value": "DATE", "label": "转换为日期"},
-    {"value": "UPPER", "label": "转为大写"},
-    {"value": "LOWER", "label": "转为小写"},
-    {"value": "REGEX_REPLACE", "label": "正则替换"},
-]
+LIMS_TRANSFORMS = RESULT_TRANSFORMS
 
 
 def _field(key: str, label: str, kind: str = "text", **options: Any) -> dict[str, Any]:
@@ -118,13 +117,7 @@ EXTRACTION_TYPES = [
     },
 ]
 DIRECT_TYPES = frozenset(item["value"] for item in EXTRACTION_TYPES)
-TRANSFORM_GROUPS = [
-    _group(2, [
-        _field("replacePattern", "替换正则", "textarea", rows=2, validation="regex",
-               placeholder="例如 (?:\\([^()（）]*=[^()（）]*\\)|（[^()（）]*=[^()（）]*）)"),
-        _field("replaceWith", "替换为", placeholder="留空表示删除匹配内容"),
-    ], when={"key": "transform", "value": "REGEX_REPLACE"}),
-]
+TRANSFORM_GROUPS = RESULT_TRANSFORM_GROUPS
 
 
 def lims_rule_metadata() -> dict[str, Any]:
@@ -192,6 +185,5 @@ def validate_lims_rule_config(config: dict[str, Any], transform: str) -> dict[st
                 re.compile(str(value))
             except re.error as error:
                 raise ValueError(f"{key} 正则无效：{error}") from error
-    if normalized_transform == "REGEX_REPLACE" and not str(normalized.get("replacePattern") or ""):
-        raise ValueError("正则替换必须配置替换正则")
+    validate_result_transform(normalized, normalized_transform, "LIMS ")
     return normalized

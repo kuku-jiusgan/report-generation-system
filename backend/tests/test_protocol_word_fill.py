@@ -35,7 +35,7 @@ def generate(tmp_path, body, mappings, data, table_rules=None):
     template, output = tmp_path / 'template.docx', tmp_path / 'out.docx'
     with ZipFile(template, 'w') as archive:
         archive.writestr('word/document.xml', f'<w:document xmlns:w="{W_NS}"><w:body>{body}</w:body></w:document>')
-    build_mapped_docx(template, output, mappings, data.get('source_payloads', {}).get('EXCEL', {}), data, table_rules)
+    build_mapped_docx(template, output, mappings, standard_context_payload(data), data, table_rules)
     with ZipFile(output) as archive:
         return etree.fromstring(archive.read('word/document.xml'))
 

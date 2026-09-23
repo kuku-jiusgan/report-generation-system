@@ -6,7 +6,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ..services.protocol_extractor import extract_protocol
-from ..services.protocol_rules import PROTOCOL_MODES, PROTOCOL_INPUTS, validate_protocol_rule
+from ..services.protocol_rules import (
+    PROTOCOL_INPUTS,
+    PROTOCOL_MODES,
+    PROTOCOL_TRANSFORM_GROUPS,
+    PROTOCOL_TRANSFORMS,
+    validate_protocol_rule,
+)
 from ..services.system_field_groups import list_system_field_groups
 
 logger = logging.getLogger(__name__)
@@ -24,7 +30,7 @@ def _preview_inputs(database, field: dict, rule: dict, groups: list[dict], item:
         if not isinstance(mappings, list) or not all(isinstance(mapping, dict) and mapping.get('sourceType') == 'PROTOCOL' for mapping in mappings):
             raise ValueError('方案试提取的来源映射必须是方案配置数组')
         group['sourceMappings'] = [mapping for mapping in group['sourceMappings'] if mapping.get('sourceType') != 'PROTOCOL'] + mappings
-    validate_protocol_rule(field, rule['config'], groups)
+    validate_protocol_rule(field, rule['config'], groups, str(rule.get('transform') or 'TRIM'))
     mapping = next(mapping for mapping in group['sourceMappings'] if mapping['sourceType'] == 'PROTOCOL')
     parent_code = (mapping.get('rowExpansion') or {}).get('parentFieldCode')
     if not parent_code or parent_code == field['fieldCode']:
@@ -46,7 +52,8 @@ def register_protocol_rule_routes(router: APIRouter, repository, settings) -> No
     @router.get('/protocol-rule-metadata')
     def protocol_metadata() -> dict[str, Any]:
         return {'sourceType': 'PROTOCOL', 'sourceLabel': '方案提取', 'modes': PROTOCOL_MODES,
-                'inputs': PROTOCOL_INPUTS,
+                'inputs': PROTOCOL_INPUTS, 'transforms': PROTOCOL_TRANSFORMS,
+                'transformGroups': PROTOCOL_TRANSFORM_GROUPS,
                 'documents': [{'id': source['id'], 'fileName': source['file_name']}
                               for source in repository.database.list_sources() if source['source_type'] == 'PROTOCOL']}
 
@@ -66,7 +73,7 @@ def register_protocol_rule_routes(router: APIRouter, repository, settings) -> No
             fields, rules, groups = _preview_inputs(repository.database, field,
                 {'fieldCode': field['fieldCode'], 'name': '试提取', 'sourceType': 'PROTOCOL',
                  'transform': item.get('transform', 'TRIM'), 'config': config}, groups, item)
-            validate_protocol_rule(field, config, groups)
+            validate_protocol_rule(field, config, groups, str(item.get('transform') or 'TRIM'))
             payload = extract_protocol(settings.uploads_dir / source['stored_name'], source['id'], fields,
                 rules, groups,
                 settings.max_upload_mb * 1024 * 1024, strict=False)

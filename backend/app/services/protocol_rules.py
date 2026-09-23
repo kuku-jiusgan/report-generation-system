@@ -3,6 +3,11 @@ import re
 from typing import Any
 
 from .protocol_row_expansion import validate_expanded_path, validate_row_expansion
+from .result_transform_schema import (
+    RESULT_TRANSFORM_GROUPS,
+    RESULT_TRANSFORMS,
+    validate_result_transform,
+)
 
 
 PROTOCOL_MODES = [
@@ -10,6 +15,8 @@ PROTOCOL_MODES = [
     {'value': 'SECTION', 'label': '章节正文', 'inputs': ['sectionPattern', 'endPattern', 'valuePattern']},
     {'value': 'RAW_BLOCK', 'label': '连续原文块（保留 Word 格式）',
      'inputs': ['sectionPattern', 'endPattern', 'includeStart']},
+    {'value': 'HEADER_TABLE_CELL', 'label': '页眉表格标签右侧单元格',
+     'inputs': ['labelPattern', 'rowPattern', 'valuePattern']},
     {'value': 'TABLE_CELL', 'label': '表格标签右侧单元格', 'inputs': ['sectionPattern', 'endPattern', 'headerPattern', 'labelPattern', 'rowPattern', 'valuePattern']},
     {'value': 'TABLE_COLUMN', 'label': '表格列单值', 'inputs': ['sectionPattern', 'endPattern', 'headerPattern', 'columnPattern', 'rowPattern', 'valuePattern']},
     {'value': 'TABLE_ROWS', 'label': '表格全部明细行', 'inputs': ['groupCode']},
@@ -17,7 +24,7 @@ PROTOCOL_MODES = [
 PROTOCOL_INPUTS = {
     'sectionPattern': {'label': '起始章节 / 段落正则', 'help': '标题按完整章节路径匹配（层级用 / 分隔），普通段落按文字匹配；必须唯一。'},
     'endPattern': {'label': '结束段落正则（可选）', 'help': '起点没有标题层级时必须填写；结束段落本身不复制。'},
-    'labelPattern': {'label': '标签正则', 'help': '正文取标签后的文字；表格取标签右侧单元格。'},
+    'labelPattern': {'label': '标签正则', 'help': '正文取标签后的文字；正文或页眉表格取标签右侧单元格。'},
     'valuePattern': {'label': '取值正则（可选）', 'help': '存在捕获组时取第一组，否则取完整匹配；必须唯一匹配。'},
     'headerPattern': {'label': '表头正则', 'help': '完整表头行以制表符连接，必须唯一匹配。'},
     'columnPattern': {'label': '列标题正则', 'help': '必须唯一匹配一个表头单元格。'},
@@ -28,6 +35,8 @@ PROTOCOL_INPUTS = {
 MODES = {item['value'] for item in PROTOCOL_MODES}
 PATTERNS = ('sectionPattern', 'endPattern', 'labelPattern', 'valuePattern',
             'headerPattern', 'columnPattern', 'rowPattern')
+PROTOCOL_TRANSFORMS = RESULT_TRANSFORMS
+PROTOCOL_TRANSFORM_GROUPS = RESULT_TRANSFORM_GROUPS
 
 
 def validate_protocol_locator(config: dict[str, Any]) -> None:
@@ -44,7 +53,8 @@ def validate_protocol_locator(config: dict[str, Any]) -> None:
         raise ValueError('方案规则必须配置章节路径或起始段落正则')
 
 
-def validate_protocol_rule(field: dict, config: dict, groups: list[dict]) -> None:
+def validate_protocol_rule(field: dict, config: dict, groups: list[dict], transform: str = 'TRIM') -> None:
+    validate_result_transform(config, transform, '方案')
     path = field.get('legacyJsonPath')
     if not isinstance(path, str) or not re.fullmatch(r'\$\.[A-Za-z_][A-Za-z0-9_]*(?:\[\*\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\*\])?)*', path):
         raise ValueError('方案字段缺少有效的标准 JSON 路径')
@@ -100,6 +110,10 @@ def validate_protocol_rule(field: dict, config: dict, groups: list[dict]) -> Non
         if not isinstance(config.get('includeStart', False), bool):
             raise ValueError('原文块是否包含起始段落必须是布尔值')
         return
+    if mode == 'HEADER_TABLE_CELL':
+        if not config.get('labelPattern'):
+            raise ValueError('方案页眉表格取值必须配置标签正则')
+        return
     validate_protocol_locator(config)
     if '[*]' in str(field.get('legacyJsonPath', '')):
         raise ValueError('多行字段请使用方案表格明细提取方式')
@@ -121,7 +135,9 @@ def validate_protocol_conflicts(fields: list[dict], rules: list[dict], groups: l
             raise ValueError(f'字段 {code} 已配置方案来源，不能同时启用其他取值规则')
         if code not in by_code:
             raise ValueError(f'方案规则引用的字段不存在或已停用：{code}')
-        validate_protocol_rule(by_code[code], candidates[0].get('config', {}), groups)
+        rule = candidates[0]
+        validate_protocol_rule(by_code[code], rule.get('config', {}), groups,
+                               str(rule.get('transform') or 'TRIM'))
         path = by_code[code]['legacyJsonPath']
         if path in seen_paths:
             raise ValueError(f'方案字段 {code} 与 {seen_paths[path]} 的标准路径重复：{path}')

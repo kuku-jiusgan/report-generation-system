@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { SystemGroupSourceMapping } from './admin-api'
+import type { LimsRuleInputGroup, SystemGroupSourceMapping } from './admin-api'
 const http = axios.create({ baseURL: '/api/v1/admin', timeout: 120000 })
 http.interceptors.response.use(undefined, error => {
   if (error.response?.status === 401) window.dispatchEvent(new Event('auth-expired'))
@@ -9,6 +9,8 @@ export interface ProtocolMetadata {
   sourceType: 'PROTOCOL'; sourceLabel: string
   modes: Array<{ value: string; label: string; inputs: string[] }>
   inputs: Record<string, { label: string; help: string }>
+  transforms: Array<{ value: string; label: string }>
+  transformGroups: LimsRuleInputGroup[]
   documents: Array<{ id: string; fileName: string }>
 }
 export interface ProtocolFieldResult {

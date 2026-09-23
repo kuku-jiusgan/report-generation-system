@@ -466,8 +466,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         config["token"] = jwt.encode(config, settings.onlyoffice_jwt_secret, algorithm="HS256")
         return {"documentServerUrl": settings.onlyoffice_url, "config": config}
 
-    @router.post("/onlyoffice/force-save")
-    def template_onlyoffice_force_save() -> dict[str, Any]:
+    def save_active_template_draft() -> dict[str, Any]:
         workspace = repository.active_workspace()
         if not workspace:
             raise HTTPException(409, "没有活动模板版本")
@@ -491,8 +490,12 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
         try:
             wait_for_file_update(path, before)
         except TimeoutError as error:
-            raise HTTPException(504, "Word 绑定已完成，但模板保存回调超时，请稍后重试") from error
+            raise HTTPException(504, "模板保存回调超时，请稍后重试") from error
         return {"saved": True, "versionId": version_id}
+
+    @router.post("/onlyoffice/force-save")
+    def template_onlyoffice_force_save() -> dict[str, Any]:
+        return save_active_template_draft()
 
     @router.post("/onlyoffice/callback/{version_id}")
     async def template_onlyoffice_callback(version_id: str, request: Request) -> dict[str, int]:
@@ -557,7 +560,8 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     register_protocol_rule_routes(router, repository, settings)
     register_data_source_routes(router, repository)
     register_publishing_routes(
-        router, repository, file_store.ensure_active_draft, file_store.publish_version, compiled_dir,
+        router, repository, file_store.ensure_active_draft, save_active_template_draft,
+        file_store.publish_version, compiled_dir,
         lambda snapshot: apply_template_block_rules(
             snapshot, list_system_field_groups(repository.database), repository.database.list_lims_fields(True),
         ),

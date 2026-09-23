@@ -22,9 +22,9 @@ def field(code='project.code', path='$.project.code', group='project'):
             'collectionCode': group, 'dataType': 'string', 'enabled': True}
 
 
-def rule(code='project.code', mode='LABEL', **config):
+def rule(code='project.code', mode='LABEL', transform='TRIM', **config):
     return {'id': 41, 'fieldCode': code, 'name': '方案规则', 'sourceType': 'PROTOCOL',
-            'transform': 'TRIM', 'enabled': True, 'config': {'mode': mode, 'required': True,
+            'transform': transform, 'enabled': True, 'config': {'mode': mode, 'required': True,
             **({'sectionPattern': '概述', 'labelPattern': '方案编号'} if mode == 'LABEL' else {}), **config}}
 
 
@@ -78,6 +78,66 @@ def test_label_across_runs_and_provenance(tmp_path):
     assert source['document_id'] == 'doc-1'
     assert source['locations'][0]['paragraph'] == 2
     assert source['locations'][0]['quote'] == '方案编号： P-2026'
+
+
+def test_regex_replace_transforms_scalar_protocol_result(tmp_path):
+    configured = rule(transform='REGEX_REPLACE', replacePattern='^P-', replaceWith='R-')
+
+    result = extract(scheme(tmp_path), rules=[configured])
+
+    assert result['project']['code'] == 'R-2026'
+
+
+def test_document_code_from_header_table_uses_field_rule(tmp_path):
+    document = Document()
+    table = document.sections[0].header.add_table(rows=1, cols=2, width=1)
+    table.cell(0, 0).text = '文件编号'
+    table.cell(0, 1).text = 'ZBYY/MV-R XM2026234-02'
+    path = tmp_path / '页眉编号方案.docx'
+    document.save(path)
+
+    result = extract(path, fields=[field('document.code', '$.document.code', 'document')],
+        rules=[rule('document.code', 'HEADER_TABLE_CELL', labelPattern='^文件编号$')])
+
+    assert result['document']['code'] == 'ZBYY/MV-R XM2026234-02'
+    location = result['_meta']['fields']['document.code']['source']['locations'][0]
+    assert location == {'section': '页眉', 'table': 1, 'row': 1, 'column': 2,
+                        'quote': 'ZBYY/MV-R XM2026234-02'}
+
+
+def test_header_title_is_selected_and_replaced_by_field_rule(tmp_path):
+    document = Document()
+    table = document.sections[0].header.add_table(rows=3, cols=4, width=1)
+    for row, marker in zip(table.rows, ('文件编号', '版 本 号', '页    码')):
+        row.cells[0].text = '文件标题'
+        row.cells[1].text = '加替沙星原料药中N-亚硝基加替沙星分析方法\n验证方案'
+        row.cells[2].text = marker
+    path = tmp_path / '页眉标题方案.docx'
+    document.save(path)
+    title_rule = rule('header.field_001', 'HEADER_TABLE_CELL', labelPattern='^文件标题$',
+        transform='REGEX_REPLACE', rowPattern='文件编号',
+        replacePattern='验证方案$', replaceWith='验证报告')
+
+    result = extract(path, fields=[field('header.field_001', '$.document.field_001', 'document')],
+                     rules=[title_rule])
+
+    assert result['document']['field_001'] == '加替沙星原料药中N-亚硝基加替沙星分析方法\n验证报告'
+    assert result['_meta']['fields']['header.field_001']['source']['locations'][0]['quote'].endswith('验证方案')
+
+
+def test_header_replacement_must_match_once(tmp_path):
+    document = Document()
+    table = document.sections[0].header.add_table(rows=1, cols=2, width=1)
+    table.cell(0, 0).text = '文件标题'
+    table.cell(0, 1).text = '没有待替换内容'
+    path = tmp_path / '页眉标题不匹配方案.docx'
+    document.save(path)
+    title_rule = rule('header.field_001', 'HEADER_TABLE_CELL', labelPattern='^文件标题$',
+        transform='REGEX_REPLACE', replacePattern='验证方案$', replaceWith='验证报告')
+
+    with pytest.raises(ValueError, match='结果替换正则：未匹配'):
+        extract(path, fields=[field('header.field_001', '$.document.field_001', 'document')],
+                rules=[title_rule])
 
 
 def test_section_has_exact_boundary_and_paragraphs(tmp_path):
@@ -151,6 +211,16 @@ def test_table_rows_share_record_order(tmp_path):
     assert [item['row'] for item in sources['instruments.model']['source']['locations']] == [2, 3]
 
 
+def test_regex_replace_transforms_each_protocol_table_row(tmp_path):
+    fields, rules, groups = detail_config()
+    rules[0].update({'transform': 'REGEX_REPLACE'})
+    rules[0]['config'].update({'replacePattern': '^仪器', 'replaceWith': '设备'})
+
+    result = extract(scheme(tmp_path), fields, rules, groups)
+
+    assert [item['name'] for item in result['instruments']] == ['设备甲', '设备乙']
+
+
 def test_table_filter_and_single_value(tmp_path):
     result = extract(scheme(tmp_path), rules=[rule(mode='TABLE_COLUMN', sectionPattern='材料',
         headerPattern='^名称\\t型号$', columnPattern='^型号$', rowPattern='仪器乙')])
@@ -203,6 +273,8 @@ def test_rule_conflicts_and_invalid_regex_are_explicit():
         validate_protocol_conflicts([field()], [rule(), {'fieldCode': 'project.code', 'sourceType': 'LIMS'}], [])
     with pytest.raises(ValueError, match='正则无效'):
         validate_protocol_conflicts([field()], [rule(labelPattern='[')], [])
+    with pytest.raises(ValueError, match='必须配置替换正则'):
+        validate_protocol_conflicts([field()], [rule(transform='REGEX_REPLACE')], [])
     with pytest.raises(ValueError, match='明细展开'):
         fields, rules, groups = detail_config()
         fields[0]['legacyJsonPath'] = '$.instruments[*].details[*].name'
@@ -283,6 +355,18 @@ def test_preview_is_read_only_and_shows_required_failure(tmp_path):
     assert result['errors']
     repository.database.update_source_payload.assert_not_called()
     repository.database.update_report.assert_not_called()
+
+
+def test_protocol_metadata_exposes_shared_result_transforms():
+    repository = MagicMock()
+    repository.database.list_sources.return_value = []
+    router = APIRouter()
+    register_protocol_rule_routes(router, repository, SimpleNamespace())
+    metadata = next(route.endpoint for route in router.routes
+                    if route.path.endswith('/protocol-rule-metadata'))()
+
+    assert metadata['transforms'][-1] == {'value': 'REGEX_REPLACE', 'label': '正则替换'}
+    assert metadata['transformGroups'][0]['fields'][0]['key'] == 'replacePattern'
 
 
 def test_group_locator_validation():

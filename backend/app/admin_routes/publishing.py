@@ -8,6 +8,7 @@ from ..services.template_compiler import compile_template
 
 def register_publishing_routes(router: APIRouter, repository: RuleAdminRepository,
                                ensure_draft_template: Callable[[], Path],
+                               save_draft_template: Callable[[], dict[str, Any]],
                                publish_version_document: Callable[[str, str, Path], Path],
                                compiled_dir: Path,
                                apply_content_block_rules: Callable[[dict[str, Any]], list[dict[str, Any]]]) -> None:
@@ -16,8 +17,15 @@ def register_publishing_routes(router: APIRouter, repository: RuleAdminRepositor
         output = compiled_dir / f"report-template-bound-{uuid.uuid4().hex[:8]}.docx"
         mappings = apply_content_block_rules(snapshot)
         return output, compile_template(ensure_draft_template(), output, mappings, snapshot["tableRules"])
+    def require_unchanged_draft(version_id: str) -> dict[str, Any]:
+        current = repository.active_workspace()
+        if (not current or current.get("versionId") != version_id
+                or current.get("versionStatus") != "DRAFT"):
+            raise HTTPException(409, "模板草稿在处理期间发生变化，请重新打开后再发布")
+        return current
     @router.post('/validate')
     def validate_rules() -> dict[str, Any]:
+        save_draft_template()
         output, report = run_compile(); report['previewTemplate'] = output.name; return report
     @router.post('/publish')
     def publish_rules(item: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -25,9 +33,12 @@ def register_publishing_routes(router: APIRouter, repository: RuleAdminRepositor
             active = repository.active_workspace()
             if not active or active.get("versionStatus") != "DRAFT":
                 raise HTTPException(409, "只有草稿版本可以发布")
+            save_draft_template()
+            require_unchanged_draft(str(active["versionId"]))
             output, report = run_compile()
+            current = require_unchanged_draft(str(active["versionId"]))
             if not report['valid']: raise HTTPException(422, {'message': '规则校验失败，不能发布', 'validation': report})
-            artifact = publish_version_document(active["templateId"], active["versionId"], output)
+            artifact = publish_version_document(current["templateId"], current["versionId"], output)
             published = repository.publish_active_template_version(
                 repository.snapshot(), report, str(artifact),
             )

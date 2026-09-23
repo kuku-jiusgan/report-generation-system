@@ -13,7 +13,7 @@ from typing import Any, Callable
 from lxml import etree
 
 from .docx_field_values import (
-    format_value, is_formula_calculation, mapping_source_path, payload_for_mapping,
+    format_value, is_formula_calculation, mapping_source_path,
     record_value, repeat_source, row_calculated_values, set_control_text, tag_of,
 )
 from .docx_group_columns import expand_group_columns, fill_group_headers, find_group_span
@@ -22,7 +22,6 @@ from .docx_summary_rows import (
     clear_unmapped_summary_cells, fill_preserved_summary_rows, is_preserved_summary_row,
 )
 from .table_layout_rules import TableLayoutRules, repeat_bookmark_name
-from .standard_payloads import standard_group_values
 from .docx_table_repeat import fill_table_repeat
 
 
@@ -506,11 +505,13 @@ def fill_repeat_rows(document: etree._Element, mappings: list[dict[str, Any]], p
         if source_mapping is None:
             warn('BLOCK_SOURCE_MISSING', table_no, '循环表没有属于目标编组的字段映射，请修正模板绑定。')
             continue
-        source_payload = payload_for_mapping(source_mapping, payload, report_data)
-        raw_records = standard_group_values(report_data, source_payload, {source[0]}).get(source[0])
+        # payload 是字段解析完成后的渲染视图，里面既有选定的直接来源记录，也有按标准路径
+        # 落位的 AI/计算字段。循环表必须读取这份视图，不能根据首个字段重新切回 Excel/LIMS
+        # 命名空间，否则同一编组内的派生字段会在 Word 写入阶段丢失。
+        raw_records = payload.get(source[0])
         empty_behavior = next((item.get("blockEmptyBehavior") for item in group
                                if item.get("blockEmptyBehavior")), "KEEP")
-        if raw_records is None and source[0] not in source_payload:
+        if raw_records is None and source[0] not in payload:
             # 可选编组没有出现在当前来源时，仍按内容块的“无数据时”规则处理；
             # 否则 KEEP 会跳过原型行，导致控件里的模板示例文字泄漏到报告。
             records = []

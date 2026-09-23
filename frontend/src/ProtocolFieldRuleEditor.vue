@@ -5,7 +5,8 @@ import { adminApi, type SystemFieldGroup, type SystemGroupSourceMapping } from '
 import SystemGroupSourceMappings from './SystemGroupSourceMappings.vue'
 import { loadProtocolMetadata, previewProtocolRule, type ProtocolMetadata, type ProtocolPreview } from './protocol-api'
 const config = defineModel<Record<string, unknown>>({ required: true })
-const props = defineProps<{ groups: SystemFieldGroup[]; fieldCode: string; transform: string }>()
+const transform = defineModel<string>('transform', { required: true })
+const props = defineProps<{ groups: SystemFieldGroup[]; fieldCode: string }>()
 const emit = defineEmits<{ 'group-updated': [group: SystemFieldGroup]; 'mapping-dirty': [dirty: boolean] }>()
 const sharedDraft = ref<SystemGroupSourceMapping[]>([])
 const savedMappings = ref('[]')
@@ -43,6 +44,9 @@ const documentId = ref('')
 const result = ref<ProtocolPreview>()
 let requestVersion = 0
 const mode = computed(() => metadata.value?.modes.find(item => item.value === config.value.mode))
+const transformGroups = computed(() => metadata.value?.transformGroups.filter(group =>
+  !group.when || (group.when.key === 'transform' ? transform.value : config.value[group.when.key]) === group.when.value,
+) || [])
 const availableGroups = computed(() => props.groups.filter(group => group.enabled && group.cardinality === 'MANY' && group.fields.some(field => field.fieldCode === props.fieldCode)))
 function errorText(cause: unknown) {
   const response = cause as { response?: { data?: { detail?: string } }; message?: string }
@@ -59,7 +63,7 @@ async function preview() {
   const version = ++requestVersion
   previewing.value = true; previewError.value = ''; result.value = undefined
   try {
-    const output = await previewProtocolRule({ documentId: documentId.value, fieldCode: props.fieldCode, config: config.value, transform: props.transform,
+    const output = await previewProtocolRule({ documentId: documentId.value, fieldCode: props.fieldCode, config: config.value, transform: transform.value,
       ...(config.value.mode === 'TABLE_ROWS' ? { sourceMappings: sharedDraft.value } : {}) })
     if (version === requestVersion) result.value = output
   }
@@ -69,7 +73,7 @@ async function preview() {
 watch(() => config.value.mode, () => {
   config.value = { mode: config.value.mode, required: config.value.required !== false }
 })
-watch([config, documentId, () => props.transform], () => { requestVersion++; result.value = undefined; previewError.value = '' }, { deep: true })
+watch([config, documentId, transform], () => { requestVersion++; result.value = undefined; previewError.value = '' }, { deep: true })
 watch(sharedDraft, () => { requestVersion++; result.value = undefined; previewError.value = ''; mappingError.value = '' }, { deep: true })
 onMounted(load)
 onBeforeUnmount(() => emit('mapping-dirty', false))
@@ -104,6 +108,14 @@ onBeforeUnmount(() => emit('mapping-dirty', false))
           <small class="help">{{ metadata.inputs[key].help }}</small>
         </el-form-item>
       </template>
+      <div class="form-grid two">
+        <el-form-item label="结果转换"><el-select v-model="transform"><el-option v-for="item in metadata.transforms" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+      </div>
+      <div v-for="(group, groupIndex) in transformGroups" :key="`transform-${groupIndex}`" class="form-grid transform-grid" :class="`columns-${group.columns}`">
+        <el-form-item v-for="input in group.fields" :key="input.key" :label="input.label">
+          <el-input :model-value="String(config[input.key] ?? '')" :type="input.kind === 'textarea' ? 'textarea' : 'text'" :rows="input.rows" :placeholder="input.placeholder" @update:model-value="config[input.key] = $event" />
+        </el-form-item>
+      </div>
       <div class="preview-area">
         <el-form-item label="试提取方案"><el-select v-model="documentId" filterable placeholder="选择已上传的 DOCX 方案"><el-option v-for="document in metadata.documents" :key="document.id" :label="document.fileName" :value="document.id" /></el-select></el-form-item>
         <p v-if="!metadata.documents.length" class="help">尚无方案文件，请先在报告创建页面上传方案，再重新打开规则配置。</p>
@@ -124,5 +136,5 @@ onBeforeUnmount(() => emit('mapping-dirty', false))
   </section>
 </template>
 <style scoped>
-.protocol-rule-editor{min-height:100px}.protocol-rule-editor>.el-alert{margin-bottom:20px}.help{display:block;margin-top:6px;color:#52635c;font-size:12px;line-height:1.6}.preview-area{margin-top:24px;padding-top:20px;border-top:1px solid #dce5e1}.preview-area>.el-alert,.preview-area>div{margin-top:16px}.preview-value{max-height:280px;overflow:auto;padding:12px;background:#f4f7fb;white-space:pre-wrap;overflow-wrap:anywhere;color:#263548;font:inherit}.location{padding:10px 0;border-bottom:1px solid #dce5e1}.location p{white-space:pre-wrap;overflow-wrap:anywhere}.form-grid{display:grid;gap:16px}.form-grid.two{grid-template-columns:1fr 1fr}details summary{cursor:pointer;color:#235c4d}@media(max-width:640px){.form-grid.two{grid-template-columns:1fr}}
+.protocol-rule-editor{min-height:100px}.protocol-rule-editor>.el-alert{margin-bottom:20px}.help{display:block;margin-top:6px;color:#52635c;font-size:12px;line-height:1.6}.preview-area{margin-top:24px;padding-top:20px;border-top:1px solid #dce5e1}.preview-area>.el-alert,.preview-area>div{margin-top:16px}.preview-value{max-height:280px;overflow:auto;padding:12px;background:#f4f7fb;white-space:pre-wrap;overflow-wrap:anywhere;color:#263548;font:inherit}.location{padding:10px 0;border-bottom:1px solid #dce5e1}.location p{white-space:pre-wrap;overflow-wrap:anywhere}.form-grid{display:grid;gap:16px}.form-grid.two,.form-grid.columns-2{grid-template-columns:repeat(2,minmax(0,1fr))}.transform-grid{padding:10px 12px 0;background:#f7f9fc;margin-bottom:14px}details summary{cursor:pointer;color:#235c4d}@media(max-width:640px){.form-grid.two,.form-grid.columns-2{grid-template-columns:1fr}}
 </style>

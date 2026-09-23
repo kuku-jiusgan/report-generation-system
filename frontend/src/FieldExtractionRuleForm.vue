@@ -18,6 +18,10 @@ const limsMetadata = ref<LimsRuleMetadata>()
 const limsMetadataLoading = ref(false)
 const limsMetadataError = ref('')
 const availableTransforms = computed(() => rule.value.sourceType === 'LIMS' ? limsMetadata.value?.transforms || [] : transforms)
+const ruleTransform = computed({
+  get: () => rule.value.transform || 'TRIM',
+  set: value => { rule.value.transform = value },
+})
 const limsConfigError = computed(() => {
   const extractionType = String(config.value.extractionType || '')
   if (!limsMetadata.value || !extractionType) return ''
@@ -54,7 +58,7 @@ watch(() => rule.value.sourceType, (sourceType, previous) => {
   emit('mapping-dirty', false)
   if (shouldResetProtocolConfig(sourceType, previous)) config.value = {}
   if (sourceType === 'LIMS') void loadLimsMetadata()
-  if (sourceType !== 'LIMS' && rule.value.transform === 'REGEX_REPLACE') rule.value.transform = 'TRIM'
+  if (!['LIMS', 'PROTOCOL'].includes(sourceType || '') && rule.value.transform === 'REGEX_REPLACE') rule.value.transform = 'TRIM'
 }, { immediate: true })
 </script>
 <template>
@@ -64,7 +68,7 @@ watch(() => rule.value.sourceType, (sourceType, previous) => {
           <el-form-item label="提取方式"><el-select v-model="rule.sourceType"><el-option v-for="item in sourceTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
         </div>
         <div class="rule-origin-note"><b>数据来源：</b>{{ origin }}</div>
-        <ProtocolFieldRuleEditor v-if="rule.sourceType === 'PROTOCOL'" v-model="config" :groups="groups" :field-code="fieldCode" :transform="rule.transform || 'TRIM'" @group-updated="emit('group-updated', $event)" @mapping-dirty="emit('mapping-dirty', $event)" />
+        <ProtocolFieldRuleEditor v-if="rule.sourceType === 'PROTOCOL'" v-model="config" v-model:transform="ruleTransform" :groups="groups" :field-code="fieldCode" @group-updated="emit('group-updated', $event)" @mapping-dirty="emit('mapping-dirty', $event)" />
         <template v-if="rule.sourceType === 'PDF'">
           <el-form-item label="PDF 字段路径或字段编码"><el-input v-model="config.sourcePath" placeholder="默认使用当前系统字段编码" /></el-form-item>
           <el-form-item label="PDF 取值正则（可选）"><el-input v-model="config.valuePattern" /></el-form-item>
@@ -92,7 +96,7 @@ watch(() => rule.value.sourceType, (sourceType, previous) => {
         </div>
         <el-alert v-else-if="rule.sourceType === 'LIMS' && limsConfigError" type="error" :title="limsConfigError" show-icon :closable="false" />
         <LimsFieldRuleEditor v-if="rule.sourceType === 'LIMS' && limsMetadata" v-model="config" :metadata="limsMetadata" :transform="rule.transform || 'TRIM'" />
-        <div class="form-grid two"><el-form-item label="结果转换"><el-select v-model="rule.transform"><el-option v-for="item in availableTransforms" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item><el-form-item label="状态"><el-switch v-model="rule.enabled" active-text="启用" inactive-text="停用" /></el-form-item></div>
+        <div class="form-grid two"><el-form-item v-if="rule.sourceType !== 'PROTOCOL'" label="结果转换"><el-select v-model="rule.transform"><el-option v-for="item in availableTransforms" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item><el-form-item label="状态"><el-switch v-model="rule.enabled" active-text="启用" inactive-text="停用" /></el-form-item></div>
       </el-form>
 </template>
 <style scoped>

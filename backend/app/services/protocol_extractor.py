@@ -7,7 +7,7 @@ from typing import Any
 from .protocol_row_expansion import group_protocol_values, write_protocol_value
 from .protocol_document import validate_protocol_document
 from .protocol_rules import validate_protocol_conflicts
-from .protocol_structure import read_protocol_structure
+from .protocol_structure import read_protocol_header_structure, read_protocol_structure
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,12 @@ def _capture(text: str, pattern: str) -> str:
     if value is None or not value.strip():
         raise ProtocolMatchError('方案提取结果为空')
     return value
+
+
+def _replace(value: str, pattern: str, replacement: str) -> str:
+    matches = list(re.finditer(pattern, value))
+    _unique(matches, '方案结果替换正则')
+    return re.sub(pattern, replacement, value, count=1)
 
 
 def _table(scope: list[dict], config: dict) -> tuple[dict, int]:
@@ -129,6 +135,30 @@ def _raw_block(blocks: list[dict], config: dict) -> tuple[str, list[dict]]:
     return value, locations
 
 
+def _header_table_cell(headers: list[dict], config: dict) -> tuple[str, list[dict]]:
+    candidates = []
+    for block in headers:
+        if 'error' in block:
+            raise ValueError(f"方案页眉表格 {block['table']}：{block['error']}")
+        for row_number, row in enumerate(block['rows'], 1):
+            if config.get('rowPattern') and not re.search(config['rowPattern'], '\t'.join(row)):
+                continue
+            for column, cell in enumerate(row):
+                if re.search(config['labelPattern'], cell):
+                    candidates.append((block, row_number, row, column))
+    block, row_number, row, column = _unique(candidates, '方案页眉表格标签')
+    if column + 1 >= len(row):
+        raise ProtocolMatchError('方案页眉表格标签右侧没有单元格')
+    value = row[column + 1]
+    quote = value
+    if config.get('valuePattern'):
+        value = _capture(value, config['valuePattern'])
+    if not value.strip():
+        raise ProtocolMatchError('方案提取结果为空')
+    location = _quote(block, row=row_number, column=column + 2, quote=quote)
+    return value, [location]
+
+
 def _rows(blocks: list[dict], config: dict, field: dict, groups: list[dict], cache: dict):
     code = config['groupCode']
     group = next(item for item in groups if item['groupCode'] == code)
@@ -168,9 +198,14 @@ def extract_protocol(path: Path | None, document_id: str, fields: list[dict], ru
     selected = [rule for rule in rules if rule.get('enabled', True) and rule.get('sourceType') == 'PROTOCOL']
     if path is not None and selected:
         validate_protocol_document(path, max_bytes)
-        blocks = read_protocol_structure(path)
+        header_mode = 'HEADER_TABLE_CELL'
+        blocks = (read_protocol_structure(path)
+                  if any(rule['config']['mode'] != header_mode for rule in selected) else [])
+        headers = (read_protocol_header_structure(path)
+                   if any(rule['config']['mode'] == header_mode for rule in selected) else [])
     else:
         blocks = []
+        headers = []
     payload: dict[str, Any] = {}
     meta: dict[str, Any] = {'fields': {}, 'warnings': [], 'errors': []}
     by_code = {field['fieldCode']: field for field in fields}
@@ -187,9 +222,11 @@ def extract_protocol(path: Path | None, document_id: str, fields: list[dict], ru
                 value, locations = _rows(blocks, config, field, groups, cache)
             elif config['mode'] == 'RAW_BLOCK':
                 value, locations = _raw_block(blocks, config)
+            elif config['mode'] == 'HEADER_TABLE_CELL':
+                value, locations = _header_table_cell(headers, config)
             else:
                 value, locations = _scalar(_scope(blocks, config), config)
-            value = _transform(value, rule.get('transform', 'TRIM'))
+            value = _transform(value, rule.get('transform', 'TRIM'), config)
             _validate_value(value, field)
             write_protocol_value(payload, field['legacyJsonPath'], value)
             meta['fields'][code] = {'status': 'SUCCESS', 'value': value, 'source': {**source, 'locations': locations}}
@@ -207,9 +244,9 @@ def extract_protocol(path: Path | None, document_id: str, fields: list[dict], ru
     return payload
 
 
-def _transform(value: Any, transform: str) -> Any:
+def _transform(value: Any, transform: str, config: dict) -> Any:
     if isinstance(value, list):
-        return [_transform(item, transform) for item in value]
+        return [_transform(item, transform, config) for item in value]
     if transform == 'TRIM':
         return value.strip()
     if transform == 'UPPER':
@@ -231,6 +268,8 @@ def _transform(value: Any, transform: str) -> Any:
             return date.fromisoformat(value.strip()).isoformat()
         except ValueError as error:
             raise ProtocolMatchError('方案日期必须为 YYYY-MM-DD 格式') from error
+    if transform == 'REGEX_REPLACE':
+        return _replace(value, config['replacePattern'], str(config.get('replaceWith') or ''))
     raise ValueError(f'不支持的方案结果转换：{transform}')
 
 

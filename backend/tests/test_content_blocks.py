@@ -189,6 +189,57 @@ class ContentBlockRegressionTest(unittest.TestCase):
             ["杂质A", "杂质B"],
         )
 
+    def test_repeat_table_reads_ai_field_from_resolved_render_view(self) -> None:
+        document = etree.fromstring(f'''<w:document xmlns:w="{NS['w']}"><w:body>
+          <w:tbl><w:tr><w:bookmarkStart w:id="1" w:name="repeat_t18_row"/>
+            <w:tc><w:sdt><w:sdtPr><w:tag w:val="loq.sequence"/></w:sdtPr>
+              <w:sdtContent><w:p><w:r><w:t>序号</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc>
+            <w:tc><w:sdt><w:sdtPr><w:tag w:val="loq.conclusion"/></w:sdtPr>
+              <w:sdtContent><w:p><w:r><w:t>旧结论</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc>
+          </w:tr></w:tbl></w:body></w:document>''')
+        mappings = [
+            {
+                "enabled": True, "repeatType": "ROW", "tableNo": "T18",
+                "groupItemPath": "$.dingliangxianjieguo[*]",
+                "sourcePath": "$.dingliangxianjieguo[*].injections[*].field_014",
+                "controlTag": "loq.sequence", "fieldCode": "report.loq.sequence",
+                "standardFieldCode": "uncategorized.field_014",
+            },
+            {
+                "enabled": True, "repeatType": "ROW", "tableNo": "T18",
+                "groupItemPath": "$.dingliangxianjieguo[*]",
+                "sourcePath": "$.dingliangxianjieguo[*].summary.field_083",
+                "controlTag": "loq.conclusion", "fieldCode": "report.loq.conclusion",
+                "standardFieldCode": "uncategorized.field_083",
+            },
+        ]
+        render_payload = {"dingliangxianjieguo": [{
+            "injections": [{"field_014": "1"}],
+            "summary": {"field_083": "AI生成的定量限结论"},
+        }]}
+        report_data = {
+            "field_sources": {
+                "uncategorized.field_014": {"type": "EXCEL"},
+                "uncategorized.field_083": {"type": "AI"},
+            },
+            "source_payloads": {
+                "EXCEL": {"dingliangxianjieguo": [{
+                    "injections": [{"field_014": "1"}], "summary": {},
+                }]},
+                "AI": {"uncategorized.field_083": ["AI生成的定量限结论"]},
+            },
+        }
+
+        fill_repeat_rows(
+            document, mappings, render_payload, report_data, {},
+            TableLayoutRules([]), lambda *_args: None,
+        )
+
+        generated = "".join(document.xpath(".//w:t/text()", namespaces=NS))
+        self.assertIn("AI生成的定量限结论", generated)
+        self.assertNotIn("field_083", report_data["source_payloads"]["EXCEL"]
+                         ["dingliangxianjieguo"][0]["summary"])
+
     def test_compiler_accepts_an_interactively_bound_content_control(self) -> None:
         settings = get_settings()
         with tempfile.TemporaryDirectory() as directory:
