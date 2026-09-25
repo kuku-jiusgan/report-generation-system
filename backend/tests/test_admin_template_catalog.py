@@ -197,7 +197,7 @@ def test_new_templates_get_independent_documents_from_initial_template(tmp_path:
     assert f"/onlyoffice/callback/{first_version['id']}" in config["editorConfig"]["callbackUrl"]
     plugin_url = config["editorConfig"]["plugins"]["pluginsData"][0]
     assert plugin_url.startswith(settings.onlyoffice_url)
-    assert plugin_url.endswith("config.json?v=22")
+    assert plugin_url.endswith("config.json?v=26")
     issued_key = config["document"]["key"]
     draft_file = Path(first_version["templateFile"])
     current_time = draft_file.stat().st_mtime_ns

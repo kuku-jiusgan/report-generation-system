@@ -181,8 +181,30 @@ def _expand_row(row: etree._Element, target: int, widths: list[int]) -> None:
         row.remove(cell)
 
 
+def _apply_fixed_row_spans(rows: list[etree._Element], layout: dict[str, Any],
+                           repeated_rows: set[int], target: int) -> None:
+    configured = layout.get("fixedRowSpans") or {}
+    if not isinstance(configured, dict):
+        raise ValueError("矩阵固定行列宽配置必须是对象")
+    total = 1 + target + grid_after(rows[0])
+    for key, spans in configured.items():
+        try:
+            index = int(key) - 1
+        except (TypeError, ValueError) as error:
+            raise ValueError("矩阵固定行行号必须是正整数") from error
+        if index < 0 or index >= len(rows) or index in repeated_rows:
+            raise ValueError(f"矩阵固定行第 {key} 行不存在或属于逐列数据行")
+        cells = rows[index].xpath("./w:tc", namespaces=NS)
+        if (not isinstance(spans, list) or len(spans) != len(cells)
+                or any(type(span) is not int or span < 1 for span in spans)
+                or sum(spans) + grid_after(rows[index]) != total):
+            raise ValueError(f"矩阵固定行第 {key} 行的列宽跨度与数据列数不一致")
+        for cell, span in zip(cells, spans):
+            set_grid_span(cell, span)
+
+
 def _sync_horizontal_grid(table: etree._Element, rows: list[etree._Element],
-                          target: int, widths: list[int]) -> None:
+                          widths: list[int]) -> None:
     grid = table.find("{" + NS["w"] + "}tblGrid")
     original = []
     if grid is not None:
@@ -192,13 +214,24 @@ def _sync_horizontal_grid(table: etree._Element, rows: list[etree._Element],
             except (TypeError, ValueError):
                 original.append(1)
     leading = original[:1] or [cell_width(rows[0].xpath("./w:tc", namespaces=NS)[0])]
-    trailing = original[1 + max(0, len(rows[0].xpath("./w:tc", namespaces=NS)) - 1):] if original else []
+    trailing_count = grid_after(rows[0])
+    trailing = original[-trailing_count:] if trailing_count else []
     sync_table_grid(table, leading + widths + trailing)
     total = len(leading) + len(widths) + len(trailing)
+    grid_widths = leading + widths + trailing
     for row in rows:
         used = sum(grid_span(cell) for cell in row.xpath("./w:tc", namespaces=NS)) + grid_after(row)
         if used != total:
             stretch_merged_row(row, total)
+        offset = 0
+        for cell in row.xpath("./w:tc", namespaces=NS):
+            span = grid_span(cell)
+            if offset + span > total:
+                raise ValueError("矩阵行的合并跨度超过表格网格列数")
+            set_cell_width(cell, sum(grid_widths[offset:offset + span]))
+            offset += span
+        if offset + grid_after(row) != total:
+            raise ValueError("矩阵行的单元格与表格网格列数不一致")
 
 
 def _fill_horizontal_table(table: etree._Element, records: list[dict[str, Any]],
@@ -214,7 +247,8 @@ def _fill_horizontal_table(table: etree._Element, records: list[dict[str, Any]],
         elif row.xpath("./w:tc", namespaces=NS):
             # Fixed/statistical rows keep their cells and only absorb the new grid width.
             continue
-    _sync_horizontal_grid(table, rows, target, widths)
+    _apply_fixed_row_spans(rows, layout, repeated_rows, target)
+    _sync_horizontal_grid(table, rows, widths)
     for row_index in repeated_rows:
         if row_index < len(rows):
             for cell in rows[row_index].xpath("./w:tc", namespaces=NS)[1:]:

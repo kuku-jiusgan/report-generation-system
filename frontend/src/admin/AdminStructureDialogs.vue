@@ -246,9 +246,14 @@ watch(matrixDraft, saveMatrix, { deep: true })
               <el-select v-model="block.tableRule.innerMode">
                 <el-option label="按行重复" value="ROW_REPEAT" />
                 <el-option label="转置矩阵：一条记录占一列" value="MATRIX" />
+                <el-option label="独立行片段：保留各组固定行" value="SEGMENT_REPEAT" />
               </el-select>
             </el-form-item>
           </div>
+          <el-form-item v-if="block.tableRule.mode === 'TABLE_REPEAT' && block.tableRule.innerMode === 'SEGMENT_REPEAT'" label="行片段布局 JSON">
+            <el-input v-model="block.tableRule.matrixLayout" type="textarea" :rows="16" spellcheck="false" />
+            <small class="dialog-hint">为每个片段配置原型行、来源对象路径、明细数组路径、数量和单元格字段；固定行配置在 summaryRows 中。</small>
+          </el-form-item>
           <el-form-item label="清除表内图片">
             <el-switch v-model="block.tableRule.clearEmbeddedObjects" active-text="生成时清除该表中的图片与嵌入对象" />
           </el-form-item>

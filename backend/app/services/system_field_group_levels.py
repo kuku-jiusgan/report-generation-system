@@ -29,9 +29,18 @@ def ensure_group_levels(database: Database) -> None:
         connection.execute("""CREATE TABLE IF NOT EXISTS system_field_group_levels (
           group_code VARCHAR(255) NOT NULL, level_key VARCHAR(255) NOT NULL,
           label VARCHAR(255) NOT NULL DEFAULT '', kind VARCHAR(32) NOT NULL DEFAULT 'OBJECT',
+          parent_level_key VARCHAR(255) NOT NULL DEFAULT '',
           order_no INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
           PRIMARY KEY(group_code,level_key)
         ) ENGINE=InnoDB""")
+        if isinstance(database, Database):
+            columns = {row["Field"] for row in connection.execute(
+                "SHOW COLUMNS FROM system_field_group_levels"
+            ).fetchall()}
+            if "parent_level_key" not in columns:
+                connection.execute(
+                    "ALTER TABLE system_field_group_levels ADD COLUMN parent_level_key VARCHAR(255) NOT NULL DEFAULT ''"
+                )
         # 不声明外键：库的默认排序规则与 system_field_groups 建表时的不一致，
         # 外键会因排序规则不兼容建不起来；编组删除时在 delete_system_field_group 里显式清理。
         if isinstance(database, Database):
@@ -55,16 +64,32 @@ def list_group_levels(database: Database, group_code: str = "") -> dict[str, lis
     for row in rows:
         levels.setdefault(row["group_code"], []).append({
             "levelKey": row["level_key"], "label": row["label"],
-            "kind": row["kind"], "orderNo": row["order_no"],
+            "kind": row["kind"], "parentLevelKey": row.get("parent_level_key") or "",
+            "orderNo": row["order_no"],
         })
     return levels
 
 
-def field_path_for(level_key: str, kind: str, json_key: str) -> str:
+def field_path_for(level_key: str, kind: str, json_key: str,
+                   levels: list[dict[str, Any]] | None = None) -> str:
     """字段在编组记录里的相对路径，由所属层的键名和类型推导。"""
     if not level_key:
         return json_key
-    return f"{level_key}[*].{json_key}" if kind == ARRAY else f"{level_key}.{json_key}"
+    by_key = {str(item.get("levelKey")): item for item in levels or []}
+    parts: list[str] = []
+    current = level_key
+    seen: set[str] = set()
+    while current:
+        if current in seen:
+            raise ValueError(f"编组层级存在循环：{current}")
+        seen.add(current)
+        item = by_key.get(current)
+        if levels is not None and item is None:
+            raise ValueError(f"编组层级 {current} 不存在")
+        current_kind = str(item.get("kind") if item else (kind if current == level_key else OBJECT))
+        parts.append(f"{current}[*]" if current_kind == ARRAY else current)
+        current = str(item.get("parentLevelKey") or "") if item else ""
+    return ".".join([*reversed(parts), json_key])
 
 
 def json_path_for(item_path: str, cardinality: str, field_path: str) -> str:
@@ -86,27 +111,41 @@ def save_group_level(database: Database, group_code: str, item: dict[str, Any],
     if not level_key.replace("_", "").isalnum():
         raise ValueError("层的键名只能使用字母、数字和下划线")
     kind = str(item.get("kind") or OBJECT)
-    expected_kind = CANONICAL_LEVEL_KINDS.get(level_key)
-    if expected_kind is None:
-        raise ValueError("层的键名只能是 summary 或 injections")
-    if kind != expected_kind:
-        expected_label = "对象" if expected_kind == OBJECT else "数组"
-        raise ValueError(f"层 {level_key} 必须是{expected_label}层")
+    if kind not in LEVEL_KINDS:
+        raise ValueError("层类型只能是 OBJECT 或 ARRAY")
+    parent_key = str(item.get("parentLevelKey") or "").strip()
+    if parent_key == level_key:
+        raise ValueError("层不能以自身作为父层")
+    if parent_key and not parent_key.replace("_", "").isalnum():
+        raise ValueError("父层键名无效")
     with database.connect() as connection:
+        ancestor = parent_key
+        seen: set[str] = set()
+        while ancestor:
+            if ancestor == level_key or ancestor in seen:
+                raise ValueError("编组层级不能形成循环")
+            seen.add(ancestor)
+            parent = connection.execute(
+                "SELECT parent_level_key FROM system_field_group_levels WHERE group_code=%s AND level_key=%s",
+                (group_code, ancestor),
+            ).fetchone()
+            if parent is None:
+                raise ValueError(f"父层 {ancestor} 不存在")
+            ancestor = str(parent["parent_level_key"] or "")
         if original_key and original_key != level_key:
-            connection.execute(
-                "UPDATE system_field_group_fields SET level_key=%s WHERE group_code=%s AND level_key=%s",
-                (level_key, group_code, original_key),
-            )
-            connection.execute(
-                "DELETE FROM system_field_group_levels WHERE group_code=%s AND level_key=%s",
-                (group_code, original_key),
-            )
+            raise ValueError("已有层的键名不能修改，请先迁移其字段和子层")
+        existing_parent = connection.execute(
+            "SELECT level_key FROM system_field_group_levels WHERE group_code=%s AND level_key=%s",
+            (group_code, parent_key),
+        ).fetchone() if parent_key else True
+        if parent_key and not existing_parent:
+            raise ValueError(f"父层 {parent_key} 不存在")
         connection.execute(
-            "INSERT INTO system_field_group_levels(group_code,level_key,label,kind,order_no,updated_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE label=VALUES(label),kind=VALUES(kind),"
-            "order_no=VALUES(order_no),updated_at=VALUES(updated_at)",
-            (group_code, level_key, CANONICAL_LEVEL_LABELS[level_key], kind,
+            "INSERT INTO system_field_group_levels(group_code,level_key,label,kind,parent_level_key,order_no,updated_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE label=VALUES(label),kind=VALUES(kind),"
+            "parent_level_key=VALUES(parent_level_key),order_no=VALUES(order_no),updated_at=VALUES(updated_at)",
+            (group_code, level_key, str(item.get("label") or CANONICAL_LEVEL_LABELS.get(level_key, level_key)), kind,
+             parent_key,
              int(item.get("orderNo", 0)), now_iso()),
         )
 
@@ -115,6 +154,12 @@ def delete_group_level(database: Database, group_code: str, level_key: str) -> N
     """删除一层：层里的字段回到记录顶层，不会连字段一起删掉。"""
     ensure_group_levels(database)
     with database.connect() as connection:
+        child = connection.execute(
+            "SELECT level_key FROM system_field_group_levels WHERE group_code=%s AND parent_level_key=%s",
+            (group_code, level_key),
+        ).fetchone()
+        if child:
+            raise ValueError(f"层 {level_key} 仍有子层，不能删除")
         connection.execute(
             "UPDATE system_field_group_fields SET level_key='' WHERE group_code=%s AND level_key=%s",
             (group_code, level_key),
@@ -151,8 +196,13 @@ def structure_preview(levels: list[dict[str, Any]], fields: list[dict[str, Any]]
         str(field.get("jsonKey") or field["fieldCode"]): field.get("label") or field["fieldCode"]
         for field in by_level.get(ROOT_LEVEL, [])
     }
-    for level in levels:
-        inner = {str(field.get("jsonKey") or field["fieldCode"]): field.get("label") or field["fieldCode"]
-                 for field in by_level.get(level["levelKey"], [])}
-        record[level["levelKey"]] = [inner] if level["kind"] == ARRAY else inner
+    def build(parent: str) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for level in [item for item in levels if str(item.get("parentLevelKey") or "") == parent]:
+            inner = {str(field.get("jsonKey") or field["fieldCode"]): field.get("label") or field["fieldCode"]
+                     for field in by_level.get(level["levelKey"], [])}
+            inner.update(build(level["levelKey"]))
+            result[level["levelKey"]] = [inner] if level["kind"] == ARRAY else inner
+        return result
+    record.update(build(""))
     return record

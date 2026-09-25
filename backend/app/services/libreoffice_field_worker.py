@@ -52,11 +52,11 @@ def refresh_fields(pipe_name: str, source: Path, output: Path,
         )
         if document is None:
             raise RuntimeError("LibreOffice 无法打开 DOCX")
-        _update_indexes(document)
         text_fields = document.getTextFields()
-        if text_fields is not None:
-            text_fields.refresh()
-        _update_indexes(document)
+        for _ in range(3):
+            _update_indexes(document)
+            if text_fields is not None:
+                text_fields.refresh()
         document.storeAsURL(
             uno.systemPathToFileUrl(str(output.resolve())),
             (

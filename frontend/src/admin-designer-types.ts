@@ -48,7 +48,7 @@ export interface TableRule {
   /** TABLE_REPEAT 时按该字段将数据分组后复制整张原型表 */
   groupKey?: string;
   /** TABLE_REPEAT 时复制表内采用 ROW_REPEAT 或 MATRIX */
-  innerMode?: "ROW_REPEAT" | "MATRIX";
+  innerMode?: "ROW_REPEAT" | "MATRIX" | "SEGMENT_REPEAT";
   headerRows: number;
   dataRowStart: number;
   dataRowEnd: number;

@@ -40,10 +40,13 @@ def _payload(format_name: str = "RICH_BLOCKS") -> dict:
     return apply_configured_extraction(source, {}, [_field()], [_rule(format_name)])
 
 
-def _template(path: Path, *, inline: bool = False) -> None:
+def _template(path: Path, *, inline: bool = False, cell_width: int = 7200) -> None:
     control = ('<w:p><w:sdt><w:sdtPr><w:tag w:val="preparation"/></w:sdtPr>'
                '<w:sdtContent><w:r><w:t>模板文本</w:t></w:r></w:sdtContent></w:sdt></w:p>'
-               if inline else '<w:tbl><w:tr><w:tc><w:sdt><w:sdtPr><w:tag w:val="preparation"/>'
+               if inline else f'<w:tbl><w:tblPr><w:tblCellMar><w:left w:w="100" w:type="dxa"/>'
+               f'<w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tr><w:tc>'
+               f'<w:tcPr><w:tcW w:w="{cell_width}" w:type="dxa"/></w:tcPr>'
+               '<w:sdt><w:sdtPr><w:tag w:val="preparation"/>'
                '</w:sdtPr><w:sdtContent><w:p><w:r><w:t>模板文本</w:t></w:r></w:p>'
                '</w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>')
     xml = f'<w:document xmlns:w="{W_NS}"><w:body>{control}</w:body></w:document>'
@@ -124,6 +127,66 @@ def test_word_renders_each_method_with_a_native_nested_table(tmp_path: Path) -> 
     assert content.xpath('./w:tbl//w:t/text()', namespaces=NS) == ["步骤", "用量", "溶剂", "10 ml"]
     assert content.xpath('.//w:gridSpan/@w:val', namespaces=NS) == ["2"]
     assert content.xpath('.//w:vMerge/@w:val', namespaces=NS) == ["restart", "continue"]
+    inner = content.xpath('./w:tbl', namespaces=NS)[0]
+    assert sum(map(int, inner.xpath('./w:tblGrid/w:gridCol/@w:w', namespaces=NS))) <= 7000
+    assert inner.xpath('./w:tblPr/w:tblLayout/@w:type', namespaces=NS) == ["fixed"]
+
+
+def test_seven_column_nested_table_fits_cell_without_dropping_data(tmp_path: Path) -> None:
+    template, output = tmp_path / "template.docx", tmp_path / "report.docx"
+    _template(template)
+    payload = _payload()
+    columns = [f"第{index}列" for index in range(7)]
+    payload["solutions"][1]["preparation"]["blocks"] = [{
+        "type": "table", "rows": [[{"text": text, "colspan": 1, "rowspan": 1}
+                                   for text in columns]],
+    }]
+    build_mapped_docx(template, output, [_mapping()], payload,
+                      {"source_payloads": {"LIMS": payload}, "field_sources": {
+                          "method.preparation": {"type": "LIMS"},
+                      }})
+    with zipfile.ZipFile(output) as archive:
+        root = etree.fromstring(archive.read("word/document.xml"))
+    inner = root.xpath('.//w:sdtContent/w:tbl', namespaces=NS)[0]
+    assert inner.xpath('.//w:t/text()', namespaces=NS) == columns
+    assert sum(map(int, inner.xpath('./w:tblGrid/w:gridCol/@w:w', namespaces=NS))) <= 7000
+    assert inner.xpath('./w:tblPr/w:tblW/@w:type', namespaces=NS) == ["dxa"]
+
+
+def test_nested_table_keeps_auto_layout_when_cell_is_wide(tmp_path: Path) -> None:
+    template, output = tmp_path / "template.docx", tmp_path / "report.docx"
+    _template(template, cell_width=10000)
+    payload = _payload()
+    build_mapped_docx(template, output, [_mapping()], payload,
+                      {"source_payloads": {"LIMS": payload}, "field_sources": {
+                          "method.preparation": {"type": "LIMS"},
+                      }})
+    with zipfile.ZipFile(output) as archive:
+        root = etree.fromstring(archive.read("word/document.xml"))
+    inner = root.xpath('.//w:sdtContent/w:tbl', namespaces=NS)[0]
+    assert inner.xpath('./w:tblPr/w:tblW/@w:type', namespaces=NS) == ["auto"]
+    assert sum(map(int, inner.xpath('./w:tblGrid/w:gridCol/@w:w', namespaces=NS))) <= 9000
+
+
+def test_nested_table_uses_grid_width_when_cell_has_no_explicit_width(tmp_path: Path) -> None:
+    template, output = tmp_path / "template.docx", tmp_path / "report.docx"
+    xml = (f'<w:document xmlns:w="{W_NS}"><w:body><w:tbl>'
+           '<w:tblGrid><w:gridCol w:w="1200"/><w:gridCol w:w="6800"/></w:tblGrid>'
+           '<w:tr><w:trPr/><w:tc><w:p/></w:tc><w:tc>'
+           '<w:sdt><w:sdtPr><w:tag w:val="preparation"/></w:sdtPr>'
+           '<w:sdtContent><w:p/></w:sdtContent></w:sdt></w:tc></w:tr>'
+           '</w:tbl></w:body></w:document>')
+    with zipfile.ZipFile(template, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+    payload = _payload()
+    build_mapped_docx(template, output, [_mapping()], payload,
+                      {"source_payloads": {"LIMS": payload}, "field_sources": {
+                          "method.preparation": {"type": "LIMS"},
+                      }})
+    with zipfile.ZipFile(output) as archive:
+        root = etree.fromstring(archive.read("word/document.xml"))
+    inner = root.xpath('.//w:sdtContent/w:tbl', namespaces=NS)[0]
+    assert sum(map(int, inner.xpath('./w:tblGrid/w:gridCol/@w:w', namespaces=NS))) <= 6800
 
 
 def test_repeat_table_keeps_names_aligned_with_each_method(tmp_path: Path) -> None:
@@ -133,7 +196,9 @@ def test_repeat_table_keeps_names_aligned_with_each_method(tmp_path: Path) -> No
     xml = (f'<w:document xmlns:w="{W_NS}"><w:body><w:tbl>'
            '<w:tr><w:tc><w:p><w:r><w:t>溶液名称</w:t></w:r></w:p></w:tc>'
            '<w:tc><w:p><w:r><w:t>配制方法</w:t></w:r></w:p></w:tc></w:tr>'
-           f'<w:tr><w:tc>{control("name")}</w:tc><w:tc>{control("preparation")}</w:tc></w:tr>'
+           f'<w:tr><w:tc>{control("name")}</w:tc><w:tc>'
+           f'<w:tcPr><w:tcW w:w="7200" w:type="dxa"/></w:tcPr>'
+           f'{control("preparation")}</w:tc></w:tr>'
            '</w:tbl></w:body></w:document>')
     with zipfile.ZipFile(template, "w") as archive:
         archive.writestr("word/document.xml", xml)

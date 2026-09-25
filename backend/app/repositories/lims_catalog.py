@@ -98,8 +98,20 @@ class LimsCatalogRepositoryMixin:
         prefix = f"{collection}[*]" if str(row["cardinality"] or "ONE").upper() == "MANY" else collection
         level_key = str(row["level_key"] or "").strip()
         if level_key:
-            level_prefix = level_key + ("[*]" if str(row["kind"] or "") == "ARRAY" else "")
-            prefix = f"{prefix}.{level_prefix}"
+            levels = connection.execute(
+                "SELECT level_key,kind,parent_level_key FROM system_field_group_levels WHERE group_code=%s",
+                (group_code,),
+            ).fetchall()
+            by_key = {str(item["level_key"]): item for item in levels}
+            chain: list[str] = []
+            current = level_key
+            while current:
+                item = by_key.get(current)
+                if item is None:
+                    raise ValueError(f"字段 {field_code} 所属层级 {current} 不存在")
+                chain.append(current + ("[*]" if str(item["kind"] or "") == "ARRAY" else ""))
+                current = str(item["parent_level_key"] or "")
+            prefix = prefix + "." + ".".join(reversed(chain))
         key = str(json_key or "").strip() or field_code.rsplit(".", 1)[-1]
         return group_code, f"{prefix}.{key}"
 

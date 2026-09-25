@@ -6,7 +6,7 @@ import {
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import {
   applyLimsToReport, batchExportReports, createReport, deleteReport, exportReportWord, extractExcel, extractPdf, getHistory,
-  listReportGenerations, listReports, rebuildReport, replaceReportSource, reportGenerationFileUrl, reportPdfUrl, uploadExcel, uploadPdf, uploadProtocol,
+  listReportGenerations, listReports, rebuildReport, replaceReportSource, downloadReportGeneration, reportPdfUrl, uploadExcel, uploadPdf, uploadProtocol,
   type ChangeEvent, type ReportGeneration, type ReportTask, type SourceDocument,
 } from './api'
 import {
@@ -388,7 +388,8 @@ async function downloadWord(item: ReportTask) {
     const history = await listReportGenerations()
     generations.value = history.items
     const exported = history.items.find((value) => value.report_id === item.id && value.status === 'SUCCESS')
-    if (exported) window.open(reportGenerationFileUrl(exported.id), '_blank')
+    if (!exported) throw new Error('未找到成功的导出记录，请重试')
+    downloadReportGeneration(exported.id)
   } catch (error) {
     ElMessage.error(errorText(error))
   } finally {

@@ -75,6 +75,8 @@ http://SERVER_IP:8010/docs    API 文档
 http://SERVER_IP:8090/        ONLYOFFICE Document Server
 ```
 
+报告模板使用宋体、新宋体、等线等字体。若需要与 WPS 使用相同字体，请将有授权的对应字体文件放入项目的 `ttf/` 目录；该目录会只读挂载到 ONLYOFFICE 容器。加入字体后，执行 `docker compose --env-file .env -f docker-compose.onlyoffice.yml up -d --force-recreate`，再执行 `docker exec report-system-onlyoffice documentserver-generate-allfonts.sh` 更新编辑器字体列表。可用 `docker exec report-system-onlyoffice fc-match '宋体'` 检查实际匹配的字体。
+
 首次管理员登录后必须立即修改密码。
 
 ## Linux 日常启动与停止

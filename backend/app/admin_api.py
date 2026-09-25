@@ -18,6 +18,7 @@ from .auth import AuthManager
 from .onlyoffice_callback import (
     assert_document_server_url, callback_status, is_current_document_key, verified_callback_payload,
 )
+from .onlyoffice_plugin_config import editor_plugins
 from .services.rule_admin import RuleAdminRepository
 from .services.docx_control_index import control_locations, describe_binding
 from .services.designer_blocks import designer_blocks
@@ -33,7 +34,6 @@ from .admin_routes.lims_rules import register_lims_rule_routes
 from .admin_routes.rule_catalog import register_rule_catalog_routes
 from .admin_routes.data_sources import register_data_source_routes
 from .admin_routes.publishing import register_publishing_routes
-from .admin_api_metadata import CHAPTER_TITLES, SECTION_TITLES, chapter_key
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,6 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
     compiled_dir = settings.template_path.parent / "compiled"
     compiled_dir.mkdir(parents=True, exist_ok=True)
     file_store = TemplateFileStore(repository, settings.template_path)
-    chapter_titles, section_titles = CHAPTER_TITLES, SECTION_TITLES
 
     def require_editable_workspace() -> dict[str, Any]:
         workspace = repository.active_workspace()
@@ -453,13 +452,7 @@ def create_admin_router(repository: RuleAdminRepository, settings: Settings, aut
                 "callbackUrl": f"{settings.public_base_url}{settings.api_prefix}/admin/onlyoffice/callback/{version_id}",
                 "lang": "zh-CN", "mode": "edit", "user": {"id": "template-admin", "name": "模板管理员"},
                 "customization": {"autosave": True, "forcesave": True, "compactHeader": True},
-                "plugins": {
-                    "autostart": ["asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"],
-                    "pluginsData": [
-                        f"{settings.onlyoffice_url}/sdkjs-plugins/"
-                        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=22"
-                    ],
-                },
+                "plugins": editor_plugins(settings),
             },
             "height": "100%", "width": "100%", "type": "desktop",
         }

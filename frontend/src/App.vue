@@ -7,7 +7,7 @@ import {
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
 import {
   applyLimsToReport, createVersion, exportReportWord, extractPdf, getBindings, getHistory, getTemplateSourceCatalog, getVersions,
-  getReport, listReportGenerations, listReports, reportGenerationFileUrl, updateReport, uploadPdf,
+  getReport, listReportGenerations, listReports, downloadReportGeneration, updateReport, uploadPdf,
   rebuildReport,
   type ChangeEvent, type ExtractedField, type FieldBinding, type ReportGeneration, type ReportTask, type ReportVersion,
   type SourceDocument, type SourceRef, type SourceType, type TemplateSourceCatalog, type TestItem,
@@ -51,6 +51,7 @@ const limsRecognition = ref<LimsRecognition>()
 const conflictResolutions = reactive<Record<string, string>>({})
 const selectedLimsDetail = ref<{ label: string; value: string; evidence: LimsEvidence }>()
 const templateSourceCatalog = ref<TemplateSourceCatalog>({ chapters: [] })
+const onlyOfficeContainer = ref<HTMLElement | null>(null)
 
 const {
   loading: onlyOfficeLoading,
@@ -60,8 +61,11 @@ const {
   open: openOnlyOffice,
   close: closeOnlyOffice,
   save: saveOnlyOffice,
+  updateFields: updateOnlyOfficeFields,
 } = useReportWordEditor({
   reportId: () => report.value?.id,
+  editorContainer: () => onlyOfficeContainer.value,
+  requiresFieldRefresh: () => !report.value?.word_edit_locked,
   onDocumentSaved: refreshSavedReport,
   onRequestClose: returnToHub,
 })
@@ -337,12 +341,16 @@ async function exportWord() {
   try {
     // 导出只读取当前工作文件；字段编辑先保存数据，Word 编辑先强制保存文档。
     if (editorMode.value === 'fields' && !report.value.word_edit_locked) await saveReport(false)
-    else if (editorMode.value === 'word') await saveOnlyOffice()
+    else if (editorMode.value === 'word') {
+      await updateOnlyOfficeFields()
+      await saveOnlyOffice()
+    }
     report.value = await getReport(report.value.id)
     report.value = await exportReportWord(report.value.id)
     await refreshGenerationHistory()
     const exported = generationHistory.value.find((item) => item.report_id === report.value?.id && item.status === 'SUCCESS')
-    if (exported) window.open(reportGenerationFileUrl(exported.id), '_blank')
+    if (!exported) throw new Error('未找到成功的导出记录，请重试')
+    downloadReportGeneration(exported.id)
   } catch (error) {
     ElMessage.error(errorText(error))
   } finally {
@@ -465,11 +473,11 @@ onMounted(() => {
   >
     <main v-if="report" class="workspace">
       <section class="editor-panel">
-        <div v-loading="onlyOfficeLoading" class="onlyoffice-shell">
-          <el-result v-if="onlyOfficeError" icon="error" title="ONLYOFFICE 加载失败" :sub-title="onlyOfficeError">
+        <div v-loading="onlyOfficeLoading" :element-loading-text="report.word_edit_locked ? '正在加载报告...' : '正在更新目录页码...'" class="onlyoffice-shell">
+          <el-result v-if="onlyOfficeError" icon="error" title="报告文档准备失败" :sub-title="onlyOfficeError">
             <template #extra><el-button type="primary" @click="openOnlyOffice">重新加载</el-button></template>
           </el-result>
-          <div v-else id="onlyoffice-editor" class="onlyoffice-host" />
+          <div ref="onlyOfficeContainer" class="onlyoffice-host" />
         </div>
 
       </section>

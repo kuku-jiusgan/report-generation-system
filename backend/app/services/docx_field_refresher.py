@@ -1,28 +1,25 @@
+"""Refresh Word fields with LibreOffice and keep the paginated document intact."""
+
 import copy
 import logging
 import re
-import shutil
 import subprocess
 import tempfile
 import uuid
 import zipfile
-from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
 from lxml import etree
 
 from .docx_language import write_docx_parts_atomic
+from .libreoffice_fonts import libreoffice_font_env
 
 
 logger = logging.getLogger(__name__)
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 W = f"{{{W_NS}}}"
 NS = {"w": W_NS}
-FIELD_PART_PATTERN = (
-    "word/document.xml", "word/header", "word/footer", "word/footnotes.xml", "word/endnotes.xml",
-)
-PAGINATION_FIELDS = {"PAGE", "NUMPAGES", "SECTIONPAGES", "PAGEREF", "REF"}
 
 
 class DocxFieldRefreshError(RuntimeError):
@@ -34,7 +31,10 @@ def _validated_docx(path: Path) -> bool:
         return False
     try:
         with zipfile.ZipFile(path) as archive:
-            return "word/document.xml" in archive.namelist()
+            # Word and LibreOffice may write ZIP member names with either
+            # separator.  Normalize before checking the required part.
+            return any(name.replace("\\", "/") == "word/document.xml"
+                       for name in archive.namelist())
     except (OSError, zipfile.BadZipFile):
         return False
 
@@ -47,17 +47,10 @@ def _read_parts(path: Path) -> dict[str, tuple[zipfile.ZipInfo, bytes]]:
     with zipfile.ZipFile(path) as archive:
         parts = {}
         for item in archive.infolist():
-            name = item.filename.replace("\\", "/")
             info = copy.copy(item)
-            info.filename = name
-            parts[name] = (info, archive.read(item.filename))
+            info.filename = item.filename.replace("\\", "/")
+            parts[info.filename] = (info, archive.read(item.filename))
         return parts
-
-
-def _is_field_part(name: str) -> bool:
-    return name.endswith(".xml") and (
-        name in FIELD_PART_PATTERN or any(name.startswith(prefix) for prefix in FIELD_PART_PATTERN[1:3])
-    )
 
 
 def _normalized_instruction(text: str) -> str:
@@ -81,10 +74,9 @@ def _complex_fields(root: etree._Element) -> list[dict[str, Any]]:
         if node.tag == f"{W}fldChar":
             field_type = node.get(f"{W}fldCharType")
             if field_type == "begin":
-                stack.append({
-                    "instruction": [], "texts": [], "separated": False, "node": node,
-                    "end": None, "parent_field": stack[-1] if stack else None,
-                })
+                stack.append({"instruction": [], "texts": [], "separated": False,
+                              "node": node, "end": None,
+                              "parent_field": stack[-1] if stack else None})
             elif field_type == "separate" and stack:
                 stack[-1]["separated"] = True
             elif field_type == "end" and stack:
@@ -128,9 +120,15 @@ def _field_inside_toc(field: dict[str, Any]) -> bool:
     return False
 
 
-def _common_container_range(start: etree._Element, end: etree._Element) -> tuple[
-        etree._Element, list[etree._Element]]:
-    end_ancestors = {node for node in end.iterancestors()}
+def _is_field_part(name: str) -> bool:
+    return name.endswith(".xml") and (
+        name == "word/document.xml" or name.startswith("word/header")
+        or name.startswith("word/footer") or name in {"word/footnotes.xml", "word/endnotes.xml"}
+    )
+
+
+def _common_container_range(start: etree._Element, end: etree._Element) -> list[etree._Element]:
+    end_ancestors = set(end.iterancestors())
     container = next((node for node in start.iterancestors() if node in end_ancestors), None)
     if container is None:
         raise DocxFieldRefreshError("目录域的起止位置没有共同容器")
@@ -143,32 +141,46 @@ def _common_container_range(start: etree._Element, end: etree._Element) -> tuple
             node = parent
         return node
 
-    first = direct_child(start)
-    last = direct_child(end)
     children = list(container)
-    first_index, last_index = children.index(first), children.index(last)
-    if first_index > last_index:
+    first, last = children.index(direct_child(start)), children.index(direct_child(end))
+    if first > last:
         raise DocxFieldRefreshError("目录域的起止顺序无效")
-    return container, children[first_index:last_index + 1]
+    return children[first:last + 1]
 
 
 def _toc_links(root: etree._Element) -> list[etree._Element]:
     links = []
     for field in _complex_fields(root):
-        if not _is_toc_field(field):
+        instruction = _instruction_of(field)
+        if instruction != "TOC" and not instruction.startswith("TOC "):
             continue
-        _, blocks = _common_container_range(field["node"], field["end"])
-        for block in blocks:
+        for block in _common_container_range(field["node"], field["end"]):
             if block.tag == f"{W}hyperlink" and block.get(f"{W}anchor"):
                 links.append(block)
             links.extend(block.xpath(".//w:hyperlink[@w:anchor]", namespaces=NS))
     return links
 
 
+def contains_toc_field(document_path: Path) -> bool:
+    """Return whether the main document contains a TOC field."""
+    parts = _read_parts(document_path)
+    document = parts.get("word/document.xml")
+    if document is None:
+        raise DocxFieldRefreshError("DOCX 缺少 Word 正文")
+    root = etree.fromstring(document[1])
+    return any(
+        _instruction_of(field) == "TOC" or _instruction_of(field).startswith("TOC ")
+        for field in _complex_fields(root)
+    )
+
+
 def _page_result(link: etree._Element) -> str:
     for field in _complex_fields(link):
-        if _pagination_key(_instruction_of(field)).startswith("PAGEREF "):
-            return "".join(text.text or "" for text in field["texts"])
+        if _instruction_of(field).startswith("PAGEREF "):
+            page = "".join(text.text or "" for text in field["texts"]).strip()
+            if page:
+                return page
+            raise DocxFieldRefreshError("LibreOffice 刷新后的目录项缺少页码")
     texts = [str(value) for value in link.xpath(".//w:t/text()", namespaces=NS)]
     if link.xpath(".//w:tab", namespaces=NS) and texts:
         candidate = texts[-1].strip()
@@ -213,9 +225,7 @@ def _merge_toc_results(original: etree._Element, rendered: etree._Element) -> No
     rendered_links = _toc_links(rendered)
     if not original_links and not rendered_links:
         return
-    original_by_anchor = {
-        str(link.get(f"{W}anchor")): link for link in original_links
-    }
+    original_by_anchor = {str(link.get(f"{W}anchor")): link for link in original_links}
     rendered_pages: dict[str, str] = {}
     original_anchors = set(original_by_anchor)
     for link in rendered_links:
@@ -244,63 +254,41 @@ def _simple_fields(root: etree._Element) -> list[dict[str, Any]]:
     ]
 
 
-def _pagination_results(root: etree._Element) -> dict[str, deque[str]]:
-    results: dict[str, deque[str]] = defaultdict(deque)
+def _pagination_results(root: etree._Element) -> dict[str, list[str]]:
+    results: dict[str, list[str]] = {}
     for field in [*_complex_fields(root), *_simple_fields(root)]:
         if _field_inside_toc(field):
             continue
         instruction = _instruction_of(field)
-        if instruction.split(" ", 1)[0].upper() not in PAGINATION_FIELDS:
+        if instruction.split(" ", 1)[0].upper() not in {"PAGE", "NUMPAGES", "SECTIONPAGES", "PAGEREF", "REF"}:
             continue
-        results[_pagination_key(instruction)].append(
+        results.setdefault(_pagination_key(instruction), []).append(
             "".join(text.text or "" for text in field["texts"])
         )
     return results
 
 
 def _merge_pagination_results(original: etree._Element,
-                              rendered_results: dict[str, deque[str]]) -> None:
+                              rendered_results: dict[str, list[str]]) -> None:
+    offsets: dict[str, int] = {}
     for field in [*_complex_fields(original), *_simple_fields(original)]:
         if _field_inside_toc(field):
             continue
         instruction = _instruction_of(field)
-        if instruction.split(" ", 1)[0].upper() not in PAGINATION_FIELDS:
+        if instruction.split(" ", 1)[0].upper() not in {"PAGE", "NUMPAGES", "SECTIONPAGES", "PAGEREF", "REF"}:
             continue
-        candidates = rendered_results.get(_pagination_key(instruction))
-        if not candidates:
+        key = _pagination_key(instruction)
+        values = rendered_results.get(key, [])
+        index = offsets.get(key, 0)
+        if index >= len(values):
             raise DocxFieldRefreshError(f"LibreOffice 未返回域“{instruction}”的刷新结果")
         texts = field["texts"]
         if not texts:
             raise DocxFieldRefreshError(f"原文件中的域“{instruction}”没有可写入的结果节点")
-        texts[0].text = candidates.popleft()
+        texts[0].text = values[index]
         for text in texts[1:]:
             text.text = ""
-
-
-def _merge_refreshed_fields_legacy(original_path: Path, rendered_path: Path) -> None:
-    original_parts = _read_parts(original_path)
-    rendered_parts = _read_parts(rendered_path)
-    rendered_results: dict[str, deque[str]] = defaultdict(deque)
-    for name in sorted(rendered_parts):
-        if not _is_field_part(name):
-            continue
-        root = etree.fromstring(rendered_parts[name][1])
-        for key, values in _pagination_results(root).items():
-            rendered_results[key].extend(values)
-    for name, (info, content) in list(original_parts.items()):
-        if not _is_field_part(name):
-            continue
-        original_root = etree.fromstring(content)
-        _merge_pagination_results(original_root, rendered_results)
-        if name == "word/document.xml":
-            if name not in rendered_parts:
-                raise DocxFieldRefreshError("LibreOffice 刷新文件缺少 Word 正文")
-            rendered_root = etree.fromstring(rendered_parts[name][1])
-            _merge_toc_results(original_root, rendered_root)
-        original_parts[name] = (info, etree.tostring(
-            original_root, xml_declaration=True, encoding="UTF-8", standalone=True,
-        ))
-    write_docx_parts_atomic(original_parts, original_path)
+        offsets[key] = index + 1
 
 
 def _copy_toc_format(original: etree._Element, rendered: etree._Element) -> None:
@@ -308,8 +296,7 @@ def _copy_toc_format(original: etree._Element, rendered: etree._Element) -> None
     rendered_links = _toc_links(rendered)
     original_by_anchor = {str(link.get(f"{W}anchor")): link for link in original_links}
     for rendered_link in rendered_links:
-        anchor = str(rendered_link.get(f"{W}anchor") or "")
-        source = original_by_anchor.get(anchor)
+        source = original_by_anchor.get(str(rendered_link.get(f"{W}anchor")))
         if source is None:
             continue
         source_paragraph = source.xpath("ancestor::w:p[1]", namespaces=NS)
@@ -345,32 +332,153 @@ def _copy_content_controls(original: etree._Element, rendered: etree._Element) -
                 body.insert(0, copy.deepcopy(node))
 
 
+def _merge_refreshed_fields_legacy(original_path: Path, rendered_parts: dict[str, tuple[zipfile.ZipInfo, bytes]],
+                                   original_parts: dict[str, tuple[zipfile.ZipInfo, bytes]]) -> None:
+    rendered_results: dict[str, list[str]] = {}
+    for name in sorted(rendered_parts):
+        if not _is_field_part(name):
+            continue
+        root = etree.fromstring(rendered_parts[name][1])
+        for key, values in _pagination_results(root).items():
+            rendered_results.setdefault(key, []).extend(values)
+    for name, (info, content) in list(original_parts.items()):
+        if not _is_field_part(name):
+            continue
+        original_root = etree.fromstring(content)
+        _merge_pagination_results(original_root, rendered_results)
+        if name == "word/document.xml":
+            rendered_root = etree.fromstring(rendered_parts[name][1])
+            _merge_toc_results(original_root, rendered_root)
+        original_parts[name] = (info, etree.tostring(
+            original_root, xml_declaration=True, encoding="UTF-8", standalone=True,
+        ))
+    write_docx_parts_atomic(original_parts, original_path)
+
+
+def _toc_display_text(link: etree._Element) -> list[etree._Element]:
+    return [node for node in link.xpath(".//w:t", namespaces=NS)
+            if not node.xpath("ancestor::w:fldChar", namespaces=NS)]
+
+
+def _restore_native_toc(original: etree._Element, rendered: etree._Element) -> None:
+    """Replace LibreOffice's static TOC entries with the original PAGEREF fields."""
+    original_links = _toc_links(original)
+    rendered_links = _toc_links(rendered)
+    if not original_links or not rendered_links:
+        return
+    original_by_anchor = {str(link.get(f"{W}anchor")): link for link in original_links}
+    original_anchors = set(original_by_anchor)
+    matched: set[str] = set()
+    for rendered_link in list(rendered_links):
+        rendered_anchor = str(rendered_link.get(f"{W}anchor") or "")
+        original_anchor = _bookmark_alias(rendered, rendered_anchor, original_anchors)
+        if not original_anchor:
+            continue
+        page = _page_result(rendered_link)
+        native_link = copy.deepcopy(original_by_anchor[original_anchor])
+        native_link.set(f"{W}anchor", rendered_anchor)
+        source_text = _toc_display_text(rendered_link)
+        target_text = _toc_display_text(native_link)
+        for target, source in zip(target_text, source_text):
+            target.text = source.text
+        _set_toc_page(native_link, page)
+        rendered_link.getparent().replace(rendered_link, native_link)
+        matched.add(original_anchor)
+    missing = original_anchors - matched
+    if missing:
+        raise DocxFieldRefreshError(f"LibreOffice 未能定位 {len(missing)} 个模板目录项的实际页码")
+
+
+def _remove_orphan_toc_entries(root: etree._Element) -> bool:
+    bookmarks = set(root.xpath(".//w:bookmarkStart/@w:name", namespaces=NS))
+    changed = False
+    for link in _toc_links(root):
+        if link.get(f"{W}anchor") in bookmarks:
+            continue
+        paragraphs = link.xpath("ancestor::w:p[1]", namespaces=NS)
+        if len(paragraphs) != 1 or len(paragraphs[0].xpath(
+            ".//w:hyperlink[@w:anchor]", namespaces=NS,
+        )) != 1:
+            raise DocxFieldRefreshError("LibreOffice 生成了无法安全移除的无效目录链接")
+        paragraph = paragraphs[0]
+        if paragraph.xpath(".//w:fldChar", namespaces=NS):
+            link.getparent().remove(link)
+        else:
+            paragraph.getparent().remove(paragraph)
+        changed = True
+    return changed
+
+
+def _static_control_segments(control: etree._Element) -> list[str]:
+    segments: list[str] = []
+    current: list[str] = []
+    field_depth = 0
+    for node in control.iter():
+        if node.tag == f"{W}fldSimple":
+            if current:
+                segments.append("".join(current))
+                current = []
+        elif node.tag == f"{W}fldChar":
+            field_type = node.get(f"{W}fldCharType")
+            if field_type == "begin":
+                if current:
+                    segments.append("".join(current))
+                    current = []
+                field_depth += 1
+            elif field_type == "end":
+                if not field_depth:
+                    raise DocxFieldRefreshError("内容控件中的 Word 域结束标记没有起始标记")
+                field_depth -= 1
+        elif node.tag == f"{W}t" and not field_depth and not any(
+            ancestor.tag == f"{W}fldSimple" for ancestor in node.iterancestors()
+        ):
+            current.append(node.text or "")
+    if current:
+        segments.append("".join(current))
+    if field_depth:
+        raise DocxFieldRefreshError("内容控件中的 Word 域缺少结束标记")
+    return segments
+
+
+def _validate_rendered_content(original: etree._Element, rendered: etree._Element) -> None:
+    # ponytail: 这里只校验已绑定静态文字；如需验证图片和表格无损，应增加 OOXML 结构清单比对。
+    rendered_text = "".join(rendered.xpath(".//w:body//w:t/text()", namespaces=NS))
+    for control in original.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val]", namespaces=NS):
+        for value in _static_control_segments(control):
+            if value.strip() and value not in rendered_text:
+                tag = str(control.xpath("string(./w:sdtPr/w:tag/@w:val)", namespaces=NS))
+                raise DocxFieldRefreshError(f"LibreOffice 刷新后丢失了已填内容：{tag}")
+
+
 def _merge_refreshed_fields(original_path: Path, rendered_path: Path) -> None:
     original_parts = _read_parts(original_path)
     rendered_parts = _read_parts(rendered_path)
     original_root = etree.fromstring(original_parts["word/document.xml"][1])
     rendered_root = etree.fromstring(rendered_parts["word/document.xml"][1])
-    rendered_links = _toc_links(rendered_root)
-    if not rendered_links or not any(
-            any(_pagination_key(_instruction_of(field)).startswith("PAGEREF ")
-                for field in _complex_fields(link))
-            for link in rendered_links
-    ):
-        _merge_refreshed_fields_legacy(original_path, rendered_path)
-        return
-    _copy_content_controls(original_root, rendered_root)
-    _copy_toc_format(original_root, rendered_root)
+    _validate_rendered_content(original_root, rendered_root)
+    _remove_orphan_toc_entries(rendered_root)
+    _restore_native_toc(original_root, rendered_root)
     rendered_parts["word/document.xml"] = (
         rendered_parts["word/document.xml"][0],
         etree.tostring(rendered_root, xml_declaration=True, encoding="UTF-8", standalone=True),
     )
+    # Keep LibreOffice's rendered layout, but update ordinary pagination fields
+    # from the same rendered document instead of replacing the native TOC.
+    for name, (info, content) in list(rendered_parts.items()):
+        if not _is_field_part(name):
+            continue
+        rendered_part_root = etree.fromstring(content)
+        _merge_pagination_results(rendered_part_root, _pagination_results(rendered_part_root))
+        rendered_parts[name] = (info, etree.tostring(
+            rendered_part_root, xml_declaration=True, encoding="UTF-8", standalone=True,
+        ))
     write_docx_parts_atomic(rendered_parts, original_path)
 
 
 def refresh_docx_fields(document_path: Path, executable: str = "libreoffice",
                         timeout_seconds: float = 120.0,
                         python_executable: str = "/usr/bin/python3") -> None:
-    """通过 LibreOffice 完成分页，更新目录、页码和交叉引用等 Word 域。"""
+    """Refresh fields and save the body and TOC from the same pagination pass."""
     path = document_path.resolve()
     if not _validated_docx(path):
         raise DocxFieldRefreshError(f"待刷新文件不是有效的 DOCX：{path.name}")
@@ -388,30 +496,25 @@ def refresh_docx_fields(document_path: Path, executable: str = "libreoffice",
         profile_dir.mkdir()
         temporary_input = input_dir / path.name
         converted = output_dir / path.name
-        shutil.copy2(path, temporary_input)
+        # LibreOffice requires canonical ZIP member separators.  Word files
+        # created on Windows commonly contain backslashes, so normalize the
+        # temporary input archive while keeping the source untouched.
+        write_docx_parts_atomic(_read_parts(path), temporary_input)
 
         pipe_name = f"report_docx_fields_{uuid.uuid4().hex}"
         office_command = [
-            executable,
-            "--headless",
-            "--nologo",
-            "--nodefault",
-            "--nofirststartwizard",
-            "--norestore",
-            f"-env:UserInstallation={profile_dir.as_uri()}",
+            executable, "--headless", "--nologo", "--nodefault", "--nofirststartwizard",
+            "--norestore", f"-env:UserInstallation={profile_dir.as_uri()}",
             f"--accept=pipe,name={pipe_name};urp;StarOffice.ComponentContext",
         ]
         worker_command = [
-            python_executable,
-            str(Path(__file__).with_name("libreoffice_field_worker.py")),
-            pipe_name,
-            str(temporary_input),
-            str(converted),
-            str(timeout_seconds),
+            python_executable, str(Path(__file__).with_name("libreoffice_field_worker.py")),
+            pipe_name, str(temporary_input), str(converted), str(timeout_seconds),
         ]
         try:
             office_process = subprocess.Popen(
                 office_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=libreoffice_font_env(),
             )
         except FileNotFoundError as error:
             raise DocxFieldRefreshError(

@@ -3,7 +3,7 @@
 from lxml import etree
 from zipfile import ZipInfo
 
-from backend.app.services.docx_matrix import fill_matrix_tables
+from backend.app.services.docx_matrix import fill_matrix_table, fill_matrix_tables
 from backend.app.services.docx_images import embed_image_controls
 
 
@@ -161,23 +161,102 @@ def test_horizontal_matrix_expands_configured_rows_and_preserves_fixed_rows() ->
     assert _cell_text(document, 5, 1) == "0.99"
 
 
-def test_matrix_image_control_is_embedded_as_drawing() -> None:
-    document = _matrix_document(row_count=10)
-    records = [{"residualChart": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}]
-    _fill_matrix_table(document, "T20", records, LINEARITY_LAYOUT)
-    content_types = etree.fromstring(b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
-    rels = etree.fromstring(b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
-    parts = {
-        "[Content_Types].xml": (ZipInfo("[Content_Types].xml"), etree.tostring(content_types)),
-        "word/_rels/document.xml.rels": (ZipInfo("word/_rels/document.xml.rels"), etree.tostring(rels)),
+def test_horizontal_matrix_preserves_trailing_grid_after_column() -> None:
+    document = _matrix_document(row_count=2)
+    table = document.xpath(".//w:tbl", namespaces=NS)[0]
+    grid = etree.Element(W + "tblGrid")
+    table.insert(0, grid)
+    for width in (1952, 6561, 9):
+        etree.SubElement(grid, W + "gridCol", {W + "w": str(width)})
+    for row in table.xpath("./w:tr", namespaces=NS):
+        for cell in row.xpath("./w:tc", namespaces=NS)[2:]:
+            row.remove(cell)
+        properties = etree.Element(W + "trPr")
+        etree.SubElement(properties, W + "gridAfter", {W + "val": "1"})
+        row.insert(0, properties)
+        for cell, width in zip(row.xpath("./w:tc", namespaces=NS), (1952, 6561)):
+            cell_properties = etree.Element(W + "tcPr")
+            etree.SubElement(cell_properties, W + "tcW", {W + "w": str(width), W + "type": "dxa"})
+            cell.insert(0, cell_properties)
+    layout = {
+        "rowFields": [{"row": 1, "field": "name"}],
+        "columnPolicy": {
+            "mode": "DATA_LENGTH", "overflow": "HORIZONTAL",
+            "minColumns": 1, "widthMode": "PRESERVE_TOTAL",
+        },
     }
-    embed_image_controls(parts, {"word/document.xml": document}, [{
-        "dataType": "image", "controlTag": "repeat.t20.residualChart", "fillRule": "IMAGE_FIT_WIDE",
-    }])
-    cell = document.xpath(".//w:tbl/w:tr", namespaces=NS)[8].xpath("./w:tc", namespaces=NS)[1]
-    assert cell.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val='repeat.t20.residualChart']//w:drawing", namespaces=NS)
-    assert "word/media/" in "".join(parts)
-    assert "rId1" in etree.tostring(etree.fromstring(parts["word/_rels/document.xml.rels"][1])).decode()
+
+    _fill_matrix_table(document, "T20", [{"name": name} for name in ("A", "B", "C")], layout)
+
+    widths = [int(width) for width in table.xpath("./w:tblGrid/w:gridCol/@w:w", namespaces=NS)]
+    assert widths == [1952, 2187, 2187, 2187, 9]
+    assert sum(widths) == 1952 + 6561 + 9
+    for row in table.xpath("./w:tr", namespaces=NS):
+        spans = row.xpath("./w:tc/w:tcPr/w:gridSpan/@w:val", namespaces=NS)
+        occupied = sum(int(span) for span in spans) + len(row.xpath("./w:tc[not(w:tcPr/w:gridSpan)]", namespaces=NS))
+        assert occupied + 1 == len(widths)
+
+
+def test_horizontal_matrix_replaces_merged_prototype_grid_with_five_equal_columns() -> None:
+    document = etree.Element(W + "document", nsmap={"w": W_NS})
+    table = etree.SubElement(etree.SubElement(document, W + "body"), W + "tbl")
+    grid = etree.SubElement(table, W + "tblGrid")
+    for width in (2009, 2394, 1984, 2135):
+        etree.SubElement(grid, W + "gridCol", {W + "w": str(width)})
+    for cells in (((2009, 1), (6513, 3)), ((2009, 1), (6513, 3)),
+                  ((2009, 1), (2394, 1), (1984, 1), (2135, 1))):
+        row = etree.SubElement(table, W + "tr")
+        for width, span in cells:
+            cell = etree.SubElement(row, W + "tc")
+            properties = etree.SubElement(cell, W + "tcPr")
+            etree.SubElement(properties, W + "tcW", {W + "w": str(width), W + "type": "dxa"})
+            etree.SubElement(properties, W + "gridSpan", {W + "val": str(span)})
+            etree.SubElement(etree.SubElement(etree.SubElement(cell, W + "p"), W + "r"), W + "t")
+    layout = {
+        "rowFields": [{"row": 1, "field": "name"}],
+        "fixedRowSpans": {"3": [1, 2, 2, 1]},
+        "columnPolicy": {"mode": "DATA_LENGTH", "overflow": "HORIZONTAL",
+                         "minColumns": 5, "widthMode": "PRESERVE_TOTAL"},
+    }
+
+    fill_matrix_table(table, [{"name": f"C{i}"} for i in range(1, 6)], layout)
+
+    widths = [int(value) for value in table.xpath("./w:tblGrid/w:gridCol/@w:w", namespaces=NS)]
+    assert len(widths) == 6
+    assert widths[0] == 2009
+    assert sum(widths) == 8522
+    assert max(widths[1:]) - min(widths[1:]) <= 1
+    rows = table.xpath("./w:tr", namespaces=NS)
+    assert [len(row.xpath("./w:tc", namespaces=NS)) for row in rows] == [6, 2, 4]
+    assert rows[1].xpath("./w:tc/w:tcPr/w:gridSpan/@w:val", namespaces=NS) == ["1", "5"]
+    assert rows[2].xpath("./w:tc/w:tcPr/w:gridSpan/@w:val", namespaces=NS) == ["1", "2", "2", "1"]
+    assert [int(value) for value in rows[2].xpath("./w:tc/w:tcPr/w:tcW/@w:w", namespaces=NS)] == [
+        widths[0], widths[1] + widths[2], widths[3] + widths[4], widths[5],
+    ]
+
+
+def test_matrix_image_control_is_embedded_as_drawing() -> None:
+    image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    cases = [("", ("1892300", "977900")),
+             ("IMAGE_FIT_WIDE", ("4860000", "2610000"))]
+    for fill_rule, expected_extent in cases:
+        document = _matrix_document(row_count=10)
+        _fill_matrix_table(document, "T20", [{"residualChart": image}], LINEARITY_LAYOUT)
+        content_types = etree.fromstring(b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        rels = etree.fromstring(b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+        parts = {
+            "[Content_Types].xml": (ZipInfo("[Content_Types].xml"), etree.tostring(content_types)),
+            "word/_rels/document.xml.rels": (ZipInfo("word/_rels/document.xml.rels"), etree.tostring(rels)),
+        }
+        embed_image_controls(parts, {"word/document.xml": document}, [{
+            "dataType": "image", "controlTag": "repeat.t20.residualChart", "fillRule": fill_rule,
+        }])
+        cell = document.xpath(".//w:tbl/w:tr", namespaces=NS)[8].xpath("./w:tc", namespaces=NS)[1]
+        assert cell.xpath(".//w:sdt[w:sdtPr/w:tag/@w:val='repeat.t20.residualChart']//w:drawing", namespaces=NS)
+        extent = cell.xpath(".//*[local-name()='extent' and namespace-uri()='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing']")[0]
+        assert (extent.get("cx"), extent.get("cy")) == expected_extent
+        assert "word/media/" in "".join(parts)
+        assert "rId1" in etree.tostring(etree.fromstring(parts["word/_rels/document.xml.rels"][1])).decode()
 
 
 def test_matrix_image_preserves_template_size_and_centering() -> None:

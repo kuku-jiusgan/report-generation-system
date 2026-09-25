@@ -21,8 +21,9 @@ def _read_value(reader: WorkbookValues, config: dict[str, Any], sheet: str,
 
 
 def _cell(reader: WorkbookValues, config: dict[str, Any]) -> Any:
-    return reader.read(str(config.get("sheet") or ""), int(config.get("row", 0)),
-                       int(config.get("column", 0)), bool(config.get("required")))
+    value = reader.read(str(config.get("sheet") or ""), int(config.get("row", 0)),
+                        int(config.get("column", 0)), bool(config.get("required")))
+    return _display_value(value, config)
 
 
 def _merged_cell(reader: WorkbookValues, sheet: str, row: int, column: int,
@@ -117,8 +118,8 @@ def _repeat_values_for_indices(reader: WorkbookValues, config: dict[str, Any],
             row = row_start + repeat_index * int(config.get("rowStep", 0))
             start = int(config.get("startColumn", 1))
             count = _horizontal_count(reader, config, row, start)
-            values.extend(_read_value(reader, config, str(config.get("sheet") or ""), row,
-                                      start + offset)
+            values.extend(_display_value(_read_value(reader, config, str(config.get("sheet") or ""), row,
+                                               start + offset), config)
                           for offset in range(count))
             continue
         for row_index, row in enumerate(range(row_start, row_end + 1)):

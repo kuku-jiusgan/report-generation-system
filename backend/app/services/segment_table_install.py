@@ -70,9 +70,12 @@ def _unique_tags(path: Path, table_index: int, controls: list[dict[str, Any]]) -
 
 def _cell_control_tag(path: Path, table_index: int, row: int, column: int) -> str:
     table = Document(path).tables[table_index - 1]
-    if row < 1 or row > len(table.rows) or column < 1 or column > len(table.rows[row - 1].cells):
+    if row < 1 or row > len(table.rows):
         raise ValueError(f"字段内容控件位置 {row} 行 {column} 列超出 Word 表格范围")
-    tags = table.rows[row - 1].cells[column - 1]._tc.xpath(".//w:sdtPr/w:tag/@w:val")
+    cells = table.rows[row - 1]._tr.xpath("./w:tc")
+    if column < 1 or column > len(cells):
+        raise ValueError(f"字段内容控件位置 {row} 行 {column} 列超出 Word 表格范围")
+    tags = cells[column - 1].xpath(".//w:sdtPr/w:tag/@w:val")
     if len(tags) != 1:
         raise ValueError(f"字段内容控件位置 {row} 行 {column} 列必须有且只有一个控件")
     return str(tags[0])
@@ -80,7 +83,7 @@ def _cell_control_tag(path: Path, table_index: int, row: int, column: int) -> st
 
 def _install_control_bindings(repository: Any, manifest: dict[str, Any],
                               template: Path, index: int, section: str) -> None:
-    bindings = list(manifest.get("detailControls") or []) + list(manifest.get("uniqueControls") or [])
+    bindings = list(manifest.get("detailControls") or [])
     known = {item["controlTag"]: item for item in repository.list_mappings()
              if item.get("controlTag")}
     field_codes = {item["code"] for item in manifest["fields"]}
@@ -113,16 +116,31 @@ def apply_segment_table(repository: Any, manifest: dict[str, Any]) -> int:
     table_no = str(manifest.get("tableNo") or "")
     header = str(manifest.get("tableHeader") or "")
     group = str(manifest.get("groupCode") or "")
-    if not table_no or not header or not group or not isinstance(manifest.get("tableLayout"), dict):
-        raise ValueError("表格配置缺少表号、表头、编组或行片段版式")
+    group_key = str(manifest.get("groupKey") or "")
+    if not table_no or not header or not group or not group_key or not isinstance(manifest.get("tableLayout"), dict):
+        raise ValueError("表格配置缺少表号、表头、编组身份字段或行片段版式")
     index, tags = target_table(Path(active["templateFile"]), header)
     mappings = [item for item in repository.list_mappings() if item.get("controlTag") in tags]
     if not mappings:
         raise ValueError(f"表格 {table_no} 尚未绑定任何系统字段")
     fields = {item["code"] for item in manifest["fields"]}
+    rebind = manifest.get("rebindFields") or {}
+    if not isinstance(rebind, dict) or any(
+        old not in manifest.get("retireFields", []) or new not in fields
+        for old, new in rebind.items()
+    ):
+        raise ValueError("表格字段重绑配置必须指向清单内的新字段")
     if any(item.get("standardFieldCode") not in fields and
-           item.get("standardFieldCode") != manifest.get("conclusionField") for item in mappings):
+           item.get("standardFieldCode") != manifest.get("conclusionField") and
+           item.get("standardFieldCode") not in rebind for item in mappings):
         raise ValueError(f"表格 {table_no} 存在不属于目标编组的字段绑定")
+    for replacement in set(rebind.values()):
+        if not repository.database.get_lims_field(replacement):
+            raise ValueError(f"重绑目标字段 {replacement} 不存在")
+    for item in mappings:
+        replacement = rebind.get(item.get("standardFieldCode"))
+        if replacement:
+            repository.update_mapping(item["id"], {"standardFieldCode": replacement})
     rules = [item for item in repository.list_table_rules() if item["tableNo"] == table_no]
     if len(rules) != 1:
         raise ValueError(f"表格 {table_no} 必须且只能存在一条表格规则")
@@ -140,7 +158,7 @@ def apply_segment_table(repository: Any, manifest: dict[str, Any]) -> int:
         if item.get("repeatType") != "ROW" or item.get("tableNo") != table_no:
             repository.update_mapping(item["id"], {"repeatType": "ROW", "tableNo": table_no})
     repository.upsert_table_rule({**rules[0], "mode": "TABLE_REPEAT",
-                                  "innerMode": "SEGMENT_REPEAT", "groupKey": "impurityName",
+                                  "innerMode": "SEGMENT_REPEAT", "groupKey": group_key,
                                   "physicalTableIndex": index,
                                   "matrixLayout": manifest["tableLayout"]})
     repository.save_active_workspace()

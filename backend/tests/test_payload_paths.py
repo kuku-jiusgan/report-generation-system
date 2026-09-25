@@ -63,6 +63,10 @@ def test_field_path_is_derived_from_the_level() -> None:
     assert field_path_for("", "", "impurityName") == "impurityName"
     assert field_path_for("summary", OBJECT, "peakAreaRsd") == "summary.peakAreaRsd"
     assert field_path_for("injections", ARRAY, "retentionTime") == "injections[*].retentionTime"
+    assert field_path_for("injections", ARRAY, "peakArea", [
+        {"levelKey": "technicians", "kind": "ARRAY", "parentLevelKey": ""},
+        {"levelKey": "injections", "kind": "ARRAY", "parentLevelKey": "technicians"},
+    ]) == "technicians[*].injections[*].peakArea"
 
 
 def test_json_path_combines_the_collection_and_the_field_path() -> None:

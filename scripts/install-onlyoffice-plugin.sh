@@ -27,21 +27,23 @@ docker cp "${project_root}/deploy/onlyoffice-plugin/translations/zh-CN.json" "${
 docker exec "${container_id}" chmod 0644 \
   "${plugin_root}/config.json" "${plugin_root}/index.html" "${plugin_root}/link.js" \
   "${plugin_root}/translations/langs.json" "${plugin_root}/translations/zh-CN.json"
+docker exec "${container_id}" gzip -kf \
+  "${plugin_root}/config.json" "${plugin_root}/index.html" "${plugin_root}/link.js"
 docker restart "${container_id}" >/dev/null
 
-docker exec "${container_id}" grep -q '"version": "1.0.15"' "${plugin_root}/config.json"
+docker exec "${container_id}" grep -q '"version": "1.0.18"' "${plugin_root}/config.json"
 docker exec "${container_id}" grep -q '"serviceUrl": "http' "${plugin_root}/config.json"
 docker exec "${container_id}" grep -q "executeMethod('SelectContentControl'" "${plugin_root}/link.js"
 docker exec "${container_id}" grep -q "executeMethod('MoveCursorToContentControl'" "${plugin_root}/link.js"
 docker exec "${container_id}" grep -q "command.type === 'bind'" "${plugin_root}/link.js"
 
-plugin_url="http://127.0.0.1:8090/sdkjs-plugins/%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=22"
+plugin_url="http://127.0.0.1:8090/sdkjs-plugins/%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=26"
 for _ in {1..30}; do
-  if curl -fsS "${plugin_url}" | grep -q '"version": "1.0.15"'; then
-    echo "Installed and verified Report Template Link 1.0.15 in ONLYOFFICE container ${container_id}."
+  if curl -fsS "${plugin_url}" | grep -q '"version": "1.0.18"'; then
+    echo "Installed and verified Report Template Link 1.0.18 in ONLYOFFICE container ${container_id}."
     exit 0
   fi
   sleep 1
 done
-echo "Plugin files were copied, but ONLYOFFICE did not serve version 1.0.15." >&2
+echo "Plugin files were copied, but ONLYOFFICE did not serve version 1.0.18." >&2
 exit 1

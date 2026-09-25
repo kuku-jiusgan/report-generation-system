@@ -315,8 +315,11 @@ export async function listReportGenerations() {
   return (await http.get<ReportGenerationPage>('/report-generations', { params: { page: 1, page_size: 100 } })).data
 }
 
-export function reportGenerationFileUrl(id: string) {
-  return `/api/v1/report-generations/${id}/file`
+export function downloadReportGeneration(id: string) {
+  const link = document.createElement('a')
+  link.href = `/api/v1/report-generations/${id}/file`
+  link.download = ''
+  link.click()
 }
 
 export async function getBindings(id: string) {
@@ -335,12 +338,12 @@ export async function createVersion(id: string, note = '手工保存') {
   return (await http.post<ReportVersion>(`/reports/${id}/versions`, undefined, { params: { note } })).data
 }
 
-export async function getOnlyOfficeConfig(id: string) {
-  return (await http.get<OnlyOfficeBootstrap>(`/onlyoffice/reports/${id}/config`)).data
+export async function getOnlyOfficeConfig(id: string, prepare = false) {
+  return (await http.get<OnlyOfficeBootstrap>(`/onlyoffice/reports/${id}/config`, { params: { prepare } })).data
 }
 
-export async function forceSaveOnlyOffice(id: string) {
+export async function forceSaveOnlyOffice(id: string, tocRefresh = false) {
   return (
-    await http.post<{ saved: boolean; reportId: string }>(`/onlyoffice/reports/${id}/force-save`)
+    await http.post<{ saved: boolean; reportId: string }>(`/onlyoffice/reports/${id}/force-save`, undefined, { params: { toc_refresh: tocRefresh } })
   ).data
 }

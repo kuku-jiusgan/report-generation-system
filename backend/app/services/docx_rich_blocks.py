@@ -59,16 +59,78 @@ def _cell(value: dict[str, Any], width: int, merge: str = "") -> etree._Element:
     return cell
 
 
-def _table(rows: list[list[dict[str, Any]]]) -> etree._Element:
+def _width(node: etree._Element | None) -> int | None:
+    if node is None or node.get(W + "type") != "dxa":
+        return None
+    try:
+        width = int(node.get(W + "w", ""))
+    except ValueError as error:
+        raise ValueError("Word 表格宽度不是有效的整数") from error
+    return width if width > 0 else None
+
+
+def _cell_width(cell: etree._Element) -> int:
+    width = _width(cell.find("./" + W + "tcPr/" + W + "tcW"))
+    if width is None:
+        table = cell.xpath("ancestor::w:tbl[1]", namespaces={"w": W[1:-1]})[0]
+        grid = table.find(W + "tblGrid")
+        columns = [] if grid is None else grid.findall(W + "gridCol")
+        row = cell.getparent()
+        cells = row.findall(W + "tc")
+        before = row.find("./" + W + "trPr/" + W + "gridBefore")
+        start = int(before.get(W + "val")) if before is not None else 0
+        for previous in cells[:cells.index(cell)]:
+            previous_span = previous.find("./" + W + "tcPr/" + W + "gridSpan")
+            start += int(previous_span.get(W + "val")) if previous_span is not None else 1
+        span_node = cell.find("./" + W + "tcPr/" + W + "gridSpan")
+        span = int(span_node.get(W + "val")) if span_node is not None else 1
+        grid_widths = [column.get(W + "w", "") for column in columns[start:start + span]]
+        if len(grid_widths) == span:
+            try:
+                parsed = [int(value) for value in grid_widths]
+            except ValueError as error:
+                raise ValueError("Word 表格列宽不是有效的整数") from error
+            if all(value > 0 for value in parsed):
+                width = sum(parsed)
+    if width is None:
+        raise ValueError("Word 表格单元格缺少可计算的宽度，无法排版内嵌表格")
+    return width
+
+
+def _container_width(control: etree._Element) -> int:
+    cell = control.getparent()
+    if cell.tag != W + "tc":
+        return 9000
+    table = cell.xpath("ancestor::w:tbl[1]", namespaces={"w": W[1:-1]})[0]
+    table_margins = table.find("./" + W + "tblPr/" + W + "tblCellMar")
+    cell_margins = cell.find("./" + W + "tcPr/" + W + "tcMar")
+    margins = 0
+    for side in ("left", "right"):
+        local = None if cell_margins is None else _width(cell_margins.find(W + side))
+        inherited = None if table_margins is None else _width(table_margins.find(W + side))
+        margins += local if local is not None else inherited or 0
+    available = _cell_width(cell) - margins
+    if available < 1:
+        raise ValueError("Word 表格单元格扣除内边距后没有可用宽度")
+    return min(9000, available)
+
+
+def _table(rows: list[list[dict[str, Any]]], available_width: int) -> etree._Element:
     if not rows or not rows[0]:
         raise ValueError("结构化字段的表格没有行或列")
     columns = sum(cell["colspan"] for cell in rows[0])
     if columns > 32:
         raise ValueError("结构化字段的表格列数超过 32")
-    unit = max(1, 9000 // columns)
+    unit = available_width // columns
+    if unit < 1:
+        raise ValueError("Word 表格单元格宽度不足以容纳内嵌表格列")
     table = etree.Element(W + "tbl")
     properties = etree.SubElement(table, W + "tblPr")
-    etree.SubElement(properties, W + "tblW", {W + "w": "0", W + "type": "auto"})
+    if available_width < 9000:
+        etree.SubElement(properties, W + "tblW", {W + "w": str(unit * columns), W + "type": "dxa"})
+        etree.SubElement(properties, W + "tblLayout", {W + "type": "fixed"})
+    else:
+        etree.SubElement(properties, W + "tblW", {W + "w": "0", W + "type": "auto"})
     borders = etree.SubElement(properties, W + "tblBorders")
     for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
         etree.SubElement(borders, W + side, {W + "val": "single", W + "sz": "4"})
@@ -118,6 +180,7 @@ def set_control_rich_blocks(control: etree._Element, values: list[dict[str, Any]
     if not values or not all(is_rich_value(value) for value in values):
         raise ValueError("结构化字段的记录格式不一致")
     nodes = []
+    available_width = None
     for value in values:
         blocks = value.get("blocks")
         if not isinstance(blocks, list):
@@ -126,7 +189,9 @@ def set_control_rich_blocks(control: etree._Element, values: list[dict[str, Any]
             if block.get("type") == "paragraph" and isinstance(block.get("text"), str):
                 nodes.append(_rich_paragraph(block))
             elif block.get("type") == "table" and isinstance(block.get("rows"), list):
-                nodes.append(_table(block["rows"]))
+                if available_width is None:
+                    available_width = _container_width(control)
+                nodes.append(_table(block["rows"], available_width))
             else:
                 raise ValueError("结构化字段存在无效的段落或表格")
     for child in list(content):

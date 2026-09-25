@@ -8,18 +8,28 @@ const script = readFileSync(
   'utf8',
 )
 
-function createPluginHarness(selectionType = 'text', selectedText = '供试品名称') {
+function createPluginHarness(selectionType = 'text', selectedText = '供试品名称', transferFails = false, tocResult) {
+  if (arguments.length < 4) tocResult = true
   const calls = []
   const messages = []
   const listeners = {}
+  const intervals = []
   const controls = [{ Tag: 'sample.name', InternalId: 'control-1' }]
+  const Api = { GetDocument: () => ({ UpdateAllTOC: (updatePages) => {
+    calls.push({ name: 'UpdateAllTOC', args: [updatePages] })
+    return tocResult
+  } }) }
   const fakeWindow = {
     addEventListener: (type, handler) => { listeners[type] = handler },
-    setInterval: () => 1,
+    setInterval: (callback) => { intervals.push(callback); return intervals.length },
+    clearInterval() {},
     setTimeout: () => 1,
     clearTimeout() {},
     top: null,
     Asc: { plugin: {
+      callCommand(command, _isClose, _isCalc, callback) {
+        try { callback(command()) } catch { callback(false) }
+      },
       executeMethod(name, args, callback) {
         calls.push({ name, args })
         const results = {
@@ -37,7 +47,10 @@ function createPluginHarness(selectionType = 'text', selectedText = '供试品�
     } },
   }
   fakeWindow.top = fakeWindow
-  fakeWindow.postMessage = (message) => { messages.push(message) }
+  fakeWindow.postMessage = (message, _origin, transfer) => {
+    if (transferFails && transfer) throw new Error('MessagePort transfer failed')
+    messages.push(message)
+  }
   class FakeMessageChannel {
     constructor() {
       this.port1 = { postMessage: (message) => messages.push(message), start() {} }
@@ -45,10 +58,18 @@ function createPluginHarness(selectionType = 'text', selectedText = '供试品�
     }
   }
   const fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
-  vm.runInNewContext(script, { window: fakeWindow, MessageChannel: FakeMessageChannel, fetch })
+  vm.runInNewContext(script, { window: fakeWindow, MessageChannel: FakeMessageChannel, fetch, Api })
   fakeWindow.Asc.plugin.init()
-  return { calls, messages, send: (data) => listeners.message({ data }) }
+  return { calls, messages, tick: () => intervals.forEach((callback) => callback()),
+    send: (data) => listeners.message({ data }) }
 }
+
+test('bridge-ready is announced without a transferable port', () => {
+  const harness = createPluginHarness('text', '供试品名称', true)
+  harness.tick()
+  assert.ok(harness.messages.some((message) =>
+    message.type === 'bridge-ready' && message.data.capabilities.includes('update-toc')))
+})
 
 test('select command immediately selects the cached content control', () => {
   const harness = createPluginHarness()
@@ -58,6 +79,32 @@ test('select command immediately selects the cached content control', () => {
   assert.ok(harness.calls.some((call) =>
     call.name === 'MoveCursorToContentControl' && call.args[0] === 'control-1'))
   assert.ok(harness.messages.some((message) => message.type === 'select-result'))
+})
+
+test('update-toc command updates only the table of contents and acknowledges completion', () => {
+  const harness = createPluginHarness()
+  harness.send({ source: 'report-template-host', type: 'update-toc', nonce: 6 })
+  const updateCalls = harness.calls.filter((call) => call.name === 'UpdateAllTOC')
+  assert.equal(updateCalls.length, 1)
+  assert.equal(updateCalls[0].args[0], true)
+  assert.ok(harness.messages.some((message) =>
+    message.type === 'update-toc-result' && message.data.nonce === 6))
+  assert.ok(!harness.calls.some((call) => call.name === 'UpdateAllFields'))
+})
+
+test('update-toc accepts ONLYOFFICE builds that return no command value', () => {
+  const harness = createPluginHarness('text', '供试品名称', false, undefined)
+  harness.send({ source: 'report-template-host', type: 'update-toc', nonce: 8 })
+  assert.ok(harness.messages.some((message) =>
+    message.type === 'update-toc-result' && message.data.nonce === 8))
+})
+
+test('update-toc reports an error when ONLYOFFICE does not update the document', () => {
+  const harness = createPluginHarness('text', '供试品名称', false, false)
+  harness.send({ source: 'report-template-host', type: 'update-toc', nonce: 7 })
+  assert.ok(harness.messages.some((message) =>
+    message.type === 'update-toc-error' && message.data.nonce === 7))
+  assert.ok(!harness.messages.some((message) => message.type === 'update-toc-result'))
 })
 
 test('bind command creates a control and returns a result', () => {

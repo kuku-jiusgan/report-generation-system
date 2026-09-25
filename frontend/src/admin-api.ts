@@ -74,7 +74,7 @@ export interface StandardFieldCatalog {
 
 /** 编组的一层：分组主体之外的下一层，决定数组结构怎么生成 */
 export interface SystemFieldGroupLevel {
-  levelKey: string; label: string; kind: 'OBJECT' | 'ARRAY'; orderNo: number;
+  levelKey: string; label: string; kind: 'OBJECT' | 'ARRAY'; parentLevelKey?: string; orderNo: number;
 }
 
 export interface SystemGroupColumnMapping {

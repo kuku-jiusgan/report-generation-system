@@ -14,8 +14,11 @@ from .auth import AuthManager
 from .config import Settings
 from .database import Database, now_iso
 from .onlyoffice_callback import assert_document_server_url, callback_status, verified_callback_payload
+from .onlyoffice_plugin_config import editor_plugins
 from .services.docx_export import export_docx_response
 from .services.docx_validation import validate_docx_document
+from .services.docx_field_refresher import contains_toc_field
+from .services.onlyoffice_document_builder import refresh_docx_fields
 from .services.onlyoffice_force_save import (
     OnlyOfficeForceSaveError, request_onlyoffice_force_save, wait_for_file_update,
 )
@@ -33,6 +36,18 @@ def create_report_word_router(
     def document_key(report_id: str, path: Path) -> str:
         document_hash = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         return f"{report_id}-{document_hash}"
+
+    def refresh_export_docx(path: Path) -> None:
+        """Refresh fields on an isolated export copy before downloading."""
+        container = getattr(settings, "onlyoffice_container_name", "")
+        executable = getattr(settings, "onlyoffice_document_builder_executable", "")
+        if not container or not executable:
+            return
+        refresh_docx_fields(
+            path, container=container, executable=executable,
+            timeout_seconds=getattr(settings, "onlyoffice_document_builder_timeout", 120.0),
+            docker_executable=getattr(settings, "docker_executable", "docker"),
+        )
 
     @router.get(f"{settings.api_prefix}/reports/{{report_id}}/file")
     def download_report(report_id: str, document_token: str = "",
@@ -56,8 +71,8 @@ def create_report_word_router(
         if not path.exists():
             raise HTTPException(404, "报告文件不存在")
         if not signed_access:
-            return export_docx_response(path, item["title"])
-        return export_docx_response(path, item["title"])
+            return export_docx_response(path, item["title"], refresh_fields=refresh_export_docx)
+        return export_docx_response(path, item["title"], refresh_fields=refresh_export_docx)
 
 
     def ensure_report_file(item: dict) -> tuple[dict, Path]:
@@ -68,7 +83,8 @@ def create_report_word_router(
 
 
     @router.get(f"{settings.api_prefix}/onlyoffice/reports/{{report_id}}/config")
-    def onlyoffice_config(report_id: str, user: dict = Depends(auth.require("REPORT_EDIT"))) -> dict:
+    def onlyoffice_config(report_id: str, user: dict = Depends(auth.require("REPORT_EDIT")),
+                          prepare: bool = False) -> dict:
         if not settings.onlyoffice_jwt_secret:
             raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请设置 REPORT_ONLYOFFICE_JWT_SECRET")
         item = required_owned_report(report_id, user)
@@ -102,9 +118,12 @@ def create_report_word_router(
                 "mode": "edit",
                 "user": {"id": user["id"], "name": user["display_name"]},
                 "customization": {
+                    # Keep autosave enabled for the whole editing session. The ONLYOFFICE
+                    # Go back button checks for dirty state before firing onRequestClose.
                     "autosave": True, "forcesave": True, "compactHeader": False,
                     "goback": {"requestClose": True, "text": "返回报告大厅"},
                 },
+                "plugins": editor_plugins(settings),
             },
             "height": "100%",
             "width": "100%",
@@ -117,6 +136,7 @@ def create_report_word_router(
     @router.post(f"{settings.api_prefix}/onlyoffice/reports/{{report_id}}/force-save")
     def onlyoffice_force_save(
         report_id: str, user: dict = Depends(auth.require("REPORT_EDIT")),
+        toc_refresh: bool = False,
     ) -> dict[str, Any]:
         if not settings.onlyoffice_jwt_secret:
             raise HTTPException(503, "ONLYOFFICE JWT 密钥未配置，请设置 REPORT_ONLYOFFICE_JWT_SECRET")
@@ -126,10 +146,12 @@ def create_report_word_router(
         if not document_key:
             raise HTTPException(409, "报告编辑器会话不存在，请重新打开报告后再编辑")
         before = path.stat().st_mtime_ns
+        before_hash = hashlib.sha256(path.read_bytes()).digest() if toc_refresh else None
         logger.info("请求 ONLYOFFICE 强制保存 report_id=%s", report_id)
         try:
             save_requested = request_onlyoffice_force_save(
-                settings.onlyoffice_url, settings.onlyoffice_jwt_secret, document_key, report_id,
+                settings.onlyoffice_url, settings.onlyoffice_jwt_secret, document_key,
+                f"toc-refresh:{report_id}" if toc_refresh else report_id,
             )
         except OnlyOfficeForceSaveError as error:
             logger.exception("请求 ONLYOFFICE 强制保存失败 report_id=%s", report_id)
@@ -142,6 +164,9 @@ def create_report_word_router(
         except TimeoutError as error:
             logger.error("ONLYOFFICE 报告保存回调超时 report_id=%s", report_id)
             raise HTTPException(504, "报告保存回调超时，已保留当前编辑页面，请重试") from error
+        if before_hash is not None and hashlib.sha256(path.read_bytes()).digest() == before_hash:
+            logger.info("ONLYOFFICE 目录更新后文档内容未变化 report_id=%s", report_id)
+            return {"saved": False, "reportId": report_id}
         logger.info("ONLYOFFICE 强制保存完成 report_id=%s", report_id)
         return {"saved": True, "reportId": report_id}
 
@@ -178,10 +203,19 @@ def create_report_word_router(
                 temp_path, settings.max_upload_mb * 1024 * 1024, "ONLYOFFICE 报告 DOCX 文件",
             )
             validated_at = time.monotonic()
+            if contains_toc_field(temp_path):
+                logger.info("ONLYOFFICE 保存前刷新报告目录 report_id=%s", report_id)
+                refresh_docx_fields(
+                    temp_path, container=settings.onlyoffice_container_name,
+                    executable=settings.onlyoffice_document_builder_executable,
+                    timeout_seconds=settings.onlyoffice_document_builder_timeout,
+                    docker_executable=settings.docker_executable,
+                )
             temp_path.replace(output)
-            database.update_report(
-                report_id, status="EDITING", word_edit_locked=1, word_edited_at=now_iso(),
-            )
+            changes: dict[str, Any] = {"status": "EDITING"}
+            if status != 6 or payload.get("userdata") != f"toc-refresh:{report_id}":
+                changes.update(word_edit_locked=1, word_edited_at=now_iso())
+            database.update_report(report_id, **changes)
             completed_at = time.monotonic()
         except Exception as error:
             temp_path.unlink(missing_ok=True)

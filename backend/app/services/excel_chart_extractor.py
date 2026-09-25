@@ -9,6 +9,8 @@ from lxml import html
 from openpyxl import load_workbook
 from openpyxl.chart.trendline import Trendline
 
+from .libreoffice_fonts import libreoffice_font_env
+
 
 class ExcelChartError(ValueError):
     pass
@@ -51,6 +53,7 @@ def _rendered_chart_images(path: Path) -> list[tuple[int, bytes]]:
             ["libreoffice", "--headless", f"-env:UserInstallation={profile.as_uri()}",
              "--convert-to", "html", "--outdir", str(output_dir), str(path)],
             capture_output=True, text=True, timeout=90, check=False,
+            env=libreoffice_font_env(),
         )
         html_files = list(output_dir.glob("*.html"))
         if result.returncode or len(html_files) != 1:

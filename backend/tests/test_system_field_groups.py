@@ -93,7 +93,7 @@ def test_group_path_cannot_use_a_second_business_name() -> None:
             })
 
 
-def test_group_levels_only_accept_the_shared_summary_and_injections_contract() -> None:
+def test_group_levels_support_custom_parent_child_arrays() -> None:
     with tempfile.TemporaryDirectory() as directory:
         database = _database(Path(directory))
         save_system_field_group(database, {
@@ -107,14 +107,25 @@ def test_group_levels_only_accept_the_shared_summary_and_injections_contract() -
                      if item["groupCode"] == "customResults")
 
         assert saved["levels"] == [{
-            "levelKey": "injections", "label": "进样明细", "kind": "ARRAY", "orderNo": 1,
+            "levelKey": "injections", "label": "自定义名称", "kind": "ARRAY", "orderNo": 1,
+            "parentLevelKey": "",
         }]
         with pytest.raises(ValueError, match="已废弃"):
             save_group_level(database, "customResults", {"levelKey": "mingxi", "kind": "ARRAY"})
-        with pytest.raises(ValueError, match="summary 或 injections"):
-            save_group_level(database, "customResults", {"levelKey": "details", "kind": "ARRAY"})
-        with pytest.raises(ValueError, match="必须是对象层"):
-            save_group_level(database, "customResults", {"levelKey": "summary", "kind": "ARRAY"})
+        save_group_level(database, "customResults", {
+            "levelKey": "technicians", "label": "技术员编组", "kind": "ARRAY", "orderNo": 2,
+        })
+        save_group_level(database, "customResults", {
+            "levelKey": "measurements", "label": "测定明细", "kind": "ARRAY",
+            "parentLevelKey": "technicians", "orderNo": 3,
+        })
+        saved = next(item for item in list_system_field_groups(database)
+                     if item["groupCode"] == "customResults")
+        assert saved["levels"][-1]["parentLevelKey"] == "technicians"
+        with pytest.raises(ValueError, match="循环"):
+            save_group_level(database, "customResults", {
+                "levelKey": "technicians", "kind": "ARRAY", "parentLevelKey": "measurements",
+            })
 
 
 def test_group_initialization_preserves_existing_detection_limit_records() -> None:

@@ -218,10 +218,7 @@ const saveMapping = () => emit('saveMapping')
                     >{{ standardFieldFor(mapping)?.fieldCode || "未绑定标准字段" }} ·
                     {{ standardFieldFor(mapping) ? "系统标准字段" : "旧模板字段" }}</small
                   ></span
-                ><el-tag
-                  size="small"
-                  :type="standardFieldFor(mapping) ? 'success' : 'warning'"
-                  >{{ standardFieldFor(mapping) ? "标准字段" : "待清理" }}</el-tag
+                ><el-tag v-if="!standardFieldFor(mapping)" size="small" type="warning">待清理</el-tag
                 ><el-tag
                   v-if="mapping.controlTag && mapping.bound === false"
                   size="small"

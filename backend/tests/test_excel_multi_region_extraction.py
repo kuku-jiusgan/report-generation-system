@@ -42,13 +42,47 @@ def test_repeat_block_concatenates_configured_regions_in_order() -> None:
     assert [record["value"] for record in payload["result"]] == ["1", "2", "3", "4"]
 
 
-def test_actual_workbook_extracts_both_technicians_and_cached_statistics() -> None:
+def test_excel_display_is_default_and_field_precision_overrides_it(tmp_path: Path) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "结果"
+    sheet["A1"] = 93.86666666666666
+    sheet["A1"].number_format = "0.000"
+    sheet["B1"] = 96.8
+    sheet["B1"].number_format = "0.000"
+    path = tmp_path / "display.xlsx"
+    workbook.save(path)
+    fields = [{"fieldCode": f"result.{name}", "cardinality": "ONE",
+               "legacyJsonPath": f"$.result.{name}"}
+              for name in ("raw", "fixed", "cell", "horizontal", "pairRaw", "pair")]
+    base = {"mode": "FIXED_CELL", "sheet": "结果", "row": 1, "column": 1}
+    repeated = {"mode": "REPEAT_BLOCK", "sheet": "结果", "rowStart": 1, "rowEnd": 1}
+    rules = [{"fieldCode": f"result.{name}", "sourceType": "EXCEL", "enabled": True,
+              "config": config} for name, config in (
+                  ("raw", base),
+                  ("fixed", {**base, "displayDecimals": 0}),
+                  ("cell", {**repeated, "startColumn": 1}),
+                  ("horizontal", {**repeated, "startColumn": 1, "valueMode": "HORIZONTAL_CELL",
+                                   "valueCount": 1, "displayDecimals": 1}),
+                  ("pairRaw", {**repeated, "valueMode": "CELL_PAIR", "pairColumns": [1, 2]}),
+                  ("pair", {**repeated, "valueMode": "CELL_PAIR", "pairColumns": [1, 2],
+                            "displayDecimals": 0}),
+              )]
+
+    payload = extract_excel_fields(path, fields, rules)
+
+    assert payload["result"] == {"raw": "93.867", "fixed": "94", "cell": "93.867",
+                                 "horizontal": "93.9", "pairRaw": "（93.867，96.800）",
+                                 "pair": "（94，97）"}
+
+
+def test_actual_workbook_extracts_injections_and_cached_statistics() -> None:
     root = Path(__file__).parents[2]
     manifest = read_manifest(root / "mapping/intermediate-precision-excel.json")
     group = manifest["groupCode"]
     fields, rules = [], []
     group_meta = {"groupCode": group, "cardinality": "MANY", "fields": [
-        {"fieldCode": spec["code"], "label": spec["code"],
+        {"fieldCode": spec["code"], "label": spec.get("label") or spec["code"],
          "jsonKey": spec["code"].rsplit(".", 1)[-1]}
         for spec in manifest["fields"] if spec["code"].startswith("uncategorized.")
     ], "levels": [{"levelKey": "injections", "kind": "ARRAY"}]}
@@ -68,27 +102,39 @@ def test_actual_workbook_extracts_both_technicians_and_cached_statistics() -> No
     assert [item["impurityName"] for item in records] == [
         "3-吡啶磺酸甲酯", "3-吡啶磺酸乙酯", "3-吡啶磺酸异丙酯",
     ]
-    assert records[0]["field_128"] == "技术员A\n2026.08.25"
-    assert records[0]["field_145"] == "技术员B\n2026.08.26"
-    assert len(records[0]["injections"]) == 12
-    assert records[0]["injections"][0] == {
+    assert [(records[0][key]["name"], records[0][key]["date"]) for key in ("technicianA", "technicianB")] == [
+        ("技术员A", "2026.08.25"), ("技术员B", "2026.08.26")]
+    assert all([len(record[key][detail]) for key, detail in (("technicianA", "injectionsA"), ("technicianB", "injectionsB"))] == [6, 6] for record in records)
+    assert records[0]["technicianA"]["injectionsA"][0] == {
         "sequence": "1", "weighing": "13.74", "retentionTime": "4.208",
-        "peakArea": "1177629", "concentration": "30.49", "field_134": "44.4",
+        "peakArea": "1177629", "concentration": "30.49", "relativeContent": "44.4",
     }
-    assert records[0]["injections"][6] == {
+    assert records[0]["technicianB"]["injectionsB"][0] == {
         "sequence": "1", "weighing": "13.74", "retentionTime": "4.205",
-        "peakArea": "766489", "concentration": "32.59", "field_134": "47.4",
+        "peakArea": "766489", "concentration": "32.59", "relativeContent": "47.4",
     }
-    assert records[0]["aRetentionRsd"] == "0.1"
-    assert records[0]["aContentRsd"] == "2.8"
-    assert records[0]["field_137"] == "0.1"
-    assert records[0]["field_138"] == "1.1"
-    assert records[0]["field_139"] == "（47.5，48.5）"
-    assert records[0]["field_140"] == "（190，194）"
-    assert records[0]["field_141"] == "5.0"
-    assert records[0]["field_142"] == "（44.6，47.5）"
-    assert records[0]["field_143"] == "（178，190）"
+    assert [(records[0][key]["retentionRsd"], records[0][key]["contentRsd"]) for key in ("technicianA", "technicianB")] == [
+        ("0.1", "2.8"), ("0.1", "1.1")]
+    assert [records[0][key]["contentConfidenceInterval"] for key in ("technicianA", "technicianB")] == [
+        "（42.700，45.300）", "（47.500，48.500）"]
+    assert [records[0][key]["theoreticalPercentInterval"] for key in ("technicianA", "technicianB")] == [
+        "（170.800，181.200）", "（190.000，194.000）"]
+    assert records[0]["field_141"] == "5"
+    assert [record["field_142"] for record in records] == [
+        "（44.586，47.4645）", "（52.571，54.1125）", "（53.755，54.2113）",
+    ]
+    assert records[0]["field_143"] == "（178.342，189.858）"
     assert not payload["_meta"]["warnings"]
+
+
+def test_technicians_are_declared_as_independent_groups() -> None:
+    manifest_path = Path(__file__).parents[2] / "mapping/intermediate-precision-excel.json"
+    manifest = read_manifest(manifest_path)
+    levels = {item["levelKey"]: item for item in manifest["levels"]}
+    for letter in ("A", "B"):
+        assert levels[f"technician{letter}"]["kind"] == "OBJECT"
+        assert levels[f"injections{letter}"]["parentLevelKey"] == f"technician{letter}"
+    assert {item["level"] for item in manifest["fields"]} == {"", "technicianA", "injectionsA", "technicianB", "injectionsB"}
 
 
 def test_required_join_source_fails_instead_of_silent_gap(tmp_path: Path) -> None:

@@ -124,6 +124,25 @@
     else if (command.type === 'bind') bindSelection(command)
     else if (command.type === 'unbind') unbindSelection(command)
     else if (command.type === 'detect-table') detectTable(command)
+    else if (command.type === 'update-toc') updateToc(command)
+  }
+
+  function updateToc(command) {
+    try {
+      window.Asc.plugin.callCommand(function () {
+        return Api.GetDocument().UpdateAllTOC(true)
+      }, false, true, function (result) {
+        // UpdateAllTOC returns void in some ONLYOFFICE builds and a boolean
+        // in others.  Only an explicit false means the command failed.
+        if (result === false) {
+          send('update-toc-error', { nonce: command.nonce, message: 'ONLYOFFICE 未能更新目录' })
+        } else {
+          send('update-toc-result', { nonce: command.nonce })
+        }
+      })
+    } catch (error) {
+      send('update-toc-error', { nonce: command.nonce, message: String(error) })
+    }
   }
 
   function detectTable(command) {
@@ -153,16 +172,23 @@
   })
 
   function connectHost() {
+    var ready = {
+      source: 'report-template-link', type: 'bridge-ready',
+      data: { protocolVersion: 3, capabilities: ['select', 'bind', 'unbind', 'detect-table', 'update-toc'], channelId: channelId }
+    }
     try {
       var channel = new MessageChannel()
       hostPort = channel.port1
       hostPort.onmessage = function (event) { receiveHostCommand(event.data) }
       hostPort.start()
-      window.top.postMessage({
-        source: 'report-template-link', type: 'bridge-ready',
-        data: { protocolVersion: 3, capabilities: ['select', 'bind', 'unbind', 'detect-table'], channelId: channelId }
-      }, '*', [channel.port2])
-    } catch (_) { /* Direct window messaging remains as a compatibility fallback. */ }
+      window.top.postMessage(ready, '*', [channel.port2])
+    } catch (_) { /* The plain announcement below does not need a transferable port. */ }
+    var attempts = 0
+    var announcement = window.setInterval(function () {
+      window.top.postMessage(ready, '*')
+      trace('plugin-bridge-announced', {})
+      if (++attempts >= 15) window.clearInterval(announcement)
+    }, 1000)
   }
 
   function bindSelection(command) {

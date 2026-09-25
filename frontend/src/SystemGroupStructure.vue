@@ -44,11 +44,9 @@ async function setLevelFields(levelKey: string, selected: string[]) {
   } catch (error) { ElMessage.error(props.errorText(error)) }
 }
 function editLevel(level?: SystemFieldGroupLevel) {
-  const available = canonicalLevels.find((item) => !props.group.levels.some((current) => current.levelKey === item.levelKey))
   levelDraft.value = level
     ? { ...level, originalKey: level.levelKey }
-    : available ? { ...available, originalKey: '' } : undefined
-  if (!level && !available) ElMessage.info('汇总层和进样明细层均已配置')
+    : { levelKey: '', label: '', kind: 'ARRAY', parentLevelKey: '', orderNo: props.group.levels.length, originalKey: '' }
 }
 function selectCanonicalLevel(levelKey: string) {
   const selected = canonicalLevels.find((item) => item.levelKey === levelKey)
@@ -56,6 +54,9 @@ function selectCanonicalLevel(levelKey: string) {
 }
 function levelOptionDisabled(levelKey: string) {
   return props.group.levels.some((item) => item.levelKey === levelKey && item.levelKey !== levelDraft.value?.originalKey)
+}
+function isCanonicalLevel(levelKey?: string) {
+  return canonicalLevels.some((item) => item.levelKey === levelKey)
 }
 async function apply(action: Promise<SystemFieldGroup>, message: string) {
   try {
@@ -66,8 +67,11 @@ async function apply(action: Promise<SystemFieldGroup>, message: string) {
 async function saveLevel() {
   const draft = levelDraft.value
   if (!draft?.levelKey.trim()) return ElMessage.warning('层的键名不能为空')
-  await apply(adminApi.saveGroupLevel(props.group.groupCode, draft), '层已保存')
-  levelDraft.value = undefined
+  try {
+    emit('saved', await adminApi.saveGroupLevel(props.group.groupCode, draft))
+    ElMessage.success('层已保存')
+    levelDraft.value = undefined
+  } catch (error) { ElMessage.error(props.errorText(error)) }
 }
 async function removeLevel(levelKey: string) {
   try {
@@ -87,8 +91,7 @@ async function removeLevel(levelKey: string) {
     <small class="structure-hint">
       编组的基数是「多条」时提取出来就是一个数组，这里描述的是数组里<b>一条记录</b>长什么样：
       字段留在记录顶层，就是每条记录一个取值；放进对象层，会包成记录下的一个子对象；
-      放进数组层，会变成记录下的一个子数组，一条记录可以有多条。子层统一使用汇总（summary）
-      和进样明细（injections）。
+      放进数组层，会变成记录下的一个子数组，一条记录可以有多条。父层可以继续包含子层。
     </small>
 
     <div class="structure-level">
@@ -108,7 +111,7 @@ async function removeLevel(levelKey: string) {
     <div v-for="level in group.levels" :key="level.levelKey" class="structure-level">
       <div class="structure-level-head">
         <b>{{ level.label || level.levelKey }}</b>
-        <code>{{ level.levelKey }} · {{ level.kind === 'ARRAY' ? '数组层·每条记录多条' : '对象层·每条记录一份' }}</code>
+        <code>{{ level.parentLevelKey ? `${level.parentLevelKey} / ` : '' }}{{ level.levelKey }} · {{ level.kind === 'ARRAY' ? '数组层·每条记录多条' : '对象层·每条记录一份' }}</code>
         <div class="structure-level-actions">
           <el-button text size="small" :icon="EditPen" @click="editLevel(level)">编辑</el-button>
           <el-button text size="small" type="danger" :icon="Delete" @click="removeLevel(level.levelKey)">删除</el-button>
@@ -134,16 +137,24 @@ async function removeLevel(levelKey: string) {
     <el-dialog v-model="dialogOpen" title="编组的层" width="460px">
       <el-form v-if="levelDraft" label-position="top">
         <el-form-item label="键名（生成的 JSON 里的属性名）">
-          <el-select :model-value="levelDraft.levelKey" :disabled="!!levelDraft.originalKey"
+          <el-input v-if="!isCanonicalLevel(levelDraft?.levelKey)"
+            v-model="levelDraft.levelKey" :disabled="!!levelDraft.originalKey" placeholder="例如 technicians" />
+          <el-select v-else :model-value="levelDraft.levelKey" :disabled="!!levelDraft.originalKey"
             @update:model-value="selectCanonicalLevel">
             <el-option v-for="level in canonicalLevels" :key="level.levelKey"
               :label="`${level.label}（${level.levelKey}）`" :value="level.levelKey"
               :disabled="levelOptionDisabled(level.levelKey)" />
           </el-select>
         </el-form-item>
-        <el-form-item label="显示名"><el-input v-model="levelDraft.label" disabled /></el-form-item>
+        <el-form-item label="显示名"><el-input v-model="levelDraft.label" placeholder="例如 技术员编组" /></el-form-item>
+        <el-form-item label="父层（可选）">
+          <el-select v-model="levelDraft.parentLevelKey" clearable>
+            <el-option v-for="parent in group.levels.filter(item => item.levelKey !== (levelDraft && levelDraft.levelKey))"
+              :key="parent.levelKey" :label="parent.label || parent.levelKey" :value="parent.levelKey" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="类型">
-          <el-select v-model="levelDraft.kind" disabled>
+          <el-select v-model="levelDraft.kind">
             <el-option label="对象：记录下的一个子对象，每条记录一份" value="OBJECT" />
             <el-option label="数组：记录下的一个子数组，每条记录多条" value="ARRAY" />
           </el-select>

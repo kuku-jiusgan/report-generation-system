@@ -10,20 +10,6 @@ from .system_field_group_levels import (
 )
 
 
-GROUP_LABELS = {
-    "samples": "样品信息", "referenceStandards": "对照品信息", "instruments": "仪器信息",
-    "columns": "色谱柱信息", "reagents": "试剂信息", "systemSuitability": "系统适用性结果",
-    "validationSummary": "验证结果汇总", "methodParameters": "分析方法参数",
-    "narrative": "报告叙述", "project": "项目信息", "document": "文档信息",
-    "approval": "审批信息", "impurity": "杂质信息", "limit": "限度结果",
-    "accuracySolutions": "准确度溶液", "intermediatePrecisionSolutions": "中间精密度溶液",
-    "lodSolutions": "检测限与定量限溶液", "repeatabilitySolutions": "重复性溶液",
-    "robustnessSequence": "耐用性进样序列", "robustnessSolutions": "耐用性溶液",
-    "robustnessSpecificity": "耐用性专属性", "specificity": "专属性结果",
-    "specificitySolutions": "专属性溶液", "stabilitySolutions": "溶液稳定性溶液",
-    "systemSuitabilitySolutions": "系统适用性溶液",
-}
-
 _PATH_PATTERN = re.compile(r"^\$\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _SOURCE_TYPES = {"EXCEL", "PROTOCOL"}
 def _default_item_path(group_code: str) -> str:
@@ -159,8 +145,7 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
         ).fetchall()
     levels = list_group_levels(database)
     # 字段路径由层级配置推导，不读库里那份旧的 field_path，避免两处打架
-    kinds = {(code, level["levelKey"]): level["kind"]
-             for code, items in levels.items() for level in items}
+    level_items = {code: items for code, items in levels.items()}
     by_group: dict[str, list[dict[str, Any]]] = {}
     for field in fields:
         code, level_key = field["group_code"], str(field.get("level_key") or "")
@@ -170,7 +155,13 @@ def list_system_field_groups(database: Database) -> list[dict[str, Any]]:
             "cardinality": field["field_cardinality"], "enabled": bool(field["enabled"]),
             "jsonKey": json_key, "levelKey": level_key,
             "orderNo": int(field.get("order_no", 0) or 0),
-            "fieldPath": field_path_for(level_key, kinds.get((code, level_key), ""), json_key),
+            "fieldPath": field_path_for(
+                level_key,
+                next((item["kind"] for item in level_items.get(code, [])
+                      if item["levelKey"] == level_key), ""),
+                json_key,
+                level_items.get(code, []),
+            ),
         })
     chapters: dict[str, list[int]] = {}
     chapter_codes: dict[str, list[str]] = {}

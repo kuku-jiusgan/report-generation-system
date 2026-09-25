@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from ..database import now_iso
+from .docx_segment_table import validate_segment_layout
 
 
 class DesignerConfigRepositoryMixin:
@@ -37,9 +38,13 @@ class DesignerConfigRepositoryMixin:
         if isinstance(layout, dict):
             text = json.dumps(layout, ensure_ascii=False)
             DesignerConfigRepositoryMixin._validate_matrix_layout(layout)
+            if item.get("mode") == "TABLE_REPEAT" and item.get("innerMode") == "SEGMENT_REPEAT":
+                validate_segment_layout(layout)
             return text
         text = str(layout or "").strip()
         if not text:
+            if item.get("mode") == "TABLE_REPEAT" and item.get("innerMode") == "SEGMENT_REPEAT":
+                raise ValueError("独立行片段必须配置布局 JSON")
             return ""
         try:
             parsed = json.loads(text)
@@ -48,6 +53,8 @@ class DesignerConfigRepositoryMixin:
         if not isinstance(parsed, dict):
             raise ValueError("矩阵版式必须是 JSON 对象")
         DesignerConfigRepositoryMixin._validate_matrix_layout(parsed)
+        if item.get("mode") == "TABLE_REPEAT" and item.get("innerMode") == "SEGMENT_REPEAT":
+            validate_segment_layout(parsed)
         return text
 
     @staticmethod
@@ -63,8 +70,18 @@ class DesignerConfigRepositoryMixin:
                     row = 0
                 if not isinstance(entry, dict) or row < 1 or not str(entry.get("field") or "").strip():
                     raise ValueError("矩阵版式的 rowFields 必须包含正整数 row 和非空 field")
+        fixed_rows = layout.get("fixedRowSpans")
+        if fixed_rows is not None:
+            if not isinstance(fixed_rows, dict):
+                raise ValueError("矩阵固定行列宽配置必须是对象")
+            for row, spans in fixed_rows.items():
+                if (not str(row).isdigit() or int(row) < 1 or not isinstance(spans, list)
+                        or not spans or any(type(span) is not int or span < 1 for span in spans)):
+                    raise ValueError("矩阵固定行列宽配置必须按行号给出正整数跨度数组")
         policy = layout.get("columnPolicy")
         if policy is None:
+            if fixed_rows:
+                raise ValueError("矩阵固定行列宽配置需要启用横向扩展")
             return
         if not isinstance(row_fields, list) or not row_fields:
             raise ValueError("启用矩阵横向扩展时，rowFields 不能为空")

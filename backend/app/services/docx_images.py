@@ -80,7 +80,7 @@ def _set_control_image(control: etree._Element, relationship_id: str, name: str,
         paragraph.append(copy.deepcopy(paragraph_properties))
     run = etree.SubElement(paragraph, W + "r")
     drawing = etree.SubElement(run, W + "drawing")
-    width, height = ((4_860_000, 2_610_000) if wide else (914_400, 914_400))
+    width, height = ((4_860_000, 2_610_000) if wide else (1_892_300, 977_900))
     drawing_xml = f'''<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
       xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"

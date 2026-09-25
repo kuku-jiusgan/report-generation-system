@@ -159,12 +159,24 @@ def issue_key(env: dict) -> str:
     return key
 
 
+def test_report_editor_autostarts_toc_plugin(env: dict) -> None:
+    config = env["config_endpoint"](REPORT_ID, USER, prepare=True)["config"]
+    plugins = config["editorConfig"]["plugins"]
+    assert plugins["autostart"] == ["asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"]
+    assert plugins["pluginsData"] == [
+        f"{env['settings'].onlyoffice_url}/sdkjs-plugins/"
+        "%7BB75A5F24-8D2C-4E91-A763-6C98B8B80A15%7D/config.json?v=26"
+    ]
+    assert config["editorConfig"]["customization"]["autosave"] is True
+    assert jwt.decode(config["token"], SECRET, algorithms=["HS256"])["editorConfig"]["plugins"] == plugins
+
+
 def post_callback(env: dict, *, status: int = 2, url: str | None = None,
-                  key: str = "", token: str = ""):
+                  key: str = "", token: str = "", userdata: str | None = None):
     """直接调用回调端点；返回 (status_code, body)，HTTPException 转成状态码。"""
     request = FakeCallbackRequest({
         "status": status, "url": url or f"{env['docserver_url']}/final.docx",
-        "key": key, "token": token,
+        "key": key, "token": token, "userdata": userdata,
     })
     try:
         return 200, asyncio.run(env["callback_endpoint"](REPORT_ID, request))
@@ -300,11 +312,30 @@ def test_config_issued_key_is_persisted(env: dict) -> None:
     assert len(key) == len(REPORT_ID) + 1 + 16
     assert key == env["database"].get_report(REPORT_ID)["onlyoffice_document_key"]
     assert config["editorConfig"]["callbackUrl"].endswith(f"/onlyoffice/callback/{REPORT_ID}")
-    assert "plugins" not in config["editorConfig"]
+    assert config["editorConfig"]["plugins"]["autostart"] == [
+        "asc.{B75A5F24-8D2C-4E91-A763-6C98B8B80A15}"
+    ]
     assert config["editorConfig"]["customization"]["goback"] == {
         "requestClose": True, "text": "返回报告大厅",
     }
     assert config["token"]
+
+
+def test_prepare_config_keeps_autosave_enabled(env: dict) -> None:
+    config = env["config_endpoint"](REPORT_ID, USER, True)["config"]
+    assert config["editorConfig"]["customization"]["autosave"] is True
+    assert env["config_endpoint"](REPORT_ID, USER)["config"]["editorConfig"]["customization"]["autosave"] is True
+
+
+def test_toc_refresh_callback_does_not_lock_report(env: dict) -> None:
+    issued = issue_key(env)
+    status, body = post_callback(
+        env, status=6, key=issued, token=_signed_token({"status": 6}),
+        userdata=f"toc-refresh:{REPORT_ID}",
+    )
+    assert status == 200, body
+    assert env["working"].read_bytes() == _minimal_docx("SAVED-EDIT")
+    assert env["database"].get_report(REPORT_ID)["word_edit_locked"] == 0
 
 
 def test_force_save_waits_for_working_file_update(env: dict, monkeypatch) -> None:
@@ -325,6 +356,43 @@ def test_force_save_waits_for_working_file_update(env: dict, monkeypatch) -> Non
         "secret": SECRET,
         "key": issued,
         "userdata": REPORT_ID,
+    }
+
+
+def test_toc_refresh_force_save_uses_distinct_userdata(env: dict, monkeypatch) -> None:
+    issue_key(env)
+    captured = {}
+
+    def request_save(url: str, secret: str, key: str, userdata: str) -> bool:
+        captured["userdata"] = userdata
+        env["working"].write_bytes(_minimal_docx("TOC-REFRESHED"))
+        return True
+
+    monkeypatch.setattr("backend.app.report_word_api.request_onlyoffice_force_save", request_save)
+    assert env["force_save_endpoint"](REPORT_ID, USER, True)["saved"] is True
+    assert captured["userdata"] == f"toc-refresh:{REPORT_ID}"
+
+
+def test_toc_refresh_rejects_no_saved_changes(env: dict, monkeypatch) -> None:
+    issue_key(env)
+    monkeypatch.setattr(
+        "backend.app.report_word_api.request_onlyoffice_force_save", lambda *_args: False,
+    )
+    assert env["force_save_endpoint"](REPORT_ID, USER, True) == {
+        "saved": False, "reportId": REPORT_ID,
+    }
+
+
+def test_toc_refresh_rejects_unchanged_saved_file(env: dict, monkeypatch) -> None:
+    issue_key(env)
+
+    def request_save(*_args) -> bool:
+        env["working"].write_bytes(env["working"].read_bytes())
+        return True
+
+    monkeypatch.setattr("backend.app.report_word_api.request_onlyoffice_force_save", request_save)
+    assert env["force_save_endpoint"](REPORT_ID, USER, True) == {
+        "saved": False, "reportId": REPORT_ID,
     }
 
 

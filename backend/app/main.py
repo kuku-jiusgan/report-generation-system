@@ -31,10 +31,11 @@ from .schemas import (
 )
 logger = logging.getLogger(__name__)
 from .services.mapped_docx_generator import build_mapped_docx
-from .services.docx_field_refresher import refresh_docx_fields
+from .services.onlyoffice_document_builder import refresh_docx_fields
 from .services.docx_export import export_docx_bytes, export_docx_response, write_export_docx
 from .services.system_field_resolver import resolve_system_fields
 from .services.standard_payloads import standard_context_payload
+from .services.libreoffice_fonts import libreoffice_font_env
 from .services.keyed_lookup_calculation import calculated_dependencies
 from .services.system_field_group_assembler import apply_group_contracts
 from .services.system_field_groups import list_system_field_groups
@@ -213,8 +214,10 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
         build_mapped_docx(template, candidate_path, mappings, render_payload, data, table_rules,
                           protocol_document=protocol_path, protocol_rules=all_rules)
         refresh_docx_fields(
-            candidate_path, settings.libreoffice_executable, settings.libreoffice_timeout,
-            settings.libreoffice_python_executable,
+            candidate_path, container=settings.onlyoffice_container_name,
+            executable=settings.onlyoffice_document_builder_executable,
+            timeout_seconds=settings.onlyoffice_document_builder_timeout,
+            docker_executable=settings.docker_executable,
         )
         candidate_path.replace(output_path)
     except Exception as error:
@@ -226,6 +229,19 @@ def render_report_word(item: dict, data: dict, payload: dict | None = None,
     if phase:
         record_generation(item["id"], data, phase, actor, output_name=output_name)
     return output_name
+
+
+def refresh_export_docx(path: Path) -> None:
+    """Refresh fields using ONLYOFFICE Document Builder for exports."""
+    container = getattr(settings, "onlyoffice_container_name", "")
+    executable = getattr(settings, "onlyoffice_document_builder_executable", "")
+    if not container or not executable:
+        return
+    refresh_docx_fields(
+        path, container=container, executable=executable,
+        timeout_seconds=getattr(settings, "onlyoffice_document_builder_timeout", 120.0),
+        docker_executable=getattr(settings, "docker_executable", "docker"),
+    )
 
 
 def require_automatic_edit_allowed(item: dict) -> None:
@@ -282,7 +298,7 @@ def batch_export_reports(payload: dict, user: dict = Depends(auth.require("REPOR
                 counter += 1
             used_names.add(name)
             try:
-                output.writestr(name, export_docx_bytes(path))
+                output.writestr(name, export_docx_bytes(path, refresh_fields=refresh_export_docx))
             except Exception as error:
                 logger.exception("批量报告导出失败 report_id=%s", report_id)
                 raise HTTPException(422, f"批量报告导出失败：{error}") from error
@@ -314,7 +330,7 @@ def download_generation(generation_id: str,
     path = (settings.reports_dir / output_name).resolve()
     if not output_name or path.parent != settings.reports_dir.resolve() or not path.is_file():
         raise HTTPException(404, "导出文件不存在")
-    return export_docx_response(path, generation["title"])
+    return export_docx_response(path, generation["title"], refresh_fields=refresh_export_docx)
 
 
 @app.get(f"{settings.api_prefix}/report-templates")
@@ -508,7 +524,8 @@ def export_report_word(report_id: str, user: dict = Depends(auth.require("REPORT
                                                             "original_values": item["resolved_data"].get("original_values", {})},
                                     "generation_context": {"phase": "导出 Word", "template_revision": item["resolved_data"].get("template_revision", "")}})
         output_name = f"report-{report_id}-export-{generation_id[:12]}.docx"
-        write_export_docx(working_path, settings.reports_dir / output_name)
+        write_export_docx(working_path, settings.reports_dir / output_name,
+                          refresh_fields=refresh_export_docx)
     except Exception as error:
         logger.exception("Word 导出失败 report_id=%s", report_id)
         if "generation_id" in locals():
@@ -531,10 +548,13 @@ def export_report_pdf(report_id: str, user: dict = Depends(auth.require("REPORT_
     output = settings.reports_dir / f"report-{report_id}.pdf"
     with tempfile.TemporaryDirectory(prefix="report-pdf-") as directory:
         temporary = Path(directory)
+        profile = temporary / "profile"
         try:
             result = subprocess.run(
-                ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", str(temporary), str(source)],
+                ["libreoffice", "--headless", f"-env:UserInstallation={profile.as_uri()}",
+                 "--convert-to", "pdf", "--outdir", str(temporary), str(source)],
                 capture_output=True, text=True, timeout=120, check=False,
+                env=libreoffice_font_env(),
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise HTTPException(503, f"PDF 转换服务不可用：{error}") from error

@@ -101,12 +101,39 @@ export function useChapterBlockEditor(options: EditorOptions) {
   // 横向分组要靠 Word 里那一格的合并跨度确定分组宽度，字段没绑就只能保留原样。
   function invalidMatrixLayout(draft: Partial<DesignerBlock>): string {
     const text = draft.tableRule?.matrixLayout?.trim()
-    if (!text) return ''
+    const usesSegments = draft.tableRule?.mode === 'TABLE_REPEAT' && draft.tableRule?.innerMode === 'SEGMENT_REPEAT'
+    if (!text) return usesSegments ? '独立行片段必须配置布局 JSON' : ''
     let layout: any
     try {
       layout = JSON.parse(text)
     } catch (error) {
       return `表格布局不是合法 JSON：${(error as Error).message}`
+    }
+    if (!layout || typeof layout !== 'object' || Array.isArray(layout)) return '表格布局必须是 JSON 对象'
+    if (usesSegments) {
+      if (!Array.isArray(layout.segments) || !layout.segments.length) return '独立行片段必须配置非空 segments'
+      const rows = new Set<number>()
+      const paths = new Set<string>()
+      for (const segment of layout.segments) {
+        if (!segment || !Number.isInteger(segment.row) || segment.row < 1
+          || !Number.isInteger(segment.count) || segment.count < 1
+          || !String(segment.sourcePath || '').trim() || !String(segment.detailPath || '').trim()
+          || !segment.detailCells || typeof segment.detailCells !== 'object' || !Object.keys(segment.detailCells).length) {
+          return '行片段须配置正整数 row、count，来源对象路径、明细路径和 detailCells'
+        }
+        if (rows.has(segment.row) || paths.has(segment.sourcePath)) return '行片段原型行和来源对象路径不能重复'
+        rows.add(segment.row)
+        paths.add(segment.sourcePath)
+      }
+      if (layout.summaryRows !== undefined && !Array.isArray(layout.summaryRows)) return '固定行 summaryRows 必须是数组'
+      for (const summary of layout.summaryRows || []) {
+        if (!summary || !Number.isInteger(summary.row) || summary.row < 1 || rows.has(summary.row)
+          || !String(summary.sourcePath || '').trim() || !paths.has(summary.sourcePath)) {
+          return '固定行须配置未占用的正整数行号，以及已有片段的来源对象路径'
+        }
+        rows.add(summary.row)
+      }
+      return ''
     }
     const usesMatrix = draft.tableRule?.mode === 'MATRIX'
       || (draft.tableRule?.mode === 'TABLE_REPEAT' && draft.tableRule?.innerMode === 'MATRIX')

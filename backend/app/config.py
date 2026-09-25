@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     onlyoffice_url: str = "http://127.0.0.1:8088"
     public_base_url: str = "http://127.0.0.1:8010"
     onlyoffice_jwt_secret: str = ""
+    onlyoffice_container_name: str = "report-system-onlyoffice"
+    onlyoffice_document_builder_executable: str = "/var/www/onlyoffice/documentserver/server/FileConverter/bin/docbuilder"
+    onlyoffice_document_builder_timeout: float = 120.0
+    docker_executable: str = "docker"
     lims_sql_enabled: bool = False
     lims_sql_dsn: str = ""
     lims_sql_user: str = ""
